@@ -1,0 +1,11 @@
+{
+  "name": "claude-remote",
+  "description": "Keep a Claude Code session running on your Windows host and reach it from any device on your Tailscale network, over WSL2 tmux and SSH. Run /claude-remote:setup for one-time host setup.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Kaushik Narumanchi"
+  },
+  "homepage": "https://github.com/MrTig-afk/claude-remote",
+  "repository": "https://github.com/MrTig-afk/claude-remote",
+  "license": "MIT"
+}
