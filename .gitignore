@@ -1,0 +1,35 @@
+# secrets - never gated, never negotiable
+.env
+.env.*
+!.env.example
+*.local
+*.pem
+*.key
+
+# machine junk
+node_modules/
+venv/
+.venv/
+.idea/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+
+# local-only working material - internal tooling, never published
+CLAUDE.md
+START-HERE.md
+RUNBOOK.md
+HANDOFF.md
+.claude/
+.pipeline/
+assets/
+design/
+social-media/
+portfolio/
+project_summary.txt
+docs/internal/
+
+# local state this tool generates on the host - never shipped
+.claude-remote/
+session-registry.json
