@@ -14,7 +14,7 @@ Tell the user, plainly, that setup is not built yet, list the steps it will perf
 and stop. Do not improvise the automation, do not run `tailscale`, `wsl`, `ssh-keygen`,
 `sshd`, or any firewall command, and do not edit any system configuration.
 
-## What this skill will do once T02-T07 land
+## What this skill will do once implemented
 
 1. Verify Tailscale is running (`tailscale status`). Halt with a clear error if it is
    not - never fall back to an unscoped firewall rule.
