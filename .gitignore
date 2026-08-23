@@ -30,6 +30,6 @@ portfolio/
 project_summary.txt
 docs/internal/
 
-# local state this tool generates on the host - never shipped
-.claude-remote/
-session-registry.json
+# local state this tool generates at runtime lives outside the repo entirely,
+# under ~/.claude/plugins/data/{plugin-id}/ (Claude Code's own plugin-data
+# convention) - nothing to ignore here, see .claude/project-profile.md
