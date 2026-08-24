@@ -23,7 +23,7 @@ and stop. Do not improvise the automation, do not run `wsl`, `ssh-keygen`,
    back to an unscoped rule.
 2. Detect PowerShell 7 (`pwsh.exe`), falling back to `powershell.exe`, for use as the
    SSH default shell.
-3. Install WSL2 if absent, then tmux, Node, and the Claude Code CLI inside it.
+3. Install WSL1 if absent, then tmux, Node, ttyd, and the Claude Code CLI inside it.
 4. Install and configure Windows OpenSSH Server: key-based auth only, password auth
    disabled.
 5. Add a Windows Firewall rule scoped to the Tailscale interface/subnet only, never

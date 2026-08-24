@@ -12,7 +12,7 @@ works in principle since the transport is plain SSH.
 
 - Host: Windows, Tailscale (assumed already installed), Windows OpenSSH
   Server, PowerShell.
-- Session layer: WSL2 running tmux, Node, and the Claude Code CLI.
+- Session layer: WSL1 running tmux, Node, and the Claude Code CLI.
 - Client: any SSH app - ConnectBot (Android) and Blink Shell (iOS)
   documented specifically.
 
