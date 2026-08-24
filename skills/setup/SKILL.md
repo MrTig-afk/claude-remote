@@ -5,11 +5,12 @@ description: One-time host setup for claude-remote - prepares this Windows machi
 
 # Claude Remote - host setup
 
-**Status: not implemented yet, except step 1.** This skill is a placeholder. The
+**Status: not implemented yet, except steps 1 and 2.** This skill is a placeholder. The
 host-setup steps below are specified in `docs/claude-remote-prd.md` section 5.0 and
-section 6, and land as this project's milestone M0 work completes. Step 1 is
-implemented as `Test-TailscaleRunning` in `src/ClaudeRemote/ClaudeRemote.psm1`. Until
-the rest lands, do not attempt any of the other steps by hand from this skill.
+section 6, and land as this project's milestone M0 work completes. Steps 1 and 2 are
+implemented as `Test-TailscaleRunning` and `Get-DefaultShellPath` in
+`src/ClaudeRemote/ClaudeRemote.psm1`. Until the rest lands, do not attempt any of the
+other steps by hand from this skill.
 
 Tell the user, plainly, that setup is not built yet, list the steps it will perform,
 and stop. Do not improvise the automation, do not run `wsl`, `ssh-keygen`,
@@ -21,8 +22,9 @@ and stop. Do not improvise the automation, do not run `wsl`, `ssh-keygen`,
    `$false`, stop the whole setup, tell the user Tailscale is not running and to start
    it (`tailscale up`) then re-run setup - never continue to a firewall step or fall
    back to an unscoped rule.
-2. Detect PowerShell 7 (`pwsh.exe`), falling back to `powershell.exe`, for use as the
-   SSH default shell.
+2. Call `Get-DefaultShellPath`, which returns the full path to `pwsh.exe` when
+   PowerShell 7 is installed and the `powershell.exe` (5.1) path otherwise, and hand
+   that path to step 6.
 3. Install WSL1 if absent, then tmux, Node, ttyd, and the Claude Code CLI inside it.
 4. Install and configure Windows OpenSSH Server: key-based auth only, password auth
    disabled.
