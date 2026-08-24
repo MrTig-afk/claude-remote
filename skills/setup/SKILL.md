@@ -5,19 +5,22 @@ description: One-time host setup for claude-remote - prepares this Windows machi
 
 # Claude Remote - host setup
 
-**Status: not implemented yet.** This skill is a placeholder. The host-setup steps
-below are specified in `docs/claude-remote-prd.md` section 5.0 and section 6, and land
-as this project's milestone M0 work completes. Until then, do not attempt any of them
-by hand from this skill.
+**Status: not implemented yet, except step 1.** This skill is a placeholder. The
+host-setup steps below are specified in `docs/claude-remote-prd.md` section 5.0 and
+section 6, and land as this project's milestone M0 work completes. Step 1 is
+implemented as `Test-TailscaleRunning` in `src/ClaudeRemote/ClaudeRemote.psm1`. Until
+the rest lands, do not attempt any of the other steps by hand from this skill.
 
 Tell the user, plainly, that setup is not built yet, list the steps it will perform,
-and stop. Do not improvise the automation, do not run `tailscale`, `wsl`, `ssh-keygen`,
+and stop. Do not improvise the automation, do not run `wsl`, `ssh-keygen`,
 `sshd`, or any firewall command, and do not edit any system configuration.
 
 ## What this skill will do once implemented
 
-1. Verify Tailscale is running (`tailscale status`). Halt with a clear error if it is
-   not - never fall back to an unscoped firewall rule.
+1. Import `src/ClaudeRemote/ClaudeRemote.psm1` and call `Test-TailscaleRunning`. On
+   `$false`, stop the whole setup, tell the user Tailscale is not running and to start
+   it (`tailscale up`) then re-run setup - never continue to a firewall step or fall
+   back to an unscoped rule.
 2. Detect PowerShell 7 (`pwsh.exe`), falling back to `powershell.exe`, for use as the
    SSH default shell.
 3. Install WSL2 if absent, then tmux, Node, and the Claude Code CLI inside it.
