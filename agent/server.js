@@ -5,6 +5,7 @@ import { resolveBaseDir } from './config.js';
 import { listProjects } from './projects.js';
 import { launchSession } from './sessions.js';
 import { listSessions } from './registry.js';
+import { serveStatic } from './static.js';
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
@@ -91,6 +92,10 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
       sendJson(res, result.reused ? 200 : 202, result.session);
+      return;
+    }
+
+    if (req.method === 'GET' && serveStatic(res, url.pathname)) {
       return;
     }
 

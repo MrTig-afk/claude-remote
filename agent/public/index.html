@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0d0a">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="claude-remote">
+<title>claude-remote</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script type="module" src="/app.js"></script>
+<body>
+  <div class="app">
+    <header class="hdr">
+      <div class="hdr-top">
+        <div class="title">claude‑remote</div>
+        <div class="ver">v0.1</div>
+      </div>
+      <div class="conn" id="conn">
+        <svg class="dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="none" stroke="#3d4a3d" stroke-width="1"/></svg>
+        <span class="conn-text">CONNECTING</span>
+        <span class="conn-sep">&middot;</span>
+        <span class="conn-host"></span>
+      </div>
+    </header>
+
+    <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
+
+    <section class="zone" aria-labelledby="runhdr-label">
+      <div class="runhdr">
+        <span id="runhdr-label">RUNNING</span>
+        <span class="count" id="run-count">0</span>
+      </div>
+      <div class="tiles" id="tiles"></div>
+    </section>
+
+    <section class="zone">
+      <div class="allhdr">
+        <span>ALL PROJECTS</span>
+        <span class="count" id="all-count">0</span>
+      </div>
+      <div class="rule"></div>
+      <div class="list" id="projects"></div>
+    </section>
+
+    <button class="newproj" id="newproj" type="button" aria-label="New project">
+      <span class="newproj-box">+</span>
+    </button>
+
+    <div class="spacer"></div>
+    <div class="actions">
+      <button class="refresh" id="refresh" type="button">REFRESH</button>
+    </div>
+    <footer class="footer" id="footer"></footer>
+  </div>
+</body>
+</html>

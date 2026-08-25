@@ -1,0 +1,241 @@
+/* claude-remote PWA - shipped source of truth for the palette
+   (design/ is gitignored, so design/tokens.md is not in the repo).
+   Token set - do not introduce any colour outside this list:
+   #0a0d0a #0f150f #eafbea #c9d1c9 #9aab9a #4a5a4a #3d4a3d #2a332a
+   #7ee787 #5fae6f #1b231b #6b7a6b */
+
+* { box-sizing: border-box; }
+
+body {
+  background: #0a0d0a;
+  color: #c9d1c9;
+  margin: 0;
+  color-scheme: dark;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
+  overscroll-behavior-y: contain;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  width: 100%;
+  max-width: 430px;
+  margin-inline: auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Header */
+.hdr {
+  padding: calc(22px + env(safe-area-inset-top)) 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 1px solid #1b231b;
+}
+.hdr-top { display: flex; align-items: baseline; justify-content: space-between; }
+.title { font-size: 19px; font-weight: 700; letter-spacing: 0.02em; color: #eafbea; }
+.ver { font-size: 11px; color: #4a5a4a; }
+.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.03em; }
+.conn-text { color: #9aab9a; }
+.conn-text.reachable { color: #7ee787; }
+.conn-sep { color: #3d4a3d; }
+.conn-host { color: #6b7a6b; }
+
+/* Banner */
+.banner {
+  margin: 12px 12px 0;
+  padding: 10px 12px;
+  background: #0f150f;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c9d1c9;
+}
+.banner b { color: #eafbea; font-weight: 500; }
+.banner.error { color: #eafbea; }
+
+.zone { display: flex; flex-direction: column; }
+
+/* Zone 1 - RUNNING (tiles) */
+.runhdr {
+  padding: 11px 13px 6px;
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  color: #5fae6f;
+  display: flex;
+  justify-content: space-between;
+}
+.runhdr .count { color: #5fae6f; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 0 8px;
+}
+.tiles.single { grid-template-columns: 1fr; }
+.tiles.empty { display: block; padding: 0; }
+
+.tiles-placeholder {
+  margin: 8px;
+  padding: 14px 12px;
+  border: 1px dashed #3d4a3d;
+  border-radius: 5px;
+  font-size: 10px;
+  color: #4a5a4a;
+  text-align: center;
+  line-height: 1.6;
+}
+
+.tile {
+  border-radius: 5px;
+  padding: 10px;
+  min-height: 60px;
+  background: #0f150f;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  min-width: 0;
+}
+.tile-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #eafbea;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile-status {
+  font-size: 9px;
+  color: #5fae6f;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Zone 2 - ALL PROJECTS (list) */
+.allhdr {
+  padding: 11px 13px 6px;
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  color: #4a5a4a;
+  display: flex;
+  justify-content: space-between;
+}
+.allhdr .count { color: #4a5a4a; }
+.rule { height: 1px; background: #1b231b; margin: 0 13px; }
+
+.list {
+  display: flex;
+  flex-direction: column;
+  padding: 0 12px 46px;
+  gap: 2px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 8px;
+  min-height: 44px;
+  border-radius: 4px;
+  background: none;
+  border: 0;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.row.is-active { background: #0f150f; }
+.row .dot { flex-shrink: 0; }
+.row-main { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0; }
+.row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: #9aab9a; }
+.row.is-active .row-name { color: #eafbea; }
+.row-status { font-size: 11px; color: #9aab9a; }
+.row-idle { font-size: 12px; width: 32px; text-align: right; flex-shrink: 0; color: #3d4a3d; }
+.row.is-active .row-idle { color: #5fae6f; }
+.row-chev { font-size: 14px; color: #2a332a; }
+.row.is-active .row-chev { color: #3d4a3d; }
+
+.row-new .row-name { color: #9aab9a; }
+.row-new .row-status { color: #4a5a4a; }
+.row-new .row-idle { color: #3d4a3d; }
+.row-new .row-chev { color: #2a332a; }
+.row-new-glyph {
+  flex-shrink: 0;
+  width: 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #4a5a4a;
+}
+
+.msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
+
+/* Floating new-project button - visual box under the 44px floor, hit area
+   padded out to it (transparent padding, not a bigger visible box). */
+.newproj {
+  position: absolute;
+  right: 13px;
+  bottom: 46px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.newproj-box {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid #3d4a3d;
+  background: #0a0d0a;
+  color: #7ee787;
+  font-size: 19px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.spacer { flex-grow: 1; }
+.actions { padding: 8px 12px 0; }
+.refresh {
+  width: 100%;
+  min-height: 44px;
+  padding: 12px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #4a5a4a;
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.refresh:active { color: #9aab9a; }
+
+.footer {
+  padding: 14px 20px calc(22px + env(safe-area-inset-bottom));
+  font-size: 10px;
+  color: #2a332a;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+
+:focus-visible { outline: 1px solid #5fae6f; outline-offset: 2px; }
