@@ -83,9 +83,10 @@ Automated tonight, without registering anything (all passed):
    SilentlyContinue` — returns nothing.
 4. The rendered XML has no leftover `{{` placeholder, and contains
    `ExecutionTimeLimit>PT0S`.
-5. The JavaScript test suite still passes. Note what this does and does NOT
-   show: autostart adds no JavaScript, so a green suite only confirms nothing
-   was broken in passing. It is not evidence that autostart works.
+5. (Not part of this check.) Autostart adds no JavaScript, so the JS test
+   suite says nothing about whether it works — a green run would only mean
+   nothing else broke. It was deliberately not run as autostart verification
+   and no claim about it is made here.
 6. Shim smoke test — started `wscript.exe start-agent-hidden.vbs` directly
    (no task involved), confirmed no window appeared, confirmed
    `agent.log`'s last line was `Local Agent listening on
@@ -116,7 +117,11 @@ reboots or signs out and back in:
    `https://<machine>.<tailnet>.ts.net:8790` loads after a reboot with
    nobody having started anything by hand.
 8. Restart check: `Stop-Process` the agent's `node.exe` and confirm it is
-   back within about a minute (repeat step 3).
+   back within about a minute (repeat step 3). **This is the ONLY proof that
+   restart-on-failure actually works.** Nothing in this repo can verify it —
+   it needs a registered task, which is why it is your step. If the agent is
+   not back in roughly two minutes, restart-on-failure is NOT working, no
+   matter what the task's status column says.
 
 ## KNOWN LIMITATION
 
@@ -212,14 +217,46 @@ this task did, and it applies to the whole repo. But autostart is what converts
 principal can run code as the owner at every logon, with no window and no
 prompt". Worth closing:
 
+**Read the whole of this before running any of it — the obvious version of
+these commands locks you out of your own repo.**
+
+There is no explicit ACE for your account anywhere on `F:\`. `BUILTIN\Users`
+grants only `(RX)`, and `BUILTIN\Administrators` is deny-only in a normal
+non-elevated token. So `Authenticated Users:(M)` is the ONLY thing granting
+you write access here. Remove it without granting yourself first and you can
+no longer write to your own repo.
+
+Scope matters too: hardening `agent\autostart` alone is not enough, because
+the shim executes `agent\server.js`, which carries the same ACE.
+
+Grant first, then remove, at the repo root:
+
 ```powershell
-icacls agent\autostart /inheritance:d
-icacls agent\autostart /remove:g "Authenticated Users"
+$repo = 'F:\Dev\Projects\Repos\claude-remote'
+
+# 1. Explicit ACE for yourself FIRST. Without this, step 3 removes your
+#    only write access to the repo.
+icacls $repo /grant "$env:USERNAME:(OI)(CI)M"
+
+# 2. Stop inheriting the F:\ ACL (converts inherited entries to explicit).
+icacls $repo /inheritance:d
+
+# 3. Now drop the broad grant, recursively.
+icacls $repo /remove:g "Authenticated Users" /T
+
+# 4. Confirm you still have Modify, and that the broad grant is gone.
+icacls $repo
 ```
 
-Do that before registering the task if this machine is ever shared or joined
-to a domain. On a single-user personal machine it is lower priority, but the
-ACL above is the real state, not a theoretical one.
+To undo, re-enable inheritance from the parent:
+
+```powershell
+icacls $repo /inheritance:e
+```
+
+Priority: do this before registering the task if this machine is ever shared
+or joined to a domain. On a single-user personal machine it is lower priority
+— but the ACL above is the measured state, not a theoretical one.
 
 The task runs with `LogonType InteractiveToken` and `RunLevel
 LeastPrivilege`, never elevated. No secret, token or passcode appears
