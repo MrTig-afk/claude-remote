@@ -373,17 +373,15 @@ describe('serveStatic() called directly: depth cap, with real files past it', ()
 
 describe('serveStatic() called directly: symlink refusal (lstat, not stat)', () => {
   const linkPath = path.join(PUBLIC_DIR, 'symlink-escape.js');
-  let linkCreated = false;
 
   before(() => {
     // Points OUTSIDE public/ at a real file - if the guard swapped lstat
     // for stat, this would resolve through the link and get served.
     fs.symlinkSync(path.join(PUBLIC_DIR, '..', 'static.js'), linkPath, 'file');
-    linkCreated = true;
   });
 
   after(() => {
-    if (linkCreated) fs.rmSync(linkPath, { force: true });
+    fs.rmSync(linkPath, { force: true });
   });
 
   test('serveStatic() refuses a symlink planted in public/ pointing outside it', () => {
