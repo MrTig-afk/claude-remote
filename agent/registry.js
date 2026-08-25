@@ -7,6 +7,13 @@ import { resolveProjectPath, deriveSessionName } from './sessions.js';
 export const STARTING_GRACE_MS = 30_000;
 export const REGISTRY_VERSION = 1;
 
+// A launch whose pid file never landed is kept as `failed` this long so the
+// owner, who may be out for the day, still finds out why nothing appeared.
+// Fixed window, no acknowledge endpoint: a failure older than this vanishes
+// with no trace. Upgrade path if that bites: a dismiss flag written by the
+// PWA. Not worth an endpoint for one banner.
+export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 /** process.kill(pid, 0): true if a process with that pid exists. Never throws. */
 // Known ceiling: Windows recycles pids, and nothing in node's builtins can tell a
 // recycled pid from the original. A session whose pid is later reused by an
@@ -181,14 +188,36 @@ export function listSessions(ctx) {
       if (isAlive(pid)) {
         status = 'running';
       } else {
+        drop(sessionName);          // unchanged: a session that ran and exited
+        continue;                   // is finished, not failed - keep pruning it
+      }
+    } else {
+      const age = nowMs - Date.parse(startedAt);
+      // A started_at in the future is either a tampered file or a clock that
+      // moved backwards. Only a clearly impossible future is dropped: without
+      // some drop the entry stays `starting` forever and blocks every future
+      // relaunch. A SMALL backward step is tolerated and clamped instead,
+      // because deleting here would erase a launch that is very likely
+      // running - and the next tap would then spawn a duplicate session with
+      // the same name, which is the outcome this whole status exists to
+      // prevent. w32time slews small offsets but steps larger ones.
+      if (age < -STARTING_GRACE_MS) {
         drop(sessionName);
         continue;
       }
-    } else if (nowMs - Date.parse(startedAt) < STARTING_GRACE_MS) {
-      status = 'starting';
-    } else {
-      drop(sessionName);
-      continue;
+      const effectiveAge = Math.max(0, age);
+      if (effectiveAge < STARTING_GRACE_MS) {
+        status = 'starting';
+      } else if (effectiveAge < FAILED_RETENTION_MS) {
+        // No pid file past the grace window. The agent cannot tell "never
+        // started" from "started but the pid write failed" - `failed` here
+        // means only "never confirmed, and never will be". The UI must say
+        // that, not "it failed".
+        status = 'failed';
+      } else {
+        drop(sessionName);
+        continue;
+      }
     }
 
     survivors.push(entry);
@@ -209,10 +238,12 @@ export function listSessions(ctx) {
   return views;
 }
 
-/** The live SessionView whose session_name === sessionName, or null. */
+/** The live SessionView whose session_name === sessionName, or null.
+ *  `failed` is deliberately NOT live: it is retained only to be shown, and
+ *  treating it as live would make the project permanently unlaunchable. */
 export function findLiveSession(ctx, sessionName) {
   const sessions = listSessions(ctx);
-  return sessions.find((s) => s.session_name === sessionName) || null;
+  return sessions.find((s) => s.session_name === sessionName && s.status !== 'failed') || null;
 }
 
 /**
@@ -240,6 +271,12 @@ export function recordLaunch(ctx, { sessionName, project, projectPath }) {
   } catch {
     // Missing or corrupt - treated as empty, same contract as listSessions.
   }
+
+  // A retained `failed` entry for this session name is superseded by the new
+  // launch, not accumulated beside it.
+  sessions = sessions.filter(
+    (e) => !(e && typeof e === 'object' && e.session_name === sessionName),
+  );
 
   sessions.push({
     session_name: sessionName,

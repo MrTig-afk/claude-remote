@@ -7,6 +7,7 @@ import { test, after } from 'node:test';
 import { deriveSessionName } from '../sessions.js';
 import {
   STARTING_GRACE_MS,
+  FAILED_RETENTION_MS,
   REGISTRY_VERSION,
   isPidAlive,
   listSessions,
@@ -259,13 +260,113 @@ test('listSessions - no pid file, started_at 5s ago -> starting, pid null', () =
   assert.equal(views[0].pid, null);
 });
 
-test('listSessions - no pid file, started_at 10 minutes ago -> pruned', () => {
+test('listSessions - no pid file, started_at 10 minutes ago -> failed', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const entry = validEntry('Pull Requests', new Date(now - 10 * 60 * 1000).toISOString());
   writeSessions(ctx.registryPath, [entry]);
 
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'failed');
+  assert.equal(views[0].pid, null);
+});
+
+test('listSessions - no pid file, started_at 60s ago (past grace, inside retention) -> failed, and retained on disk', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'failed');
+  assert.equal(views[0].pid, null);
+
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 1);
+});
+
+test('listSessions - no pid file, started_at past FAILED_RETENTION_MS -> pruned', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - (FAILED_RETENTION_MS + 60_000)).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+
   assert.deepEqual(listSessions(ctx), []);
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 0);
+});
+
+test('listSessions - started_at far in the future -> dropped, not pinned as starting', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now + 60_000).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+
+  assert.deepEqual(listSessions(ctx), []);
+});
+
+// A small backward clock step must NOT delete a launch that is very likely
+// running: the owner's next tap would then spawn a duplicate session with the
+// same name, which is the outcome this status exists to prevent.
+test('listSessions - started_at 500ms in the future -> still starting, kept on disk', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now + 500).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'starting');
+
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 1);
+});
+
+test('listSessions - a failed-aged entry that DOES have a live pid file -> running (evidence beats the verdict)', () => {
+  const now = Date.now();
+  const livePids = new Set([777]);
+  const ctx = makeCtx({ now: () => now, livePids });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '777', 'ascii');
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'running');
+  assert.equal(views[0].pid, 777);
+});
+
+test('findLiveSession - null for a failed-aged entry, still returns a starting one', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const failedEntry = validEntry('Pull Requests', new Date(now - 60_000).toISOString());
+  writeSessions(ctx.registryPath, [failedEntry]);
+  assert.equal(findLiveSession(ctx, 'pull-requests'), null);
+
+  const ctx2 = makeCtx({ now: () => now });
+  const startingEntry = validEntry('Pull Requests', new Date(now - 5000).toISOString());
+  writeSessions(ctx2.registryPath, [startingEntry]);
+  assert.ok(findLiveSession(ctx2, 'pull-requests'));
+});
+
+test('recordLaunch - over an existing entry with the same session_name replaces it, not appends', () => {
+  const ctx = makeCtx();
+  const existing = validEntry('Pull Requests', new Date(Date.now() - 60_000).toISOString());
+  writeSessions(ctx.registryPath, [existing]);
+
+  const fixedNow = Date.parse('2026-08-26T00:00:00.000Z');
+  recordLaunch({ ...ctx, now: () => fixedNow }, {
+    sessionName: 'pull-requests',
+    project: 'Pull Requests',
+    projectPath: path.resolve(base, 'Pull Requests'),
+  });
+
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 1);
+  assert.equal(onDisk.sessions[0].started_at, new Date(fixedNow).toISOString());
 });
 
 test('listSessions - dead pid beats a fresh started_at (definitive wins over the grace window)', () => {

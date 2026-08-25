@@ -230,10 +230,11 @@ test('agent/package.json has neither dependencies nor devDependencies', () => {
 
 // --- No polling ---
 
-test('app.js and api.js contain no setInterval or setTimeout (T32 boundary)', () => {
+test('app.js has no standing poll: no setInterval, one bounded sleep', () => {
   for (const f of ['app.js', 'api.js']) {
-    const source = read(f);
-    assert.ok(!source.includes('setInterval'), `${f} must not use setInterval`);
-    assert.ok(!source.includes('setTimeout'), `${f} must not use setTimeout`);
+    assert.ok(!read(f).includes('setInterval'), `${f} must not use setInterval`);
   }
+  assert.ok(!read('api.js').includes('setTimeout'), 'api.js must not use setTimeout');
+  const hits = read('app.js').split('setTimeout').length - 1;
+  assert.ok(hits <= 1, `app.js must have at most one setTimeout (the sleep helper), found ${hits}`);
 });

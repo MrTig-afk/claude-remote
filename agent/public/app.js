@@ -137,6 +137,9 @@ function rowState(p) {
     if (session.status === 'running') {
       return { zone: 'tile', dot: 'filled', status: 'active session', idle: elapsed(session.started_at) };
     }
+    if (session.status === 'failed') {
+      return { zone: 'list', dot: 'dim', status: 'launch unconfirmed', idle: elapsed(session.started_at) };
+    }
     return { zone: 'tile', dot: 'accent', status: 'starting - not confirmed', idle: elapsed(session.started_at) };
   }
 
@@ -262,6 +265,83 @@ function setErrorBanner(code, status) {
   setBanner('error', [{ text: '! ' + errorCopy(code, status) }]);
 }
 
+function failedSessions() {
+  return (state.sessions || []).filter((s) => s.status === 'failed');
+}
+
+// Only ever SETS the banner. The stale case - banner says unconfirmed after
+// the owner has relaunched - cannot survive, because a relaunch sets its own
+// banner and load() hides first.
+function maybeFailedBanner() {
+  const f = failedSessions();
+  if (f.length === 0) return;
+  const names = f.slice(0, 2).map((s) => s.project).join(', ');
+  const more = f.length > 2 ? ` and ${f.length - 2} more` : '';
+  setBanner('error', [
+    { text: '! ' },
+    { b: names + more },
+    { text: " - no session confirmed. It may have stalled on a prompt on the PC, or never started. Check the Claude app's Code tab, then tap the project to try again." },
+  ]);
+}
+
+// Checks at roughly 3s, 8s and 33s after the trigger. The last is past
+// STARTING_GRACE_MS (30s), which is the whole point: it is the first moment
+// the agent can return a `failed` verdict, so without it the owner never
+// sees one. Gaps, not absolute offsets - they are awaited in sequence.
+const CONFIRM_GAPS_MS = [3000, 5000, 25000];
+let confirming = false;
+// Set when a launch happens while a confirm sequence is already running. The
+// running sequence's gaps are anchored to the FIRST launch, so a project
+// tapped a few seconds later would fall off the end of it still unconfirmed
+// and sit as a frozen `starting` tile until a manual refresh - the exact
+// invisible stall this status exists to remove.
+let rearm = false;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function anyStarting() {
+  return (state.sessions || []).some((s) => s.status === 'starting');
+}
+
+// Bounded and self-terminating: at most CONFIRM_GAPS_MS.length requests, and
+// it stops as soon as nothing is `starting`. Not a poll - there is no timer
+// unless a launch is actually in flight.
+async function confirmStarting(force = false) {
+  if (confirming) {
+    if (force) rearm = true;
+    return;
+  }
+  if (!force && !anyStarting()) return;
+  confirming = true;
+  try {
+    for (const gap of CONFIRM_GAPS_MS) {
+      await sleep(gap);
+      if (document.visibilityState !== 'visible') return; // visibilitychange re-runs load()
+      const s = await getSessions();
+      if (!s.ok) return;
+      state.sessions = s.data.sessions;
+      render();
+      maybeFailedBanner();
+      if (!anyStarting()) return;
+    }
+  } finally {
+    confirming = false;
+    // Bounded at 3 x (1 + forced calls arriving mid-sequence). This call runs
+    // with `confirming` already false, so it ENTERS the loop rather than
+    // setting the flag again - a sequence can never re-arm itself, which is
+    // what caps the chain. It does NOT rely on anyStarting() going false:
+    // an entry that never resolves still stops after its three gaps. Do not
+    // rewrite this into a loop keyed on anyStarting(); that reintroduces the
+    // unbounded case this shape avoids.
+    if (rearm) {
+      rearm = false;
+      confirmStarting(true);
+    }
+  }
+}
+
 function renderConn() {
   const conn = document.getElementById('conn');
   const dot = conn.querySelector('.dot');
@@ -375,6 +455,8 @@ async function load() {
   state.sessions = s.ok ? s.data.sessions : null;
 
   render();
+  if (state.reachable) maybeFailedBanner();
+  confirmStarting();
 }
 
 async function onProjectTap(e) {
@@ -407,6 +489,9 @@ async function onProjectTap(e) {
 
   state.focusName = name;
   render();
+  // force: state.sessions does not yet contain the new entry, and the first
+  // check at 3s is what brings it in.
+  if (res.ok && res.status === 202) confirmStarting(true);
 }
 
 function newProjectNameEl() { return document.getElementById('newproj-name'); }

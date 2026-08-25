@@ -553,7 +553,8 @@ test('HTTP - two POSTs, no pid file ever written, ctx.now fixed -> spawn stays a
 test('HTTP - two POSTs, ctx.now advanced past STARTING_GRACE_MS -> spawns again', async () => {
   const { spawner, calls } = makeFakeSpawner();
   let currentTime = Date.now();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx({ now: () => currentTime }) });
+  const regCtx = makeRegCtx({ now: () => currentTime });
+  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -568,6 +569,13 @@ test('HTTP - two POSTs, ctx.now advanced past STARTING_GRACE_MS -> spawns again'
     const res2 = await req();
     assert.equal(res2.status, 202);
     assert.equal(calls.length, 2);
+
+    // Regression guard for findLiveSession excluding `failed` and
+    // recordLaunch replacing same-name entries: if either broke, this would
+    // hold two entries for 'email-lint' instead of one.
+    const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+    const matching = onDisk.sessions.filter((s) => s.session_name === 'email-lint');
+    assert.equal(matching.length, 1);
   } finally {
     server.close();
   }
