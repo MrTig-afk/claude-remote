@@ -32,7 +32,7 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     '--remote-control', $SessionName
 )
 
-# Liveness for the agent's session registry (T29). The pid the agent's own
+# Liveness for the agent's session registry. The pid the agent's own
 # spawn() returns is this PowerShell host, which exits in seconds - useless.
 # This is the real one: claude.cmd CALLs claude.exe with no `start`, so the
 # cmd.exe this pid belongs to lives exactly as long as the session.

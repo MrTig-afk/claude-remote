@@ -17,7 +17,7 @@ export function listProjects(baseDir) {
 
   const projects = [];
   for (const dirent of entries) {
-    // ponytail: dirent.isDirectory() is false for symlinks/junctions, so
+    // Known ceiling: dirent.isDirectory() is false for symlinks/junctions, so
     // links are excluded for free - upgrade path if the owner ever
     // junctions a project in is to follow links deliberately here.
     if (!dirent.isDirectory() || dirent.name.startsWith('.')) {

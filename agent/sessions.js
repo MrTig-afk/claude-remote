@@ -74,7 +74,7 @@ export function launchSession(ctx, project) {
 
   const sessionName = deriveSessionName(r.path);
 
-  // ponytail: two folders can derive the same session name ('Foo Bar' and
+  // Known ceiling: two folders can derive the same session name ('Foo Bar' and
   // 'Foo.Bar' both -> 'foo-bar'), so they share one registry entry and the
   // second tap returns the first's entry - whose project/path are not the
   // ones the client asked for. Launching both would collide on the same

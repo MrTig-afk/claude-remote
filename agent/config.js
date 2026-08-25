@@ -12,12 +12,12 @@ export function getConfigFilePath() {
   return path.join(os.homedir(), '.claude', 'plugins', 'data', 'claude-remote-claude-remote', 'config.json');
 }
 
-/** Absolute path of the session registry file, beside the config (T29). */
+/** Absolute path of the session registry file, beside the config. */
 export function getRegistryFilePath() {
   return path.join(path.dirname(getConfigFilePath()), 'sessions.json');
 }
 
-/** Absolute path of the directory launch-session.ps1 writes pid files into (T29). */
+/** Absolute path of the directory launch-session.ps1 writes pid files into. */
 export function getPidDirPath() {
   return path.join(path.dirname(getConfigFilePath()), 'session-pids');
 }

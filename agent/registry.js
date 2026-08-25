@@ -8,7 +8,7 @@ export const STARTING_GRACE_MS = 30_000;
 export const REGISTRY_VERSION = 1;
 
 /** process.kill(pid, 0): true if a process with that pid exists. Never throws. */
-// ponytail: Windows recycles pids, and nothing in node's builtins can tell a
+// Known ceiling: Windows recycles pids, and nothing in node's builtins can tell a
 // recycled pid from the original. A session whose pid is later reused by an
 // unrelated process reports "running" forever, so the owner can never relaunch
 // that project from the phone. Upgrade path if it ever bites: store the
@@ -75,7 +75,7 @@ function writeRegistry(registryPath, sessions) {
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
     const json = JSON.stringify({ version: REGISTRY_VERSION, sessions }, null, 2);
     const tmp = `${registryPath}.tmp`;
-    // ponytail: read-modify-write with no lock. Two concurrent POSTs for
+    // Known ceiling: read-modify-write with no lock. Two concurrent POSTs for
     // different projects can interleave so the second overwrites the first's
     // entry, losing it from the registry (worst case: a duplicate session
     // later). Single-user agent on loopback, so the window is theoretical.
