@@ -19,17 +19,21 @@ works in principle since the transport is plain SSH.
 ## Status
 
 Early scaffold. See `docs/claude-remote-prd.md` for the full spec and
-`.claude/tasks.md` for the milestone breakdown. `claude-remote.ps1` currently
-only derives the tmux session name for a project folder; create-or-reattach
-and the rest of the operational flow land milestone by milestone.
+`.claude/tasks.md` for the milestone breakdown. `claude-remote.ps1` now
+resolves the project folder, creates or reattaches the tmux session, and
+starts `claude` inside it on first creation; connection-string printing and
+`list-sessions` still land in later milestones.
 
 ## Local setup (current scaffold)
 
 ```powershell
 git clone <this repo>
 cd claude-remote
-.\claude-remote.ps1
+.\claude-remote.ps1 -ProjectPath .
 ```
+
+Running it with no argument uses the saved default folder instead, which the
+setup flow does not configure yet.
 
 ## Running the tests
 
