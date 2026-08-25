@@ -1,4 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" fill="#0a0d0a"/>
-  <circle cx="50" cy="50" r="30" fill="#7ee787"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="claude-remote">
+  <title>claude-remote</title>
+  <defs>
+    <!-- phosphor bloom: subtle, survives downscale to 48px as a faint halo -->
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="10" />
+    </filter>
+    <!-- the power mark: broken ring + bar, butt caps (square-cut, terminal-native) -->
+    <g id="mark" fill="none" stroke="#7ee787" stroke-width="42" stroke-linecap="butt">
+      <path d="M 351.11 170.35 A 128 128 0 1 1 160.89 170.35" />
+      <path d="M 256 86 L 256 238" />
+    </g>
+  </defs>
+
+  <!-- opaque tile: the icon never sits on the wallpaper, it brings its own ground -->
+  <rect width="512" height="512" rx="96" ry="96" fill="#0a0d0a" />
+  <rect x="2" y="2" width="508" height="508" rx="94" ry="94" fill="none" stroke="#2a332a" stroke-width="4" />
+
+  <g transform="translate(0,10)">
+    <use href="#mark" filter="url(#glow)" opacity="0.45" />
+    <use href="#mark" />
+  </g>
 </svg>
