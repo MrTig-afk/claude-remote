@@ -33,3 +33,14 @@ docs/internal/
 # local state this tool generates at runtime lives outside the repo entirely,
 # under ~/.claude/plugins/data/{plugin-id}/ (Claude Code's own plugin-data
 # convention) - nothing to ignore here, see .claude/project-profile.md
+
+# probe files the static-route tests write INTO the served directory and
+# delete again in their after() hooks. Listed because a crashed or killed
+# run leaves them behind, and one of them (symlink-escape.js) is a real
+# symlink pointing out of agent/public/ - an artefact shaped exactly like
+# the escape hatch those tests exist to prove is impossible. It must never
+# be committable by accident.
+agent/public/probe.txt
+agent/public/.hidden.js
+agent/public/symlink-escape.js
+agent/public/d1/

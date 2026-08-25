@@ -33,6 +33,13 @@ async function request(path, options = {}) {
     return { ok: false, status: res.status, code: 'bad_response' };
   }
 
+  // A body that parses to a non-object (null, a bare number/string/bool)
+  // has no .error to read below, and callers of the ok:true path index
+  // into .data (e.g. data.projects) - both need an object shape.
+  if (!data || typeof data !== 'object') {
+    return { ok: false, status: res.status, code: 'bad_response' };
+  }
+
   if (res.ok) {
     return { ok: true, status: res.status, data };
   }

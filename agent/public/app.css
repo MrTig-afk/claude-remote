@@ -135,6 +135,11 @@ body {
 .list {
   display: flex;
   flex-direction: column;
+  /* Load-bearing under .newproj's position:fixed (T30 fix pass): scrolled to
+     the bottom, the fixed button sits 100-144px up from the viewport edge -
+     this padding reserves that band so the button can never cover the last
+     project row. Not dead code under fixed, unlike under the old absolute
+     positioning. */
   padding: 0 12px 46px;
   gap: 2px;
 }
@@ -155,28 +160,12 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.row.is-active { background: #0f150f; }
 .row .dot { flex-shrink: 0; }
 .row-main { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0; }
 .row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: #9aab9a; }
-.row.is-active .row-name { color: #eafbea; }
 .row-status { font-size: 11px; color: #9aab9a; }
 .row-idle { font-size: 12px; width: 32px; text-align: right; flex-shrink: 0; color: #3d4a3d; }
-.row.is-active .row-idle { color: #5fae6f; }
 .row-chev { font-size: 14px; color: #2a332a; }
-.row.is-active .row-chev { color: #3d4a3d; }
-
-.row-new .row-name { color: #9aab9a; }
-.row-new .row-status { color: #4a5a4a; }
-.row-new .row-idle { color: #3d4a3d; }
-.row-new .row-chev { color: #2a332a; }
-.row-new-glyph {
-  flex-shrink: 0;
-  width: 8px;
-  text-align: center;
-  font-size: 12px;
-  color: #4a5a4a;
-}
 
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 
@@ -239,11 +228,17 @@ body {
 #newproj-create:disabled { color: #4a5a4a; border-color: #3d4a3d; cursor: default; }
 
 /* Floating new-project button - visual box under the 44px floor, hit area
-   padded out to it (transparent padding, not a bigger visible box). */
+   padded out to it (transparent padding, not a bigger visible box).
+   position:fixed, not absolute (owner decision 2026-08-26, T30 fix pass):
+   .app is a flex column that grows past one viewport with enough projects,
+   so an absolutely positioned button sits at the DOCUMENT bottom, invisible
+   until scrolled all the way down and overlapping REFRESH there. fixed
+   anchors it to the viewport instead, staying clear of REFRESH at every
+   scroll position. */
 .newproj {
-  position: absolute;
-  right: 13px;
-  bottom: 46px;
+  position: fixed;
+  right: max(13px, calc(50% - 215px + 13px));
+  bottom: calc(100px + env(safe-area-inset-bottom));
   width: 44px;
   height: 44px;
   padding: 0;

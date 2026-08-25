@@ -129,34 +129,34 @@ function sessionFor(p) {
  */
 function rowState(p) {
   if (state.launching.has(p.name)) {
-    return { zone: 'tile', dot: 'accent', status: 'starting...', idle: '—', active: true };
+    return { zone: 'tile', dot: 'accent', status: 'starting...', idle: '—' };
   }
 
   const session = sessionFor(p);
   if (session) {
     if (session.status === 'running') {
-      return { zone: 'tile', dot: 'filled', status: 'active session', idle: elapsed(session.started_at), active: true };
+      return { zone: 'tile', dot: 'filled', status: 'active session', idle: elapsed(session.started_at) };
     }
-    return { zone: 'tile', dot: 'accent', status: 'starting - not confirmed', idle: elapsed(session.started_at), active: true };
+    return { zone: 'tile', dot: 'accent', status: 'starting - not confirmed', idle: elapsed(session.started_at) };
   }
 
   const result = state.results.get(p.name);
   if (result) {
     if (result.kind === 'started') {
-      return { zone: 'tile', dot: 'accent', status: 'start requested - not confirmed', idle: elapsed(result.session.started_at), active: true };
+      return { zone: 'tile', dot: 'accent', status: 'start requested - not confirmed', idle: elapsed(result.session.started_at) };
     }
     if (result.kind === 'reused') {
-      return { zone: 'tile', dot: 'filled', status: 'already running', idle: elapsed(result.session.started_at), active: true };
+      return { zone: 'tile', dot: 'filled', status: 'already running', idle: elapsed(result.session.started_at) };
     }
     // result.kind === 'error': no registry entry exists, so this falls
     // back to being a list row.
-    return { zone: 'list', dot: 'dim', status: 'could not start', idle: '—', active: false };
+    return { zone: 'list', dot: 'dim', status: 'could not start', idle: '—' };
   }
 
   if (state.sessions === null) {
-    return { zone: 'list', dot: 'dim', status: 'session state unknown', idle: '—', active: false };
+    return { zone: 'list', dot: 'dim', status: 'session state unknown', idle: '—' };
   }
-  return { zone: 'list', dot: 'dim', status: 'no session', idle: '—', active: false };
+  return { zone: 'list', dot: 'dim', status: 'no session', idle: '—' };
 }
 
 function setDot(svg, kind) {

@@ -3,9 +3,11 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { test, after } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { test, after, describe, before } from 'node:test';
 
 import { createAgentServer } from '../server.js';
+import { serveStatic } from '../static.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-static-'));
 
@@ -253,4 +255,137 @@ test('GET /static.js (real file one level above public/) -> 404', async () => {
 test('GET /package.json (real file one level above public/) -> 404', async () => {
   const res = await fetch(`${origin}/package.json`);
   assert.equal(res.status, 404);
+});
+
+// --- Fix 1 (T30 fix pass, review issue 1): serveStatic called DIRECTLY,
+// unit-style, with un-normalised pathname strings pointing at files that
+// REALLY EXIST. The traversal block above drives everything through the
+// HTTP server, and new URL() in server.js normalises '..' away before
+// serveStatic is ever reached - and its surviving targets don't exist on
+// disk either - so that block cannot tell a working guard from a deleted
+// one. These tests bypass new URL() entirely and target real files, so a
+// deleted guard actually serves the file (res.writeHead gets called)
+// instead of just returning false for an unrelated reason. Every case here
+// asserts both the return value AND that nothing was written to the fake
+// response - a guard that returns false but only after already writing
+// would still be a bug. ---
+
+const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
+
+function fakeRes() {
+  const res = { headWritten: false, wrote: false };
+  res.writeHead = () => { res.headWritten = true; };
+  res.write = () => { res.wrote = true; };
+  res.end = () => { res.wrote = true; };
+  res.destroy = () => {};
+  return res;
+}
+
+function assertRefused(pathname) {
+  const res = fakeRes();
+  const result = serveStatic(res, pathname);
+  assert.equal(result, false, pathname);
+  assert.equal(res.headWritten, false, `${pathname}: a header was written`);
+  assert.equal(res.wrote, false, `${pathname}: a body was written`);
+}
+
+describe('serveStatic() called directly: traversal targets that really exist on disk', () => {
+  // Literal backslash built at runtime, not typed into this source file -
+  // see the escaping note at the bottom of .pipeline/spec.md.
+  const BACKSLASH = String.fromCharCode(92);
+
+  const DIRECT_TRAVERSAL_CASES = [
+    '/../static.js', // agent/static.js - one level above public/
+    `/..${BACKSLASH}static.js`, // same target, backslash separator
+    '/%2e%2e/static.js', // same target, percent-encoded
+    '/a/../../package.json', // agent/package.json, via a real subsegment first
+    '/C:/Windows/win.ini', // Windows drive-letter form, not on disk regardless
+    '/../../CLAUDE.md', // repo-root CLAUDE.md - two levels above public/
+  ];
+
+  for (const p of DIRECT_TRAVERSAL_CASES) {
+    test(`serveStatic() refuses: ${p}`, () => assertRefused(p));
+  }
+
+  test('sanity: the real target files this block relies on actually exist', () => {
+    assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', 'static.js')));
+    assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', 'package.json')));
+    assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', '..', 'CLAUDE.md')));
+  });
+});
+
+describe('serveStatic() called directly: per-segment regex, with a real file the regex - but nothing else - rejects', () => {
+  // A leading dot is disallowed by FILE (`^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$`,
+  // which requires the name part before the extension's one dot to be
+  // alnum/dash/underscore) but is NOT one of the BAD_CHARS (% \ : //) and
+  // does not escape PUBLIC_DIR, so this is the one probe that isolates the
+  // per-segment regex from the containment check and from BAD_CHARS: both
+  // of those pass a leading-dot filename straight through.
+  const dotFilePath = path.join(PUBLIC_DIR, '.hidden.js');
+
+  before(() => {
+    fs.writeFileSync(dotFilePath, '// regex probe\n');
+  });
+
+  after(() => {
+    fs.rmSync(dotFilePath, { force: true });
+  });
+
+  test('serveStatic() refuses a real dot-leading filename (fails FILE, passes containment)', () => {
+    assertRefused('/.hidden.js');
+  });
+});
+
+describe('serveStatic() called directly: extension allowlist, with a real file', () => {
+  const probePath = path.join(PUBLIC_DIR, 'probe.txt');
+
+  before(() => {
+    fs.writeFileSync(probePath, 'not an allowlisted extension\n');
+  });
+
+  after(() => {
+    fs.rmSync(probePath, { force: true });
+  });
+
+  test('serveStatic() refuses a real .txt file (extension not on the allowlist)', () => {
+    assertRefused('/probe.txt');
+  });
+});
+
+describe('serveStatic() called directly: depth cap, with real files past it', () => {
+  const deepDir = path.join(PUBLIC_DIR, 'd1', 'd2', 'd3', 'd4');
+  const deepFile = path.join(deepDir, 'deep.js');
+
+  before(() => {
+    fs.mkdirSync(deepDir, { recursive: true });
+    fs.writeFileSync(deepFile, '// depth-cap probe\n');
+  });
+
+  after(() => {
+    fs.rmSync(path.join(PUBLIC_DIR, 'd1'), { recursive: true, force: true });
+  });
+
+  test('serveStatic() refuses a real file 5 segments deep (over the 4-segment cap)', () => {
+    assertRefused('/d1/d2/d3/d4/deep.js');
+  });
+});
+
+describe('serveStatic() called directly: symlink refusal (lstat, not stat)', () => {
+  const linkPath = path.join(PUBLIC_DIR, 'symlink-escape.js');
+  let linkCreated = false;
+
+  before(() => {
+    // Points OUTSIDE public/ at a real file - if the guard swapped lstat
+    // for stat, this would resolve through the link and get served.
+    fs.symlinkSync(path.join(PUBLIC_DIR, '..', 'static.js'), linkPath, 'file');
+    linkCreated = true;
+  });
+
+  after(() => {
+    if (linkCreated) fs.rmSync(linkPath, { force: true });
+  });
+
+  test('serveStatic() refuses a symlink planted in public/ pointing outside it', () => {
+    assertRefused('/symlink-escape.js');
+  });
 });
