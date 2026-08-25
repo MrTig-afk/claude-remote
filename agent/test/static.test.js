@@ -148,8 +148,8 @@ test('GET /nope still 404 with the exact not_found body', async () => {
   assert.deepEqual(body, { error: 'not_found' });
 });
 
-test('POST /api/projects still 404 (surface not widened)', async () => {
-  const res = await fetch(`${origin}/api/projects`, { method: 'POST' });
+test('PUT /api/projects still 404 (only POST was added, in T31)', async () => {
+  const res = await fetch(`${origin}/api/projects`, { method: 'PUT' });
   assert.equal(res.status, 404);
 });
 

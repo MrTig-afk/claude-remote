@@ -180,6 +180,64 @@ body {
 
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 
+/* New-project panel - opened by the + button. Same card language as .banner
+   (bg #0f150f, 4px radius); no new colour outside the token list above. */
+.newproj-panel {
+  margin: 12px 12px 0;
+  padding: 12px;
+  background: #0f150f;
+  border: 1px solid #1b231b;
+  border-radius: 4px;
+}
+.newproj-panel label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: #9aab9a;
+  margin-bottom: 8px;
+}
+.newproj-panel input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  font: inherit;
+  font-size: 14px;
+  color: #eafbea;
+  background: #0a0d0a;
+  border: 1px solid #3d4a3d;
+  border-radius: 4px;
+  appearance: none;
+}
+.newproj-target {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #6b7a6b;
+  overflow-wrap: anywhere;
+  min-height: 14px;
+}
+.newproj-error {
+  margin-top: 8px;
+  font-size: 11px;
+  color: #eafbea;
+}
+.newproj-actions { display: flex; gap: 8px; margin-top: 12px; }
+.newproj-actions button {
+  flex: 1;
+  min-height: 44px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  background: none;
+  border: 1px solid #3d4a3d;
+  border-radius: 4px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#newproj-cancel { color: #4a5a4a; }
+#newproj-create { color: #7ee787; border-color: #5fae6f; }
+#newproj-create:disabled { color: #4a5a4a; border-color: #3d4a3d; cursor: default; }
+
 /* Floating new-project button - visual box under the 44px floor, hit area
    padded out to it (transparent padding, not a bigger visible box). */
 .newproj {

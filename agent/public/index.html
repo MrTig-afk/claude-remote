@@ -31,6 +31,17 @@
 
     <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
+    <div class="newproj-panel" id="newproj-panel" hidden>
+      <label for="newproj-name">New project name</label>
+      <input id="newproj-name" type="text" maxlength="64" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="e.g. email-lint">
+      <div class="newproj-target" id="newproj-target"></div>
+      <div class="newproj-error" id="newproj-error" hidden></div>
+      <div class="newproj-actions">
+        <button type="button" id="newproj-cancel">CANCEL</button>
+        <button type="button" id="newproj-create" disabled>CREATE</button>
+      </div>
+    </div>
+
     <section class="zone" aria-labelledby="runhdr-label">
       <div class="runhdr">
         <span id="runhdr-label">RUNNING</span>

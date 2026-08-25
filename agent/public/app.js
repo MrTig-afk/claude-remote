@@ -1,4 +1,4 @@
-import { getProjects, getSessions, launchSession } from './api.js';
+import { getProjects, getSessions, launchSession, createProject } from './api.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
@@ -23,6 +23,78 @@ const ERROR_COPY = {
 
 function errorCopy(code, status) {
   return ERROR_COPY[code] || `The agent refused the request (status ${status}). Check its terminal window on the PC.`;
+}
+
+// Copy for POST /api/projects only (design/tokens.md + spec-t31.md section 6)
+// - distinct from ERROR_COPY above, which is written for launch failures and
+// uses codes (project_not_found, invalid_project) that don't apply here.
+const NEW_PROJECT_ERROR_COPY = {
+  invalid_request: 'Something went wrong sending that name.',
+  name_empty: 'Enter a project name.',
+  name_too_long: 'Too long – 64 characters max.',
+  name_illegal_char: 'Windows folder names can’t contain < > : " | ? *.',
+  name_edge_whitespace: 'Remove the space at the start or end.',
+  name_percent_encoded: '% isn’t allowed in a project name.',
+  name_has_separator: 'No \\ or / – projects are created directly in Repos.',
+  name_absolute: 'Enter a name, not a path.',
+  name_has_traversal: "That isn't a name.",
+  name_dot_prefixed: "Names can't start with a dot (it would be hidden).",
+  name_trailing_dot: "Names can't end with a dot.",
+  name_reserved: "That's a reserved Windows device name.",
+  name_not_launchable: "That name can't be used as a session name.",
+  name_collision: 'Another project already maps to the same session name.',
+  project_exists: 'A project with that name already exists.',
+  base_unavailable: "The agent can't reach its projects folder.",
+  create_failed: "Couldn't create the folder.",
+  payload_too_large: 'That name is too long to send.',
+  network: 'Cannot reach the agent. Check the PC is awake and Tailscale is connected.',
+  timeout: "The agent didn't answer in time.",
+  bad_response: "The agent replied with something this app doesn't understand.",
+};
+
+function newProjectErrorCopy(code) {
+  return NEW_PROJECT_ERROR_COPY[code] || 'Could not create the project.';
+}
+
+// Mirrors agent/projects.js validateProjectName (V1-V14 minus V1, which is
+// unreachable from a text input) in the same order, for instant feedback
+// only - the server holds the same rules and is the trust boundary. Always
+// called on a trimmed value, matching what onCreateProject actually sends
+// (V5 is therefore unreachable here by construction, same as server-side
+// intent: the client trims so the common phone-keyboard trailing space never
+// reaches the server).
+// ponytail: duplicated because the browser and the agent share no module
+// boundary; keep this in sync by hand if projects.js's rules change.
+function clientValidateName(name) {
+  if (name === '') return 'name_empty';
+  if (name.length > 64) return 'name_too_long';
+  if (/[\u0000-\u001f\u007f]/.test(name)) return 'name_illegal_char';
+  if (/^\s|\s$/.test(name)) return 'name_edge_whitespace';
+  if (name.includes('%')) return 'name_percent_encoded';
+  if (/[\\/]/.test(name)) return 'name_has_separator';
+  if (/^[A-Za-z]:/.test(name)) return 'name_absolute';
+  if (/[<>:"|?*]/.test(name)) return 'name_illegal_char';
+  if (/^\.+$/.test(name)) return 'name_has_traversal';
+  if (name.startsWith('.')) return 'name_dot_prefixed';
+  if (name.endsWith('.')) return 'name_trailing_dot';
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name.split('.')[0].trim())) return 'name_reserved';
+  const s = name.replace(/[\s.]+/g, '-').toLowerCase();
+  if (s === '' || s.startsWith('-')) return 'name_not_launchable';
+  return null;
+}
+
+// Best-effort target-path preview only: derived from an existing project's
+// absolute path already present in the loaded list (GET /api/projects
+// returns one per entry; the create response deliberately omits it, see
+// spec-t31.md Decision 1). If the base folder is currently empty nothing has
+// a path to derive from - the preview falls back to a relative form rather
+// than adding a new endpoint just to expose baseDir.
+function baseDirGuess() {
+  const withPath = state.projects.find((p) => p.path);
+  if (!withPath) return null;
+  const sep = withPath.path.includes('\\') ? '\\' : '/';
+  const idx = withPath.path.lastIndexOf(sep);
+  return idx === -1 ? null : { dir: withPath.path.slice(0, idx), sep };
 }
 
 // Time since session start, not time since last input (no API exposes
@@ -337,14 +409,100 @@ async function onProjectTap(e) {
   render();
 }
 
+function newProjectNameEl() { return document.getElementById('newproj-name'); }
+
+function currentNameTrimmed() {
+  // Client-side trim only, matching the contract in design/tokens.md /
+  // spec-t31.md section 11: the server is the boundary, this is UX so the
+  // common phone-keyboard trailing space never becomes a round trip.
+  return newProjectNameEl().value.trim();
+}
+
+function updateNewProjectTarget() {
+  const targetEl = document.getElementById('newproj-target');
+  const errorEl = document.getElementById('newproj-error');
+  const createBtn = document.getElementById('newproj-create');
+  const name = currentNameTrimmed();
+
+  if (name === '') {
+    errorEl.hidden = true;
+    targetEl.textContent = '';
+    createBtn.disabled = true;
+    return;
+  }
+
+  const code = clientValidateName(name);
+  if (code) {
+    errorEl.textContent = newProjectErrorCopy(code);
+    errorEl.hidden = false;
+    targetEl.textContent = '';
+    createBtn.disabled = true;
+    return;
+  }
+
+  errorEl.hidden = true;
+  errorEl.textContent = '';
+  const base = baseDirGuess();
+  targetEl.textContent = base
+    ? `will create: ${base.dir}${base.sep}${name}`
+    : `will create: ${name} (in the projects folder)`;
+  createBtn.disabled = false;
+}
+
+function openNewProjectPanel() {
+  document.getElementById('newproj-panel').hidden = false;
+  const nameEl = newProjectNameEl();
+  nameEl.value = '';
+  updateNewProjectTarget();
+  nameEl.focus();
+}
+
+function closeNewProjectPanel() {
+  document.getElementById('newproj-panel').hidden = true;
+}
+
+async function onCreateProject() {
+  const errorEl = document.getElementById('newproj-error');
+  const createBtn = document.getElementById('newproj-create');
+  const name = currentNameTrimmed();
+
+  const code = clientValidateName(name);
+  if (code) {
+    errorEl.textContent = newProjectErrorCopy(code);
+    errorEl.hidden = false;
+    return;
+  }
+
+  createBtn.disabled = true;
+  const res = await createProject(name);
+  createBtn.disabled = false;
+
+  if (res.ok) {
+    closeNewProjectPanel();
+    setBanner('info', [{ b: res.data.project.name }, { text: ' created.' }]);
+    // Re-fetch, never optimistic insert (spec-t31.md section 11 / 8): the
+    // list is the single source of truth once the agent has confirmed it.
+    await load();
+    return;
+  }
+
+  // Name stays in the field so it can be corrected (spec-t31.md section 11).
+  errorEl.textContent = newProjectErrorCopy(res.code);
+  errorEl.hidden = false;
+  updateNewProjectTarget();
+}
+
 function onNewProject() {
-  setBanner('info', [{ text: "Creating projects from here isn't built yet. Make the folder on the PC, then tap REFRESH." }]);
+  openNewProjectPanel();
 }
 
 function wireEvents() {
   document.getElementById('projects').addEventListener('click', onProjectTap);
   document.getElementById('newproj').addEventListener('click', onNewProject);
   document.getElementById('refresh').addEventListener('click', () => load());
+  document.getElementById('newproj-cancel').addEventListener('click', closeNewProjectPanel);
+  document.getElementById('newproj-create').addEventListener('click', onCreateProject);
+  newProjectNameEl().addEventListener('input', updateNewProjectTarget);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') load();
   });

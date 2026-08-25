@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 
 import { resolveBaseDir } from './config.js';
-import { listProjects } from './projects.js';
+import { listProjects, createProject } from './projects.js';
 import { launchSession } from './sessions.js';
 import { listSessions } from './registry.js';
 import { serveStatic } from './static.js';
@@ -48,12 +48,50 @@ function readBody(req) {
   });
 }
 
+// ponytail: POST /api/sessions still inlines this same parse. Fold that route
+// into this helper the next time it is touched - T30 owns server.js right now
+// and a restructure would collide.
+async function readJsonObject(req) {
+  let body;
+  try {
+    body = await readBody(req);
+  } catch (err) {
+    if (err.code === 'PAYLOAD_TOO_LARGE') return { ok: false, status: 413, error: 'payload_too_large' };
+    throw err;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return { ok: false, status: 400, error: 'invalid_request' };
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, status: 400, error: 'invalid_request' };
+  }
+  return { ok: true, value: parsed };
+}
+
 export async function handleRequest(req, res, ctx) {
   try {
     const url = new URL(req.url, 'http://127.0.0.1');
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
       sendJson(res, 200, { projects: listProjects(ctx.baseDir) });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/projects') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { error: parsed.error });
+        return;
+      }
+      const result = createProject(ctx.baseDir, parsed.value.name);
+      if (!result.ok) {
+        sendJson(res, result.status, { error: result.error });
+        return;
+      }
+      sendJson(res, 201, { project: result.project });
       return;
     }
 
