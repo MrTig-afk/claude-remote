@@ -5,10 +5,12 @@
     <filter id="glow" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
       <feGaussianBlur stdDeviation="10" />
     </filter>
-    <!-- the power mark: broken ring + bar, butt caps (square-cut, terminal-native) -->
-    <g id="mark" fill="none" stroke="#7ee787" stroke-width="42" stroke-linecap="butt">
-      <path d="M 351.11 170.35 A 128 128 0 1 1 160.89 170.35" />
-      <path d="M 256 86 L 256 238" />
+    <!-- two machines joined corner to corner: the desk, the phone, one link.
+         Three shapes on purpose - it is what keeps the mark readable at 16px. -->
+    <g id="mark" fill="none" stroke="#7ee787" stroke-width="38" stroke-linecap="butt">
+      <rect x="100" y="120" width="150" height="106" rx="10" />
+      <rect x="286" y="290" width="126" height="106" rx="10" />
+      <path d="M 214 226 L 298 290" />
     </g>
   </defs>
 
@@ -16,8 +18,6 @@
   <rect width="512" height="512" rx="96" ry="96" fill="#0a0d0a" />
   <rect x="2" y="2" width="508" height="508" rx="94" ry="94" fill="none" stroke="#2a332a" stroke-width="4" />
 
-  <g transform="translate(0,10)">
-    <use href="#mark" filter="url(#glow)" opacity="0.45" />
-    <use href="#mark" />
-  </g>
+  <use href="#mark" filter="url(#glow)" opacity="0.45" />
+  <use href="#mark" />
 </svg>

@@ -10,7 +10,9 @@
 <meta name="apple-mobile-web-app-title" content="claude-remote">
 <title>claude-remote</title>
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<!-- iOS: opaque, square, 180px. iOS renders transparent pixels black and
+     applies its own squircle, so this must NOT be the rounded 192 tile. -->
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-apple-180.png">
 <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/app.css">
 <script type="module" src="/app.js"></script>
