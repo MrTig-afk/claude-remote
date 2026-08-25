@@ -3,6 +3,9 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
+import { getPidDirPath } from './config.js';
+import { findLiveSession, clearPidFile, recordLaunch } from './registry.js';
+
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
 
 /**
@@ -61,12 +64,51 @@ export function resolveProjectPath(baseDir, project) {
 /**
  * Launches a detached Claude Code session for project, rooted at baseDir.
  * ctx.spawner is the injectable seam for tests; defaults to child_process.spawn.
+ * ctx also threads the registry seams (registryPath, pidDir, isPidAlive, now)
+ * straight through to findLiveSession/clearPidFile/recordLaunch untouched.
  */
-export function launchSession({ baseDir, spawner = spawn }, project) {
+export function launchSession(ctx, project) {
+  const { baseDir, spawner = spawn } = ctx;
   const r = resolveProjectPath(baseDir, project);
   if (!r.ok) return r;
 
   const sessionName = deriveSessionName(r.path);
+
+  // ponytail: two folders can derive the same session name ('Foo Bar' and
+  // 'Foo.Bar' both -> 'foo-bar'), so they share one registry entry and the
+  // second tap returns the first's entry - whose project/path are not the
+  // ones the client asked for. Launching both would collide on the same
+  // --remote-control name in the Code tab anyway, so sharing is the honest
+  // behaviour. No folder under Repos collides today. Upgrade path if one
+  // ever does: key by resolved path and return a 409 on the name collision.
+  const existing = findLiveSession(ctx, sessionName);
+  if (existing) {
+    return { ok: true, reused: true, session: existing };
+  }
+
+  // MUST happen before the spawn: a stale pid file from an earlier run must
+  // not be adopted by a launch that silently writes nothing, which would
+  // produce a phantom "running" entry that never expires.
+  clearPidFile(ctx, sessionName);
+
+  const pidDir = ctx.pidDir || getPidDirPath();
+
+  // Production never created this directory - only tests did, which is why 98
+  // green tests missed it. Without it, launch-session.ps1's Set-Content fails
+  // with DirectoryNotFoundException, its catch{} swallows the error and
+  // stdio:'ignore' hides it, so readPidFile returns null forever. Every entry
+  // then falls through the 30s grace window and is pruned, and the next tap
+  // spawns a DUPLICATE session - the outcome the brief called "worse than no
+  // registry at all". Found in review 2026-08-25.
+  try {
+    fs.mkdirSync(pidDir, { recursive: true });
+  } catch {
+    // Non-fatal by design: the pid write no-ops and the entry falls through
+    // the grace window. Better a duplicate later than a failed launch now.
+  }
+
+  const pidFilePath = path.join(pidDir, `${sessionName}.pid`);
+
   const child = spawner('powershell.exe', [
     '-NoProfile',
     '-NonInteractive',
@@ -74,6 +116,7 @@ export function launchSession({ baseDir, spawner = spawn }, project) {
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', r.path,
     '-SessionName', sessionName,
+    '-PidFile', pidFilePath,
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,
     // and powershell.exe 5.1 spawned that way exits 0 IMMEDIATELY WITHOUT
@@ -94,5 +137,7 @@ export function launchSession({ baseDir, spawner = spawn }, project) {
   });
   child.unref();
 
-  return { ok: true, session: { session_name: sessionName, project, status: 'starting' } };
+  const view = recordLaunch(ctx, { sessionName, project, projectPath: r.path });
+
+  return { ok: true, reused: false, session: view };
 }

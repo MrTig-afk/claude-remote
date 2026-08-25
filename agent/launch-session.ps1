@@ -1,7 +1,9 @@
 [CmdletBinding()]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Deliberate: $ErrorActionPreference is Stop, and by this point the session is already launched - a failed pid-file write must not abort the script or surface an error with nowhere to go (NonInteractive, stdio ignored).')]
 param(
     [Parameter(Mandatory)][string]$ProjectPath,
-    [Parameter(Mandatory)][string]$SessionName
+    [Parameter(Mandatory)][string]$SessionName,
+    [string]$PidFile                     # optional ON PURPOSE - see below
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,7 +27,17 @@ foreach ($dir in @('venv', '.venv')) {
 # It fails SILENTLY: no error is raised even under ErrorActionPreference
 # 'Stop', so with stdio:'ignore' the agent reports 202 "starting" and
 # nothing ever starts. Verified on this machine 2026-08-25.
-Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -ArgumentList @(
+$proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -PassThru -ArgumentList @(
     '--channels', 'plugin:whatsapp-claude-channel@whatsapp-claude-plugin',
     '--remote-control', $SessionName
 )
+
+# Liveness for the agent's session registry (T29). The pid the agent's own
+# spawn() returns is this PowerShell host, which exits in seconds - useless.
+# This is the real one: claude.cmd CALLs claude.exe with no `start`, so the
+# cmd.exe this pid belongs to lives exactly as long as the session.
+# try/catch is load-bearing: $ErrorActionPreference is 'Stop', and a failed
+# write here would abort the script AFTER the session is already up.
+if ($PidFile -and $proc -and $proc.Id) {
+    try { Set-Content -LiteralPath $PidFile -Value $proc.Id -Encoding ascii } catch { }
+}

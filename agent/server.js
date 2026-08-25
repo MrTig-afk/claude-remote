@@ -4,6 +4,7 @@ import http from 'node:http';
 import { resolveBaseDir } from './config.js';
 import { listProjects } from './projects.js';
 import { launchSession } from './sessions.js';
+import { listSessions } from './registry.js';
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
@@ -55,6 +56,11 @@ export async function handleRequest(req, res, ctx) {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/sessions') {
+      sendJson(res, 200, { sessions: listSessions(ctx) });
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/sessions') {
       let body;
       try {
@@ -79,15 +85,12 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
 
-      const result = launchSession(
-        { baseDir: ctx.baseDir, spawner: ctx.spawner },
-        parsed.project,
-      );
+      const result = launchSession(ctx, parsed.project);
       if (!result.ok) {
         sendJson(res, result.status, { error: result.error });
         return;
       }
-      sendJson(res, 202, result.session);
+      sendJson(res, result.reused ? 200 : 202, result.session);
       return;
     }
 

@@ -99,7 +99,14 @@ test('detachment - a Start-Process grandchild outlives the agent that launched i
     );
   } finally {
     try { parent.kill(); } catch { /* already dead */ }
-    try { process.kill(grandchildPid); } catch { /* already gone */ }
+    // GUARD: on Windows process.kill(0) terminates the CALLING process. On the
+    // failure path grandchildPid is still 0, so an unguarded kill here killed
+    // the test runner itself - erasing the assertion message, skipping the
+    // rest of the file, and orphaning the sleeper. The suite went red with no
+    // stated reason. Found in review 2026-08-26.
+    if (Number.isInteger(grandchildPid) && grandchildPid > 0) {
+      try { process.kill(grandchildPid); } catch { /* already gone */ }
+    }
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
@@ -119,6 +126,8 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     'Activate.ps1',
     'Start-Process',
     '-LiteralPath',
+    '-PassThru',
+    '$PidFile',
   ];
 
   // The real file passes every check - baseline sanity before mutating.

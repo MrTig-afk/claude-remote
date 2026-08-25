@@ -12,6 +12,16 @@ export function getConfigFilePath() {
   return path.join(os.homedir(), '.claude', 'plugins', 'data', 'claude-remote-claude-remote', 'config.json');
 }
 
+/** Absolute path of the session registry file, beside the config (T29). */
+export function getRegistryFilePath() {
+  return path.join(path.dirname(getConfigFilePath()), 'sessions.json');
+}
+
+/** Absolute path of the directory launch-session.ps1 writes pid files into (T29). */
+export function getPidDirPath() {
+  return path.join(path.dirname(getConfigFilePath()), 'session-pids');
+}
+
 /**
  * Resolves the base project directory from the claude-remote config file,
  * mirroring Get-DefaultBaseFolder (ClaudeRemote.psm1:133) and falling back
