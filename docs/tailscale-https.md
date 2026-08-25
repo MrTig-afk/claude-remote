@@ -144,7 +144,8 @@ T30 lands.
 - **The agent does NOT persist.** `tailscale serve` will happily keep listening
   on 8790 with nothing behind it and return a proxy error. Getting
   `node agent/server.js` to come back after a reboot is a separate, still-open
-  problem that nothing in this document solves.
+  problem that nothing in this document solves. Solved by starting the agent
+  automatically at logon - see `docs/agent-autostart.md`.
 
 ## Consequence for T34 (the Windows Firewall rule)
 
