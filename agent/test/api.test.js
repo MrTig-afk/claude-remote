@@ -12,9 +12,9 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-// --- Fix 5 (T30 fix pass, review issue 5): a body that parses to literal
-// null must never throw on data.error / be indexed by callers - both the
-// error path and the success path route through the same guard. ---
+// request() is contracted never to throw. A body that parses to literal null
+// would break that on data.error, and callers index into .data on the success
+// path - so both routes go through the same non-object guard.
 
 test('request() treats a literal null ERROR body as bad_response, not a throw', async () => {
   globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => null });

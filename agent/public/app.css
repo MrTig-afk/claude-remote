@@ -135,11 +135,10 @@ body {
 .list {
   display: flex;
   flex-direction: column;
-  /* Load-bearing under .newproj's position:fixed (T30 fix pass): scrolled to
-     the bottom, the fixed button sits 100-144px up from the viewport edge -
-     this padding reserves that band so the button can never cover the last
-     project row. Not dead code under fixed, unlike under the old absolute
-     positioning. */
+  /* Load-bearing, not dead space: .newproj is position:fixed, so scrolled to
+     the bottom it sits 100-144px up from the viewport edge. This padding
+     reserves that band so the button can never cover the last project row.
+     Deleting it recreates the overlap against a row instead of REFRESH. */
   padding: 0 12px 46px;
   gap: 2px;
 }
@@ -229,7 +228,7 @@ body {
 
 /* Floating new-project button - visual box under the 44px floor, hit area
    padded out to it (transparent padding, not a bigger visible box).
-   position:fixed, not absolute (owner decision 2026-08-26, T30 fix pass):
+   position:fixed, not absolute:
    .app is a flex column that grows past one viewport with enough projects,
    so an absolutely positioned button sits at the DOCUMENT bottom, invisible
    until scrolled all the way down and overlapping REFRESH there. fixed

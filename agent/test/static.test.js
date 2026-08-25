@@ -257,8 +257,8 @@ test('GET /package.json (real file one level above public/) -> 404', async () =>
   assert.equal(res.status, 404);
 });
 
-// --- Fix 1 (T30 fix pass, review issue 1): serveStatic called DIRECTLY,
-// unit-style, with un-normalised pathname strings pointing at files that
+// serveStatic called DIRECTLY, unit-style, with un-normalised pathname
+// strings pointing at files that
 // REALLY EXIST. The traversal block above drives everything through the
 // HTTP server, and new URL() in server.js normalises '..' away before
 // serveStatic is ever reached - and its surviving targets don't exist on
@@ -290,8 +290,9 @@ function assertRefused(pathname) {
 }
 
 describe('serveStatic() called directly: traversal targets that really exist on disk', () => {
-  // Literal backslash built at runtime, not typed into this source file -
-  // see the escaping note at the bottom of .pipeline/spec.md.
+  // Literal backslash built at runtime, not typed into this source file:
+  // writing one through a shell heredoc has silently corrupted regexes in
+  // this repo before, baking in a byte that could then never match.
   const BACKSLASH = String.fromCharCode(92);
 
   const DIRECT_TRAVERSAL_CASES = [
