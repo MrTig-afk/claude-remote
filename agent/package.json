@@ -1,0 +1,14 @@
+{
+  "name": "claude-remote-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local Agent for claude-remote: serves the PWA's project list and session launcher.",
+  "type": "module",
+  "main": "server.js",
+  "engines": { "node": ">=24.2.0" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "license": "MIT"
+}
