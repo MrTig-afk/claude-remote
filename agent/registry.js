@@ -198,7 +198,7 @@ function readSessionFiles(ctx) {
         // ~/.claude-pro when read from ~/.claude-pro/sessions. Carried
         // through so the handoff resumes in the SAME profile the desk
         // session actually lived in, not whichever one is hardcoded as the
-        // default (T45 review round 1, ISSUE 2).
+        // default.
         configDir: path.dirname(dir),
       });
     }
@@ -308,7 +308,7 @@ export function listSessions(ctx) {
   // A missing, empty or corrupt registry is treated as zero registry
   // entries, NOT as an early exit: discovery (below) must still run, or a
   // desk-started session would be invisible on a machine that has never
-  // launched anything through the agent - exactly the case T45 exists for.
+  // launched anything through the agent - exactly the case desk-started session discovery exists for.
   let raw = null;
   try {
     raw = fs.readFileSync(registryPath, 'utf8');

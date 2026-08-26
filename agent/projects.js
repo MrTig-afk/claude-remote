@@ -58,9 +58,10 @@ const RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
  * Validates a client-supplied new-project name. Trust boundary: reject,
  * never sanitize-and-continue (same posture as resolveProjectPath,
  * sessions.js:25-44). Pure - touches no filesystem. Rules are ordered,
- * first match wins (see spec-t31.md section 4 for the full rationale of
- * each rule, including why V5 rejects rather than trims and why V6 rejects
- * '%' outright even though nothing on this path URL-decodes).
+ * first match wins: edge whitespace (V5) is rejected rather than silently
+ * trimmed, and a literal '%' (V6) is rejected outright even though nothing
+ * on this path URL-decodes - both are deliberate rejections, not
+ * sanitization, per the trust-boundary rule above.
  */
 export function validateProjectName(name) {
   if (typeof name !== 'string') {

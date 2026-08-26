@@ -125,8 +125,8 @@ The origin changes from `http://127.0.0.1:8790` to
 `https://<machine>.<tailnet>.ts.net:8790`. Every URL the PWA emits —
 `manifest.json`, the service-worker registration path, `start_url`, `scope`, and
 the `/api/*` fetches — must be **relative**, never hardcoded to `127.0.0.1`, or
-it will work at the desk and break on the phone. Worth an explicit check when
-T30 lands.
+it will work at the desk and break on the phone. Worth an explicit check once
+the PWA exists and can be tested end-to-end.
 
 ## What persists across reboot
 
@@ -147,9 +147,9 @@ T30 lands.
   problem that nothing in this document solves. Solved by starting the agent
   automatically at logon - see `docs/agent-autostart.md`.
 
-## Consequence for T34 (the Windows Firewall rule)
+## Consequence for the planned Windows Firewall rule
 
-**T34's rule as planned is unnecessary, and was arguably already unnecessary.
+**The rule as planned is unnecessary, and was arguably already unnecessary.
 Recommend dropping it and recording why.**
 
 Read-only inspection of the live firewall found:
@@ -164,7 +164,7 @@ Claude Remote SSH (Tailscale only)  prof=Any  proto=TCP  lport=22  iface=Tailsca
 and the Tailscale interface's network category is **Private**, so those
 `Tailscale-In` rules are in force.
 
-Three reasons T34 no longer earns its place:
+Three reasons the planned firewall rule no longer earns its place:
 
 1. **With `tailscale serve`, the agent never listens on a network interface at
    all.** It stays on `127.0.0.1:8790`. Loopback traffic does not traverse the
@@ -181,8 +181,8 @@ Three reasons T34 no longer earns its place:
    narrowed to the Tailscale interface. That reasoning does not transfer to a
    process bound to loopback.
 
-If the owner wants T34 kept anyway as belt-and-braces, the honest version mirrors
-T05's shape:
+If the owner wants the rule kept anyway as belt-and-braces, the honest version
+mirrors T05's shape:
 
 ```powershell
 # NOT recommended — redundant with Tailscale-In. Elevated shell required.
@@ -193,7 +193,7 @@ but understand it would be documentation, not enforcement: it adds an allow on
 top of an existing allow, which changes nothing. **A firewall rule is not what
 keeps the agent private** — the next section covers what actually does.
 
-**Suggested T34 rewrite:** replace the rule with a one-line note in the setup doc
+**Suggested rewrite:** replace the rule with a one-line note in the setup doc
 saying the agent is reachable only via `tailscale serve` on loopback and that
 `Tailscale-In` already governs tailnet ingress. Do not spend an elevated shell
 on it.
@@ -202,9 +202,9 @@ on it.
 from the rule table plus the observed fact that the existing serve entries work
 without per-port rules. Loading the existing
 `https://<machine>.<tailnet>.ts.net/` once from the phone would settle it
-in ten seconds and is worth doing before T30.
+in ten seconds and is worth doing before the PWA comes to depend on it.
 
-## Consequence for T33 (the passcode gate) — THE ORDERING MATTERS
+## Consequence for the passcode gate — THE ORDERING MATTERS
 
 **Yes. The moment `tailscale serve --bg --https=8790 8790` runs, the agent is
 reachable by every device on the tailnet.** Serve is a proxy, not a filter. The
@@ -219,31 +219,33 @@ practical exposure is small. It is still an unlocked door.
 
 ### The rule
 
-> **T33 ships before `tailscale serve` is turned on. Not the same day — before.**
+> **The passcode gate ships before `tailscale serve` is turned on. Not the same day — before.**
 
 Do them in the other order and there is a real window, as long as the PWA work
 takes, in which the agent is reachable and unlocked. That window is precisely the
-thing T33 exists to close, so opening it in order to build T33 is self-defeating.
+thing the passcode gate exists to close, so opening it in order to build the
+passcode gate is self-defeating.
 
 If the serve command has to be run early to develop the PWA against a secure
 context, the safe shape is:
 
 ```powershell
 tailscale serve --bg --https=8790 8790     # while actively working
-tailscale serve --https=8790 off           # every time you step away, until T33 lands
+tailscale serve --https=8790 off           # every time you step away, until the passcode gate ships
 ```
 
-### Two knock-on effects on T33's own text
+### Two knock-on effects on the passcode gate's own text
 
-1. **T33's "bind to the Tailscale interface IP (100.x.y.z), never `0.0.0.0`"
-   clause is now obsolete and should be dropped.** With serve in front, the agent
-   should **stay on `127.0.0.1`** — strictly safer, because it means the only
-   path in is through the proxy. `agent/server.js` line 9 pins
-   `HOST = '127.0.0.1'` and `agent/test/server.test.js` has a test asserting it
-   exactly; both are correct as they stand and should not be changed. The
-   passcode half of T33 is untouched and still fully required.
-2. **T33's "accepted window" during first-run gets slightly wider.** The task
-   already states that the set-passcode endpoint is reachable from the tailnet
+1. **The passcode gate's "bind to the Tailscale interface IP (100.x.y.z),
+   never `0.0.0.0`" clause is now obsolete and should be dropped.** With serve
+   in front, the agent should **stay on `127.0.0.1`** — strictly safer, because
+   it means the only path in is through the proxy. `agent/server.js` line 9
+   pins `HOST = '127.0.0.1'` and `agent/test/server.test.js` has a test
+   asserting it exactly; both are correct as they stand and should not be
+   changed. The passcode half of that gate is untouched and still fully
+   required.
+2. **The passcode gate's "accepted window" during first-run gets slightly
+   wider.** It already states that the set-passcode endpoint is reachable from the tailnet
    before a passcode exists. That stays true and stays acceptable on a two-node
    single-owner tailnet — but with serve on, "reachable from the tailnet" is now
    literal rather than theoretical. Set the passcode immediately after first
@@ -266,15 +268,15 @@ Step 4 before step 3 is the whole exposure. The proxy cannot forward a route
 that has already closed, so setting the passcode first means no tailnet device
 ever had a chance to claim it.
 
-### One thing serve gives for free that does NOT replace T33
+### One thing serve gives for free that does NOT replace the passcode gate
 
 `tailscale serve` injects identity headers (`Tailscale-User-Login`,
 `Tailscale-User-Name`) naming the tailnet user who made the request. Tempting as
-a free auth layer — **it is not a substitute here.** T33's stated threat is *an
-unlocked phone in someone else's hand*, and that phone carries the owner's own
-Tailscale identity, so the headers would say "owner" and wave the attacker
-straight through. The passcode defends exactly the case the headers cannot see.
-Build T33 as written.
+a free auth layer — **it is not a substitute here.** The passcode gate's stated
+threat is *an unlocked phone in someone else's hand*, and that phone carries the
+owner's own Tailscale identity, so the headers would say "owner" and wave the
+attacker straight through. The passcode defends exactly the case the headers
+cannot see. Build the passcode gate as written.
 
 ## Explicitly not verified
 
@@ -298,5 +300,5 @@ Stated plainly rather than guessed:
   (`tailscale serve --bg --set-path=/agent 8790`, giving
   `https://<machine>.<tailnet>.ts.net/agent/`) — at the cost of the
   service worker's scope and every asset URL having to live under that prefix.
-- Nothing here was tested end-to-end with an actual PWA, because T30 does not
-  exist yet.
+- Nothing here was tested end-to-end with an actual PWA, because it has not
+  been built yet.

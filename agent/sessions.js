@@ -364,7 +364,7 @@ export async function endSession(ctx, project) {
   // the cmd.exe wrapper, so it cannot be matched by pid). configDir matters
   // even when sessionId does not: --continue still has to run in the SAME
   // profile the desk session lived in, or it resumes the wrong store's most
-  // recent conversation (review round 1, ISSUE 2).
+  // recent conversation.
   const { sessionId, configDir } = isDesk
     ? { sessionId: existing.session_id, configDir: existing.config_dir }
     : resolveDeskSessionId(ctx, r.path);

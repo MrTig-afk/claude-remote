@@ -12,7 +12,7 @@ import { createAgentServer } from '../server.js';
  * [<dir>/claude-sessions] - the one sessionDirs value every test ctx that
  * can reach listSessions/readSessionFiles must carry, so a forgotten key
  * never falls back to config.js's real ~/.claude-max or ~/.claude-pro (the
- * exact bug review round 1 found in tree-kill.test.js). Deliberately does
+ * exact bug found in tree-kill.test.js). Deliberately does
  * NOT create the directory - a missing one must be tolerated by the reader
  * (ENOENT = empty, per registry.js's readSessionFiles).
  */

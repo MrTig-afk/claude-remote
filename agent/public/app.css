@@ -163,7 +163,7 @@ body {
 }
 
 /* STOP - the one destructive control. `#e5534b` at rest, `#ff7b72` on press:
-   design/tokens.md's danger role, which is narrower than the accent's - it
+   the app's one danger colour, narrower than its one accent colour - it
    means "this ends something" and is never used for a warning, an error or a
    banner. The word STOP carries the meaning on its own; the colour only
    reinforces it, because a green running dot sits inches away and red/green

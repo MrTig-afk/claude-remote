@@ -10,8 +10,8 @@ import { isConfigured, setPasscode, attemptUnlock, authStatus, authorize } from 
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
-// (bun.exe server.ts). Verified 2026-08-25. T34's firewall rule must
-// match whatever this is.
+// (bun.exe server.ts). Verified 2026-08-25. Any Windows Firewall rule for
+// this agent's port must match whatever this is.
 export const DEFAULT_PORT = 8790;
 
 function sendJson(res, statusCode, payload, extraHeaders = {}) {
@@ -50,9 +50,9 @@ function readBody(req) {
   });
 }
 
-// ponytail: POST /api/sessions still inlines this same parse. Fold that route
-// into this helper the next time it is touched - T30 owns server.js right now
-// and a restructure would collide.
+// POST /api/sessions still inlines this same parse. Fold that route into
+// this helper the next time it is touched - avoid a broader restructure of
+// server.js while it is under active edits elsewhere.
 async function readJsonObject(req) {
   let body;
   try {

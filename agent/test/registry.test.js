@@ -827,7 +827,7 @@ test('markSessionState - never appends for a session name that is absent', () =>
   assert.equal(fs.existsSync(ctx.registryPath), false);
 });
 
-// --- T45: desk-started session discovery ------------------------------------
+// --- desk-started session discovery --------------------------------------
 
 /** Writes <dir>/<pid>.json in the shape Claude Code 2.1.246 writes it. */
 function writeDeskFile(dir, { pid, sessionId, cwd, startedAt = new Date().toISOString(), kind = 'interactive' }) {
@@ -856,7 +856,7 @@ test('discoverDeskSessions - alive pid + exact project cwd + no registry entry -
   assert.ok(Number.isFinite(Date.parse(views[0].started_at)));
 
   // Also reachable through the normal entry point, with NO registry file on
-  // disk at all - the case T45 exists for (a machine that has never
+  // disk at all - the case desk-started session discovery exists for (a machine that has never
   // launched anything through the agent).
   assert.equal(fs.existsSync(ctx.registryPath), false);
   assert.equal(listSessions(ctx).length, 1);

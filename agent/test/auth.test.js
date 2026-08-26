@@ -397,7 +397,7 @@ test('authStatus returns exactly configured + retry_after_ms, never salt/hash/to
   assert.deepEqual(Object.keys(configured), ['configured', 'retry_after_ms']);
 });
 
-// --- 27 (review fix) ---
+// --- 27 ---
 
 test('a failed attempts-file write fails CLOSED: 500, never a 401 that was not counted', () => {
   const c = ctx();
@@ -414,7 +414,7 @@ test('a failed attempts-file write fails CLOSED: 500, never a 401 that was not c
   assert.equal(res.error, 'internal_error');
 });
 
-// --- 28 (review fix, LOW-1) ---
+// --- 28 ---
 
 test('an unwritable attempts file still rate-limits: the counter is in memory, not only on disk', () => {
   let now = 9_000_000;

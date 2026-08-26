@@ -118,7 +118,7 @@ async function runGate() {
       if (!res.ok) {
         // Cannot know yet whether this is a first run or a lock, so the same
         // button becomes RETRY and re-runs this probe instead of submitting
-        // to a route we may not have (spec 7.4).
+        // to a route that may not be the right one for this unknown state.
         statusUnknown = true;
         e.msg.textContent = messageFor(res.code, res.status);
         e.go.textContent = 'RETRY';

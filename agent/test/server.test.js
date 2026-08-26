@@ -71,7 +71,7 @@ test('GET /api/projects/ (trailing slash) responds 404 (surface not widened)', a
   assert.equal(res.status, 404);
 });
 
-test('PUT /api/projects responds 404 (only POST was added in T31)', async () => {
+test('PUT /api/projects responds 404 (only GET and POST exist)', async () => {
   const res = await authedFetch('/api/projects', { method: 'PUT' });
   assert.equal(res.status, 404);
 });

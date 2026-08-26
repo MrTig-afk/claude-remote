@@ -18,8 +18,8 @@ works in principle since the transport is plain SSH.
 
 ## Status
 
-Early scaffold. See `docs/claude-remote-prd.md` for the full spec and
-`.claude/tasks.md` for the milestone breakdown. `claude-remote.ps1` now
+Early scaffold. See `docs/claude-remote-prd.md` for the full spec,
+including the milestone breakdown (section 12). `claude-remote.ps1` now
 resolves the project folder, creates or reattaches the tmux session, and
 starts `claude` inside it on first creation; connection-string printing and
 `list-sessions` still land in later milestones.

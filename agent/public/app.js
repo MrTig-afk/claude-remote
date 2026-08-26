@@ -38,9 +38,9 @@ function errorCopy(code, status) {
   return ERROR_COPY[code] || `The agent refused the request (status ${status}). Check its terminal window on the PC.`;
 }
 
-// Copy for POST /api/projects only (design/tokens.md + spec-t31.md section 6)
-// - distinct from ERROR_COPY above, which is written for launch failures and
-// uses codes (project_not_found, invalid_project) that don't apply here.
+// Copy for POST /api/projects only - distinct from ERROR_COPY above, which
+// is written for launch failures and uses codes (project_not_found,
+// invalid_project) that don't apply here.
 const NEW_PROJECT_ERROR_COPY = {
   invalid_request: 'Something went wrong sending that name.',
   name_empty: 'Enter a project name.',
@@ -76,8 +76,8 @@ function newProjectErrorCopy(code) {
 // (V5 is therefore unreachable here by construction, same as server-side
 // intent: the client trims so the common phone-keyboard trailing space never
 // reaches the server).
-// ponytail: duplicated because the browser and the agent share no module
-// boundary; keep this in sync by hand if projects.js's rules change.
+// Duplicated because the browser and the agent share no module boundary;
+// keep this in sync by hand if projects.js's rules change.
 function clientValidateName(name) {
   if (name === '') return 'name_empty';
   if (name.length > 64) return 'name_too_long';
@@ -98,10 +98,11 @@ function clientValidateName(name) {
 
 // Best-effort target-path preview only: derived from an existing project's
 // absolute path already present in the loaded list (GET /api/projects
-// returns one per entry; the create response deliberately omits it, see
-// spec-t31.md Decision 1). If the base folder is currently empty nothing has
-// a path to derive from - the preview falls back to a relative form rather
-// than adding a new endpoint just to expose baseDir.
+// returns one per entry; the create response deliberately omits it, matching
+// createProject's contract of never returning a filesystem path). If the
+// base folder is currently empty nothing has a path to derive from - the
+// preview falls back to a relative form rather than adding a new endpoint
+// just to expose baseDir.
 function baseDirGuess() {
   const withPath = state.projects.find((p) => p.path);
   if (!withPath) return null;
@@ -317,8 +318,10 @@ function hideBanner() {
 }
 
 function setErrorBanner(code, status) {
-  // The '!' glyph is the only visual weight an error gets - no red exists
-  // in this palette (design/tokens.md has one accent and no error colour).
+  // The '!' glyph is the only visual weight an error gets - the palette's
+  // one accent (`#7ee787`) means "active" and its one danger colour
+  // (`#ff7b72`) is reserved for destructive actions only, never for an
+  // error or a banner.
   setBanner('error', [{ text: '! ' + errorCopy(code, status) }]);
 }
 
@@ -705,8 +708,7 @@ async function runStop(name) {
 function newProjectNameEl() { return document.getElementById('newproj-name'); }
 
 function currentNameTrimmed() {
-  // Client-side trim only, matching the contract in design/tokens.md /
-  // spec-t31.md section 11: the server is the boundary, this is UX so the
+  // Client-side trim only: the server is the boundary, this is UX so the
   // common phone-keyboard trailing space never becomes a round trip.
   return newProjectNameEl().value.trim();
 }
@@ -773,13 +775,13 @@ async function onCreateProject() {
   if (res.ok) {
     closeNewProjectPanel();
     setBanner('info', [{ b: res.data.project.name }, { text: ' created.' }]);
-    // Re-fetch, never optimistic insert (spec-t31.md section 11 / 8): the
-    // list is the single source of truth once the agent has confirmed it.
+    // Re-fetch, never optimistic insert: the list is the single source of
+    // truth once the agent has confirmed it.
     await load();
     return;
   }
 
-  // Name stays in the field so it can be corrected (spec-t31.md section 11).
+  // Name stays in the field so it can be corrected.
   errorEl.textContent = newProjectErrorCopy(res.code);
   errorEl.hidden = false;
   updateNewProjectTarget();

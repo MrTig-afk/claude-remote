@@ -112,7 +112,7 @@ function makeRunningEntry(regCtx, project, pid) {
 }
 
 // Writes a Claude Code 2.1.246 profile sessions file - <pid>.json under
-// regCtx.sessionDirs[0] - the desk-session discovery fixture (T45).
+// regCtx.sessionDirs[0] - the desk-session discovery fixture.
 function writeDeskSessionFile(regCtx, { pid, sessionId, cwd, startedAt = new Date().toISOString(), kind = 'interactive' }) {
   const dir = regCtx.sessionDirs[0];
   fs.mkdirSync(dir, { recursive: true });
@@ -1110,9 +1110,9 @@ test('HTTP - POST /api/sessions/end on a running session: response, pid file, re
   }
 });
 
-// T45 item 21: this regCtx's sessionDirs (see makeRegCtx) points at an empty,
+// This regCtx's sessionDirs (see makeRegCtx) points at an empty,
 // never-created directory, so resolveDeskSessionId finds nothing and the
-// argv below stays byte-identical to the pre-T45 shape - no -SessionId, no
+// argv below stays byte-identical to the shape with no desk session found - no -SessionId, no
 // empty string. This is the --continue fallback proof; no separate test
 // duplicates this setup.
 test('HTTP - handoff seam receives the exact recipe argv, cwd and options', async () => {
@@ -1327,7 +1327,7 @@ test('endSession - a launch landing during the kill poll returns reused with the
   const endPromise = endSession(ctx, 'Pull Requests');
 
   // The claim (status: 'handoff') is written synchronously before endSession
-  // ever awaits, so a launch landing in this window - the exact T45 race the
+  // ever awaits, so a launch landing in this window - the exact race the
   // comments in sessions.js worry about - sees it immediately.
   const launchResult = launchSession(ctx, 'Pull Requests');
   assert.equal(launchResult.ok, true);
@@ -1355,13 +1355,13 @@ test('recipe-integrity - handoff-session.ps1 carries the proven handoff recipe',
   assert.ok(!script.includes('--dangerously-skip-permissions'));
   assert.ok(!script.includes('Start-Process'));
 
-  // T45: a real -SessionId parameter, used with --resume when set, falling
+  // A real -SessionId parameter, used with --resume when set, falling
   // back to --continue otherwise - not a stray literal string anywhere.
   assert.ok(script.includes('[string]$SessionId'), 'handoff-session.ps1 must declare a $SessionId string parameter');
   assert.ok(script.includes('--resume'), 'handoff-session.ps1 must use --resume when a SessionId is given');
   assert.ok(script.includes('--continue'), 'handoff-session.ps1 must still fall back to --continue');
 
-  // T45 review round 1, ISSUE 2: a real -ConfigDir parameter drives
+  // A real -ConfigDir parameter drives
   // CLAUDE_CONFIG_DIR, defaulting to .claude-max only when absent.
   assert.ok(script.includes('[string]$ConfigDir'), 'handoff-session.ps1 must declare a $ConfigDir string parameter');
   assert.ok(script.includes('CLAUDE_CONFIG_DIR'), 'handoff-session.ps1 must still set CLAUDE_CONFIG_DIR');
@@ -1611,7 +1611,7 @@ test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', a
   }
 });
 
-// --- T45: desk-started sessions - STOP -------------------------------------
+// --- desk-started sessions - STOP -----------------------------------------
 
 test('endSession - desk session: claim/kill/handoff argv gets -SessionId, discovery stops seeing it, ended banner after exit', async () => {
   const regCtx = makeRegCtx();

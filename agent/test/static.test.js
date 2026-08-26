@@ -155,7 +155,7 @@ test('GET /nope still 404 with the exact not_found body', async () => {
   assert.deepEqual(body, { error: 'not_found' });
 });
 
-test('PUT /api/projects still 404 (only POST was added, in T31)', async () => {
+test('PUT /api/projects still 404 (only GET and POST exist)', async () => {
   const res = await authedFetch('/api/projects', { method: 'PUT' });
   assert.equal(res.status, 404);
 });

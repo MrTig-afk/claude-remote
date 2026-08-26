@@ -1,4 +1,4 @@
-// Static regression guard (review round 1, ISSUE 1): every test ctx object
+// Static regression guard: every test ctx object
 // literal that carries `registryPath` must also carry `sessionDirs`, or
 // endSession -> findLiveSession -> listSessions -> readSessionFiles falls
 // back to `ctx.sessionDirs ?? getSessionDirPaths()` (registry.js), which

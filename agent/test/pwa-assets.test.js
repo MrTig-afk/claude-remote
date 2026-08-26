@@ -759,7 +759,7 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
   );
 });
 
-// --- T45: desk-started sessions in the PWA ----------------------------------
+// --- desk-started sessions in the PWA --------------------------------------
 
 test('sw.js CACHE is claude-remote-shell-v6', () => {
   const source = read('sw.js');
