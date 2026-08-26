@@ -1,4 +1,4 @@
-import { getProjects, getSessions, launchSession, endSession, createProject, onAuthLost } from './api.js';
+import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
@@ -13,9 +13,8 @@ const state = {
   confirmName: null, // the ONE project whose tile is currently the question
 };
 
-// Session names whose ended record has already been announced. Never reset
-// by load() - a page reload is what clears it, which is exactly the
-// "shown on the next open" behaviour the 24h retention window wants.
+// Ended records announced this open. Announcing also dismisses at the agent,
+// so a record shows once; the 24h retention is the never-opened fallback.
 const reported = new Set();
 
 const ERROR_COPY = {
@@ -325,6 +324,7 @@ function reportEnded() {
   for (const s of (state.sessions || [])) {
     if (s.status !== 'ended' || reported.has(s.session_name)) continue;
     reported.add(s.session_name);
+    dismissEnded(s.session_name); // fire-and-forget: a lost dismiss just re-announces next open
     if (s.handoff_ok) setBanner('info', [{ text: 'Handoff written for ' }, { b: s.project }, { text: '.' }]);
     else setBanner('error', [{ text: '! Session ended, but the handoff was not written.' }]);
   }

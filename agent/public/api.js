@@ -87,6 +87,10 @@ export function endSession(projectName) {
   return post('/api/sessions/end', { project: projectName });
 }
 
+export function dismissEnded(sessionName) {
+  return post('/api/sessions/dismiss', { session_name: sessionName });
+}
+
 export function createProject(name) {
   return post('/api/projects', { name });
 }

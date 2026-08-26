@@ -4,7 +4,7 @@ import http from 'node:http';
 import { resolveBaseDir } from './config.js';
 import { listProjects, createProject } from './projects.js';
 import { launchSession, endSession } from './sessions.js';
-import { listSessions } from './registry.js';
+import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
 import { isConfigured, setPasscode, attemptUnlock, authStatus, authorize } from './auth.js';
 
@@ -234,6 +234,24 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
       sendJson(res, result.status, result.body);
+      return;
+    }
+
+    // The phone announces an ended record once, then dismisses it here so the
+    // banner does not come back on every open for the rest of the 24h window.
+    if (req.method === 'POST' && url.pathname === '/api/sessions/dismiss') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { error: parsed.error });
+        return;
+      }
+      if (typeof parsed.value.session_name !== 'string' || parsed.value.session_name === '') {
+        sendJson(res, 400, { error: 'invalid_request' });
+        return;
+      }
+      dropSession(ctx, parsed.value.session_name, 'ended');
+      res.writeHead(204);
+      res.end();
       return;
     }
 

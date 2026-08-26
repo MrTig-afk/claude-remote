@@ -1533,3 +1533,48 @@ test('HTTP - POST /api/sessions/end with no handoffSpawner in the fixture ctx ->
     server.close();
   }
 });
+
+// --- POST /api/sessions/dismiss - the phone drops an announced ended record --
+
+test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', async () => {
+  const regCtx = makeRegCtx();
+  fs.mkdirSync(path.dirname(regCtx.registryPath), { recursive: true });
+  const now = Date.now();
+  const ended = {
+    session_name: 'pullrequests',
+    project: 'Pull Requests',
+    original_path: path.join(base, 'Pull Requests'),
+    started_at: new Date(now - 60_000).toISOString(),
+    status: 'ended',
+    ended_at: new Date(now - 1000).toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  };
+  const handoff = { ...ended, session_name: 'email-lint', project: 'email-lint', original_path: path.join(base, 'email-lint'), status: 'handoff', handoff_started_at: ended.ended_at };
+  fs.writeFileSync(regCtx.registryPath, JSON.stringify({ version: REGISTRY_VERSION, sessions: [ended, handoff] }));
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const bad = await authedFetch(regCtx, `${origin}/api/sessions/dismiss`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+    assert.equal(bad.status, 400);
+
+    // A dismiss never touches a session that is still writing its handoff.
+    const notEnded = await authedFetch(regCtx, `${origin}/api/sessions/dismiss`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: 'email-lint' }),
+    });
+    assert.equal(notEnded.status, 204);
+
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/dismiss`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: 'pullrequests' }),
+    });
+    assert.equal(res.status, 204);
+
+    const left = (await (await authedFetch(regCtx, `${origin}/api/sessions`)).json()).sessions;
+    assert.deepEqual(left.map((s) => [s.session_name, s.status]), [['email-lint', 'handoff']]);
+  } finally {
+    server.close();
+  }
+});
