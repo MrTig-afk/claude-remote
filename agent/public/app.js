@@ -348,6 +348,20 @@ async function confirmStarting(force = false) {
   }
 }
 
+// The splash is part of the page's initial state, so it is already covering
+// the window before this module parses. Dropping it is unconditional: it goes
+// as soon as a real screen has painted, and again if boot throws, so a
+// failure can never leave the owner staring at a logo with no way forward.
+function hideSplash() {
+  document.getElementById('splash').hidden = true;
+}
+
+// The status line belongs to the project list and to nothing else, so it is
+// put away again whenever the passcode screen comes back.
+function hideConn() {
+  document.getElementById('conn').hidden = true;
+}
+
 function renderConn() {
   const conn = document.getElementById('conn');
   const dot = conn.querySelector('.dot');
@@ -368,6 +382,15 @@ function renderConn() {
     text.textContent = 'CANNOT REACH AGENT';
     text.classList.remove('reachable');
   }
+
+  // The line describes the project list, so it is on screen exactly when the
+  // project list is. Read the picker's live state rather than assume this
+  // render belongs to it: a request already in flight when the token expires
+  // resolves and renders AFTER the passcode screen is back up, and an
+  // unconditional reveal there would light the line on a screen it says
+  // nothing true about. The picker ships hidden, so an unexpected state
+  // leaves the line away rather than on.
+  conn.hidden = document.getElementById('picker').hidden;
 }
 
 function renderProjects() {
@@ -629,11 +652,17 @@ async function boot() {
   if (await maybeResetCache()) return;
   registerServiceWorker(); // above the gate: the PWA must stay installable
                             // from the lock screen
-  onAuthLost(async () => { await showGate(); await load(); });
-  await showGate(); // resolves only once unlocked
+  onAuthLost(async () => { hideConn(); await showGate(); await load(); });
+  // showGate() puts the passcode screen on the page before it awaits
+  // anything, but does not resolve until the owner has unlocked. Drop the
+  // splash against the first of those, not the second, or it would sit on
+  // top of the passcode screen for as long as the owner takes to type.
+  const unlocked = showGate();
+  hideSplash();
+  await unlocked;
   wireEvents();
   render();
   await load();
 }
 
-boot();
+boot().finally(hideSplash);

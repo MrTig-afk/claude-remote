@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 
 import { HOST } from '../server.js';
 import { readAttempts } from '../auth.js';
@@ -23,13 +23,29 @@ function makeSpawner() {
   };
 }
 
+// Every fixture directory handed out and not yet removed. Each test cleans up
+// its own in a finally, but setup can throw before that finally exists and a
+// future test can forget it - either way a directory tree is left in the
+// system temp folder on every run, on a machine that is short of disk.
+const liveFixtureBases = new Set();
+
 function makeFixtureBase() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-auth-routes-'));
+  liveFixtureBases.add(base);
   fs.mkdirSync(path.join(base, 'Pull Requests'));
   fs.mkdirSync(path.join(base, 'Video Editing'));
   fs.mkdirSync(path.join(base, 'email-lint'));
   return base;
 }
+
+function removeFixtureBase(base) {
+  fs.rmSync(base, { recursive: true, force: true });
+  liveFixtureBases.delete(base);
+}
+
+after(() => {
+  for (const base of liveFixtureBases) removeFixtureBase(base);
+});
 
 async function startServer(extraCtx = {}) {
   const base = makeFixtureBase();
@@ -49,7 +65,7 @@ async function startServer(extraCtx = {}) {
 
 function stop({ server, base }) {
   server.close();
-  fs.rmSync(base, { recursive: true, force: true });
+  removeFixtureBase(base);
 }
 
 // ============================================================
@@ -625,7 +641,7 @@ test('fixtureServer: a ctx with no spawner never reaches the real spawn', async 
     assert.equal(res.status, 500);
   } finally {
     server.close();
-    fs.rmSync(base, { recursive: true, force: true });
+    removeFixtureBase(base);
     cleanupAuthCtx(authCtx);
   }
 });
@@ -650,7 +666,7 @@ test('fixtureServer: an explicit spawner:undefined cannot reinstate the real spa
     assert.equal(res.status, 500);
   } finally {
     server.close();
-    fs.rmSync(base, { recursive: true, force: true });
+    removeFixtureBase(base);
     cleanupAuthCtx(authCtx);
   }
 });

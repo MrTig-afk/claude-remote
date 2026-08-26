@@ -47,14 +47,40 @@ body {
   gap: 10px;
   border-bottom: 1px solid #1b231b;
 }
-.hdr-top { display: flex; align-items: baseline; justify-content: space-between; }
+.hdr-top { display: flex; align-items: baseline; }
 .title { font-size: 19px; font-weight: 700; letter-spacing: 0.02em; color: #eafbea; }
-.ver { font-size: 11px; color: #4a5a4a; }
+/* margin-left:auto rather than justify-content:space-between, which with the
+   mark added would strand the wordmark in the middle of the row. */
+.ver { font-size: 11px; color: #4a5a4a; margin-left: auto; }
+
+/* The mark costs zero vertical height by construction: the negative block
+   margins collapse its margin box to nothing, so the row is still sized by
+   the wordmark and the version exactly as it was before the mark existed.
+   align-self also keeps it out of the baseline group, so the version still
+   sits on the wordmark's baseline, and centres the 22px square optically
+   against the 19px wordmark. */
+.mark { align-self: center; margin-block: -11px; margin-right: 10px; }
 .conn { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.03em; }
 .conn-text { color: #9aab9a; }
 .conn-text.reachable { color: #7ee787; }
 .conn-sep { color: #3d4a3d; }
 .conn-host { color: #6b7a6b; }
+
+/* Splash - the first thing painted, before any script has parsed. Covers the
+   whole viewport (z-index because the floating + button is positioned too),
+   and reuses .title so the wordmark is identical to the header's. */
+#splash {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: #0a0d0a;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.splash-status { font-size: 11px; letter-spacing: 0.08em; color: #4a5a4a; }
 
 /* Banner */
 .banner {

@@ -17,13 +17,49 @@
 <link rel="stylesheet" href="/app.css">
 <script type="module" src="/app.js"></script>
 <body>
+  <!-- The mark, declared once and drawn wherever it is needed via <use>.
+       Inline rather than an <img> so it can never be late or flash a broken
+       image on a cold start - which is the very thing the splash below
+       exists to prevent. The green is hard-coded, never currentColor: this
+       mark is always lit, never muted, never grey.
+       viewBox: the shapes span 81-431 x 101-415 once the 19-unit stroke
+       outset is counted, so this square is that box padded slightly and
+       centred on it. Tightening it to the ink bounds would clip the outer
+       edge of the stroke. -->
+  <svg hidden aria-hidden="true">
+    <symbol id="mark" viewBox="79 81 354 354" fill="none" stroke="#7ee787" stroke-width="38" stroke-linecap="butt">
+      <rect x="100" y="120" width="150" height="106" rx="10"/>
+      <rect x="286" y="290" width="126" height="106" rx="10"/>
+      <path d="M 214 226 L 298 290"/>
+    </symbol>
+  </svg>
+
+  <!-- Visible before any script runs, and deliberately NOT marked hidden:
+       installed to the home screen this window has no browser chrome, so a
+       blank moment while the app boots reads as a crash. app.js drops it the
+       instant a real screen has painted, and again if boot throws. -->
+  <div id="splash">
+    <svg width="72" height="72" aria-hidden="true"><use href="#mark"/></svg>
+    <div class="title">claude‑remote</div>
+    <div class="splash-status">STARTING</div>
+  </div>
+
   <div class="app">
     <header class="hdr">
       <div class="hdr-top">
+        <svg class="mark" width="22" height="22" aria-hidden="true"><use href="#mark"/></svg>
         <div class="title">claude‑remote</div>
         <div class="ver">v0.1</div>
       </div>
-      <div class="conn" id="conn">
+      <!-- Ships hidden and is revealed only when the project list itself is
+           rendered. This line reports the agent link for that list, so on a
+           passcode screen it has nothing true to say - it would claim
+           CONNECTING while the truth is "connected, and locked" - and it is
+           one more element that could otherwise put state on a locked
+           screen. The hidden attribute is what hides it, so the force-hide
+           rule at the top of app.css covers it: no author display rule can
+           quietly bring it back. -->
+      <div class="conn" id="conn" hidden>
         <svg class="dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="none" stroke="#3d4a3d" stroke-width="1"/></svg>
         <span class="conn-text">CONNECTING</span>
         <span class="conn-sep">&middot;</span>

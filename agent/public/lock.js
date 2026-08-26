@@ -4,7 +4,9 @@
 import { getAuthStatus, setPasscode, unlock, setToken } from './api.js';
 
 const MESSAGES = {
-  passcode_incorrect: (data) => `! Wrong passcode. ${data.failures} tries so far.`,
+  // The count stays: it is the only warning that the backoff is coming
+  // before it lands.
+  passcode_incorrect: (data) => `! Wrong passcode. ${data.failures} ${data.failures === 1 ? 'try' : 'tries'} so far.`,
   too_many_attempts: (data) => `! Too many wrong tries. Try again in ${formatWait(data.retry_after_ms)}.`,
   passcode_mismatch: () => "! Those didn't match. Enter both again.",
   malformed_passcode: () => '! A passcode is exactly 6 digits.',
