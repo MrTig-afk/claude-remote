@@ -177,7 +177,11 @@ function readSessionFiles(ctx) {
       if (data.kind !== 'interactive') continue;
       if (!Number.isInteger(data.pid) || data.pid <= 0) continue;
       if (typeof data.cwd !== 'string' || data.cwd === '') continue;
-      if (!Number.isFinite(Date.parse(data.startedAt))) continue;
+      // Claude Code writes startedAt as epoch MILLISECONDS (a number), not
+      // an ISO string - Date.parse(number) is NaN and silently dropped every
+      // real session on 2026-08-27. Accept either shape.
+      const startedAtMs = typeof data.startedAt === 'number' ? data.startedAt : Date.parse(data.startedAt);
+      if (!Number.isFinite(startedAtMs)) continue;
       if (!isAlive(data.pid)) continue;
 
       // sessionId is optional and validated: it is later handed to
@@ -193,7 +197,7 @@ function readSessionFiles(ctx) {
         pid: data.pid,
         sessionId,
         cwd: data.cwd,
-        startedAtMs: Date.parse(data.startedAt),
+        startedAtMs,
         // The parent of the sessions dir this record was read from - e.g.
         // ~/.claude-pro when read from ~/.claude-pro/sessions. Carried
         // through so the handoff resumes in the SAME profile the desk

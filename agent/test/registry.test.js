@@ -837,6 +837,18 @@ function writeDeskFile(dir, { pid, sessionId, cwd, startedAt = new Date().toISOS
   fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify(data), 'utf8');
 }
 
+test('discoverDeskSessions - startedAt as epoch milliseconds (what Claude Code really writes) is accepted', () => {
+  const livePids = new Set([4243]);
+  const ctx = makeCtx({ livePids });
+  const cwd = path.join(base, 'Pull Requests');
+  const startedAt = 1787768790707; // a real value copied from ~/.claude-max/sessions/<pid>.json
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4243, sessionId: 'abc-124', cwd, startedAt });
+
+  const views = discoverDeskSessions(ctx, listProjects(base), new Set());
+  assert.equal(views.length, 1);
+  assert.equal(views[0].started_at, new Date(startedAt).toISOString());
+});
+
 test('discoverDeskSessions - alive pid + exact project cwd + no registry entry -> one desk view', () => {
   const livePids = new Set([4242]);
   const ctx = makeCtx({ livePids });
