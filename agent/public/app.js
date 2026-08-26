@@ -27,10 +27,9 @@ const ERROR_COPY = {
   internal_error: 'The agent hit an internal error. Check its terminal window on the PC.',
   bad_response: "The agent replied with something this app doesn't understand. It may be a different version.",
   session_not_running: "That session isn't running yet, or is already being ended. Tap REFRESH.",
-  // These should never surface - onAuthLost intercepts a 401 first - but a
-  // race must not print a raw error code if one ever does.
-  unauthorized: 'Your session ended. Enter your passcode again.',
-  token_expired: 'Your session expired. Enter your passcode again.',
+  // A 403 the gate flow has not already caught: the agent lost its passcode
+  // file while the app was open. api.js only re-locks on 401, so this one
+  // reaches the banner and needs real copy.
   setup_required: 'This agent has no passcode yet. Reload the app to set one.',
 };
 

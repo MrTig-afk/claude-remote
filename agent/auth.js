@@ -206,18 +206,10 @@ function issueToken(ctx) {
   for (const [digest, entry] of tokens) {
     if (entry.expiresAt <= now) tokens.delete(digest);
   }
-  while (tokens.size >= MAX_TOKENS) {
-    let oldestDigest = null;
-    let oldestExpiry = Infinity;
-    for (const [digest, entry] of tokens) {
-      if (entry.expiresAt < oldestExpiry) {
-        oldestExpiry = entry.expiresAt;
-        oldestDigest = digest;
-      }
-    }
-    if (oldestDigest === null) break;
-    tokens.delete(oldestDigest);
-  }
+  // Map iterates in insertion order and TTL is a constant, so the first key
+  // IS the oldest token. The loop still terminates on an empty Map because
+  // MAX_TOKENS > 0.
+  while (tokens.size >= MAX_TOKENS) tokens.delete(tokens.keys().next().value);
 
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = now + TOKEN_TTL_MS;

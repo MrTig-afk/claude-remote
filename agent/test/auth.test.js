@@ -6,7 +6,7 @@ import { test, after } from 'node:test';
 
 import {
   isConfigured, setPasscode, attemptUnlock, authStatus, authorize,
-  backoffMs, readAttempts, MAX_BACKOFF_MS,
+  backoffMs, readAttempts, MAX_BACKOFF_MS, MAX_TOKENS,
 } from '../auth.js';
 import { makeAuthCtx, cleanupAuthCtx, issueTestToken, seedPasscode } from './helper-auth.js';
 
@@ -233,6 +233,27 @@ test('issuing 40 tokens leaves ctx.tokens.size <= 32, the most recent still work
   for (let i = 0; i < 40; i++) last = attemptUnlock(c, '481902').token;
   assert.ok(c.tokens.size <= 32);
   assert.equal(authorize({ headers: { 'x-claude-remote-token': last } }, c).ok, true);
+});
+
+// --- 16b ---
+
+// Eviction is Map INSERTION order, which is only the same thing as
+// oldest-first because every token is issued with the same constant TTL.
+// If the TTL ever becomes per-token, this is the test that fails.
+test('at MAX_TOKENS the oldest token is the one evicted, never a newer one', () => {
+  const now = Date.now();
+  const c = ctx({ now: () => now }); // frozen clock: nothing expires, so only the cap can evict
+  seedPasscode(c, '481902');         // setPasscode issues token #1 - the oldest
+  const oldest = [...c.tokens.keys()][0];
+  for (let i = 0; i < MAX_TOKENS - 1; i++) attemptUnlock(c, '481902');
+  assert.equal(c.tokens.size, MAX_TOKENS);
+  assert.ok(c.tokens.has(oldest));
+  const second = [...c.tokens.keys()][1];
+
+  attemptUnlock(c, '481902');
+  assert.equal(c.tokens.size, MAX_TOKENS, 'the cap still holds');
+  assert.equal(c.tokens.has(oldest), false, 'the first-issued token is the one evicted');
+  assert.ok(c.tokens.has(second), 'a newer token must survive the eviction');
 });
 
 // --- 17 ---
