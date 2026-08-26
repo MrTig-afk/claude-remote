@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
 
-import { getProjects } from '../public/api.js';
+import { getProjects, unlock } from '../public/api.js';
 
 // api.js is the browser module under test; it calls the global fetch(),
 // which Node provides. Stubbing globalThis.fetch is enough to drive
@@ -33,11 +33,28 @@ test('request() treats a literal null SUCCESS body as bad_response, not data:nul
 test('request() still returns the error code from a normal object error body', async () => {
   globalThis.fetch = async () => ({ ok: false, status: 404, json: async () => ({ error: 'not_found' }) });
   const res = await getProjects();
-  assert.deepEqual(res, { ok: false, status: 404, code: 'not_found' });
+  // data is carried through alongside code so the passcode gate's lock
+  // screen can read retry_after_ms off it; existing callers ignore the key.
+  assert.deepEqual(res, { ok: false, status: 404, code: 'not_found', data: { error: 'not_found' } });
 });
 
 test('request() still returns data for a normal object success body', async () => {
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ projects: [] }) });
   const res = await getProjects();
   assert.deepEqual(res, { ok: true, status: 200, data: { projects: [] } });
+});
+
+// --- The gate must not reject its own client ---
+// The auth POSTs are rejected unless they carry Content-Type: application/json,
+// which is what forces a cross-origin preflight. These assert the PWA actually
+// sends that header, so the guard can never lock the real client out.
+
+test('the auth POSTs send Content-Type: application/json, which the 415 guard requires', async () => {
+  let captured = null;
+  globalThis.fetch = async (path, init) => {
+    captured = init;
+    return { ok: true, status: 200, json: async () => ({ token: 't', expires_at: 'x' }) };
+  };
+  await unlock('481902');
+  assert.equal(captured.headers['Content-Type'], 'application/json');
 });

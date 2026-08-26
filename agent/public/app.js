@@ -1,4 +1,5 @@
-import { getProjects, getSessions, launchSession, createProject } from './api.js';
+import { getProjects, getSessions, launchSession, createProject, onAuthLost } from './api.js';
+import { showGate } from './lock.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
@@ -19,6 +20,11 @@ const ERROR_COPY = {
   payload_too_large: 'The request was too big to send. This is a bug in the app - note what you tapped.',
   internal_error: 'The agent hit an internal error. Check its terminal window on the PC.',
   bad_response: "The agent replied with something this app doesn't understand. It may be a different version.",
+  // These should never surface - onAuthLost intercepts a 401 first - but a
+  // race must not print a raw error code if one ever does.
+  unauthorized: 'Your session ended. Enter your passcode again.',
+  token_expired: 'Your session expired. Enter your passcode again.',
+  setup_required: 'This agent has no passcode yet. Reload the app to set one.',
 };
 
 function errorCopy(code, status) {
@@ -621,9 +627,10 @@ async function maybeResetCache() {
 
 async function boot() {
   if (await maybeResetCache()) return;
-  // T33: the passcode gate goes here - check lock state and return before
-  // render() until unlocked. Nothing below needs to move.
-  registerServiceWorker();
+  registerServiceWorker(); // above the gate: the PWA must stay installable
+                            // from the lock screen
+  onAuthLost(async () => { await showGate(); await load(); });
+  await showGate(); // resolves only once unlocked
   wireEvents();
   render();
   await load();

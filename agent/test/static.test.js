@@ -6,18 +6,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, after, describe, before } from 'node:test';
 
-import { createAgentServer } from '../server.js';
 import { serveStatic } from '../static.js';
+import { makeAuthCtx, cleanupAuthCtx, seedPasscode, issueTestToken, makeAuthedFetch, fixtureServer } from './helper-auth.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-static-'));
+const authCtx = makeAuthCtx();
+seedPasscode(authCtx, '481902');
+const token = issueTestToken(authCtx);
 
-const server = createAgentServer({ baseDir: base });
+const server = fixtureServer({ baseDir: base, ...authCtx });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
 const origin = `http://127.0.0.1:${port}`;
+const authedFetch = makeAuthedFetch(origin, token);
 
 after(() => {
   fs.rmSync(base, { recursive: true, force: true });
+  cleanupAuthCtx(authCtx);
   server.close();
 });
 
@@ -136,7 +141,7 @@ test('every static 200 carries X-Content-Type-Options: nosniff and Cache-Control
 // --- Regression: the T27/T28/T29 surface is untouched ---
 
 test('GET /api/projects still 200 with a projects array (static did not shadow it)', async () => {
-  const res = await fetch(`${origin}/api/projects`);
+  const res = await authedFetch('/api/projects');
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.ok(Array.isArray(body.projects));
@@ -151,7 +156,7 @@ test('GET /nope still 404 with the exact not_found body', async () => {
 });
 
 test('PUT /api/projects still 404 (only POST was added, in T31)', async () => {
-  const res = await fetch(`${origin}/api/projects`, { method: 'PUT' });
+  const res = await authedFetch('/api/projects', { method: 'PUT' });
   assert.equal(res.status, 404);
 });
 
@@ -163,14 +168,14 @@ test('POST / responds 404 (static is GET-only)', async () => {
 });
 
 test('GET /api/index.html responds 404 (nothing under /api is ever read from disk)', async () => {
-  const res = await fetch(`${origin}/api/index.html`);
+  const res = await authedFetch('/api/index.html');
   assert.equal(res.status, 404);
   const body = await res.json();
   assert.deepEqual(body, { error: 'not_found' });
 });
 
 test('GET /api/projects/ (trailing slash) still 404', async () => {
-  const res = await fetch(`${origin}/api/projects/`);
+  const res = await authedFetch('/api/projects/');
   assert.equal(res.status, 404);
 });
 

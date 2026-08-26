@@ -31,45 +31,72 @@
       </div>
     </header>
 
-    <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
+    <main id="picker" hidden>
+      <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
-    <div class="newproj-panel" id="newproj-panel" hidden>
-      <label for="newproj-name">New project name</label>
-      <input id="newproj-name" type="text" maxlength="64" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="e.g. email-lint">
-      <div class="newproj-target" id="newproj-target"></div>
-      <div class="newproj-error" id="newproj-error" hidden></div>
-      <div class="newproj-actions">
-        <button type="button" id="newproj-cancel">CANCEL</button>
-        <button type="button" id="newproj-create" disabled>CREATE</button>
+      <div class="newproj-panel" id="newproj-panel" hidden>
+        <label for="newproj-name">New project name</label>
+        <input id="newproj-name" type="text" maxlength="64" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="e.g. email-lint">
+        <div class="newproj-target" id="newproj-target"></div>
+        <div class="newproj-error" id="newproj-error" hidden></div>
+        <div class="newproj-actions">
+          <button type="button" id="newproj-cancel">CANCEL</button>
+          <button type="button" id="newproj-create" disabled>CREATE</button>
+        </div>
       </div>
-    </div>
 
-    <section class="zone" aria-labelledby="runhdr-label">
-      <div class="runhdr">
-        <span id="runhdr-label">RUNNING</span>
-        <span class="count" id="run-count">0</span>
+      <section class="zone" aria-labelledby="runhdr-label">
+        <div class="runhdr">
+          <span id="runhdr-label">RUNNING</span>
+          <span class="count" id="run-count">0</span>
+        </div>
+        <div class="tiles" id="tiles"></div>
+      </section>
+
+      <section class="zone">
+        <div class="allhdr">
+          <span>ALL PROJECTS</span>
+          <span class="count" id="all-count">0</span>
+        </div>
+        <div class="rule"></div>
+        <div class="list" id="projects"></div>
+      </section>
+
+      <button class="newproj" id="newproj" type="button" aria-label="New project">
+        <span class="newproj-box">+</span>
+      </button>
+
+      <div class="spacer"></div>
+      <div class="actions">
+        <button class="refresh" id="refresh" type="button">REFRESH</button>
       </div>
-      <div class="tiles" id="tiles"></div>
-    </section>
+      <footer class="footer" id="footer"></footer>
+    </main>
 
-    <section class="zone">
-      <div class="allhdr">
-        <span>ALL PROJECTS</span>
-        <span class="count" id="all-count">0</span>
-      </div>
-      <div class="rule"></div>
-      <div class="list" id="projects"></div>
-    </section>
+    <main id="gate" hidden>
+      <form class="gate" id="gate-form" novalidate>
+        <div class="gate-label" id="gate-label">LOCKED</div>
+        <div class="gate-title" id="gate-title">Enter passcode</div>
+        <div class="gate-sub" id="gate-sub">6 digits. Asked every time the app opens.</div>
 
-    <button class="newproj" id="newproj" type="button" aria-label="New project">
-      <span class="newproj-box">+</span>
-    </button>
+        <label class="gate-field" id="field-pin">
+          <span class="gate-fieldlabel">PASSCODE</span>
+          <input class="pin" id="pin" type="password" inputmode="numeric"
+                 pattern="[0-9]*" maxlength="6" autocomplete="off"
+                 enterkeyhint="go" aria-label="Passcode">
+        </label>
 
-    <div class="spacer"></div>
-    <div class="actions">
-      <button class="refresh" id="refresh" type="button">REFRESH</button>
-    </div>
-    <footer class="footer" id="footer"></footer>
+        <label class="gate-field" id="field-confirm" hidden>
+          <span class="gate-fieldlabel">CONFIRM</span>
+          <input class="pin" id="pin-confirm" type="password" inputmode="numeric"
+                 pattern="[0-9]*" maxlength="6" autocomplete="off"
+                 enterkeyhint="go" aria-label="Confirm passcode">
+        </label>
+
+        <button class="gate-go" id="gate-go" type="submit" disabled>UNLOCK</button>
+        <div class="gate-msg" id="gate-msg" role="status" aria-live="polite"></div>
+      </form>
+    </main>
   </div>
 </body>
 </html>

@@ -34,6 +34,11 @@ docs/internal/
 # under ~/.claude/plugins/data/{plugin-id}/ (Claude Code's own plugin-data
 # convention) - nothing to ignore here, see .claude/project-profile.md
 
+# passcode hash - lives outside the repo (~/.claude/plugins/data/...) but is
+# never allowed in, at any path, even by accident
+passcode.json
+passcode-attempts.json
+
 # probe files the static-route tests write INTO the served directory and
 # delete again in their after() hooks. Listed because a crashed or killed
 # run leaves them behind, and one of them (symlink-escape.js) is a real

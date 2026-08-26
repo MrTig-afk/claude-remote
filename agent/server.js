@@ -6,6 +6,7 @@ import { listProjects, createProject } from './projects.js';
 import { launchSession } from './sessions.js';
 import { listSessions } from './registry.js';
 import { serveStatic } from './static.js';
+import { isConfigured, setPasscode, attemptUnlock, authStatus, authorize } from './auth.js';
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
@@ -13,10 +14,11 @@ export const HOST = '127.0.0.1';
 // match whatever this is.
 export const DEFAULT_PORT = 8790;
 
-function sendJson(res, statusCode, payload) {
+function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    ...extraHeaders,
   });
   res.end(JSON.stringify(payload));
 }
@@ -71,9 +73,96 @@ async function readJsonObject(req) {
   return { ok: true, value: parsed };
 }
 
+/**
+ * The two unauthenticated auth POSTs must carry Content-Type: application/json.
+ * A cross-origin POST with text/plain is a CORS *simple* request - no preflight,
+ * so it lands - and this agent sits on loopback, reachable by any page the
+ * owner's browser loads. Requiring a non-simple content type forces a preflight
+ * that fails closed, because no CORS header is ever emitted. Preferred over an
+ * Origin allowlist: requests arrive both from localhost and, through
+ * `tailscale serve`, from a *.ts.net origin, so an allowlist would have two
+ * correct values to keep in step.
+ */
+function isJsonRequest(req) {
+  const ct = req.headers['content-type'];
+  return typeof ct === 'string' && ct.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
+/**
+ * Handles the three unauthenticated /api/auth/* routes, returning true iff it
+ * wrote a response. Owns the HTTP plumbing (body read, 413, JSON parse,
+ * status codes); agent/auth.js owns storage, crypto and the limiter - the
+ * same split server.js already has with sessions.js/registry.js.
+ */
+async function handleAuthRoute(req, res, ctx, url) {
+  if (req.method === 'GET' && url.pathname === '/api/auth/status') {
+    sendJson(res, 200, authStatus(ctx));
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/auth/passcode') {
+    if (!isJsonRequest(req)) {
+      sendJson(res, 415, { error: 'unsupported_media_type' });
+      return true;
+    }
+    const parsed = await readJsonObject(req);
+    if (!parsed.ok) {
+      sendJson(res, parsed.status, { error: parsed.error });
+      return true;
+    }
+    const result = setPasscode(ctx, parsed.value.passcode, parsed.value.confirm);
+    if (!result.ok) {
+      sendJson(res, result.status, { error: result.error });
+      return true;
+    }
+    sendJson(res, result.status, { token: result.token, expires_at: result.expiresAt });
+    return true;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/auth/unlock') {
+    // Before the body read and before attemptUnlock, so a hostile page cannot
+    // burn the owner's three free attempts with malformed cross-origin posts.
+    if (!isJsonRequest(req)) {
+      sendJson(res, 415, { error: 'unsupported_media_type' });
+      return true;
+    }
+    const parsed = await readJsonObject(req);
+    if (!parsed.ok) {
+      sendJson(res, parsed.status, { error: parsed.error });
+      return true;
+    }
+    const result = attemptUnlock(ctx, parsed.value.passcode);
+    if (!result.ok) {
+      const body = { error: result.error };
+      if (result.failures !== undefined) body.failures = result.failures;
+      if (result.retryAfterMs !== undefined) body.retry_after_ms = result.retryAfterMs;
+      const extraHeaders = result.status === 429 ? { 'Retry-After': String(Math.ceil(result.retryAfterMs / 1000)) } : {};
+      sendJson(res, result.status, body, extraHeaders);
+      return true;
+    }
+    sendJson(res, result.status, { token: result.token, expires_at: result.expiresAt });
+    return true;
+  }
+
+  return false;
+}
+
 export async function handleRequest(req, res, ctx) {
   try {
     const url = new URL(req.url, 'http://127.0.0.1');
+
+    // --- Passcode gate -------------------------------------------------
+    // Everything under /api is gated. Static assets are NOT: they are the
+    // lock screen itself, and agent/static.js only ever serves agent/public/,
+    // which holds no project data. Placed above every API route so an
+    // unauthenticated request can never reach a handler, a body read, or a
+    // route-shaped 404.
+    if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+      if (await handleAuthRoute(req, res, ctx, url)) return;
+      const gate = authorize(req, ctx);
+      if (!gate.ok) { sendJson(res, gate.status, gate.body); return; }
+    }
+    // -----------------------------------------------------------------------
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
       sendJson(res, 200, { projects: listProjects(ctx.baseDir) });
@@ -151,6 +240,7 @@ export function createAgentServer(ctx) {
 
 if (import.meta.main) {
   const baseDir = resolveBaseDir();
+  const port = Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT;
 
   let baseDirOk = false;
   try {
@@ -162,7 +252,10 @@ if (import.meta.main) {
     console.warn(`claude-remote agent: base directory '${baseDir}' does not exist or is not a directory; /api/projects will return an empty list`);
   }
 
-  const port = Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT;
+  if (!isConfigured({})) {
+    console.warn(`claude-remote agent: NO PASSCODE SET. Open http://${HOST}:${port} at this desk and set one - every API route returns 403 until you do. Do NOT run 'tailscale serve' before it is set.`);
+  }
+
   const server = createAgentServer({ baseDir });
 
   server.on('error', (err) => {

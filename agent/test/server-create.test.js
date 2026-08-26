@@ -4,22 +4,27 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, after } from 'node:test';
 
-import { createAgentServer } from '../server.js';
+import { makeAuthCtx, cleanupAuthCtx, seedPasscode, issueTestToken, makeAuthedFetch, fixtureServer } from './helper-auth.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-server-create-'));
+const authCtx = makeAuthCtx();
+seedPasscode(authCtx, '481902');
+const token = issueTestToken(authCtx);
 
-const server = createAgentServer({ baseDir: base });
+const server = fixtureServer({ baseDir: base, ...authCtx });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const port = server.address().port;
 const origin = `http://127.0.0.1:${port}`;
+const authedFetch = makeAuthedFetch(origin, token);
 
 after(() => {
   fs.rmSync(base, { recursive: true, force: true });
+  cleanupAuthCtx(authCtx);
   server.close();
 });
 
 function postJson(body) {
-  return fetch(`${origin}/api/projects`, {
+  return authedFetch('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: typeof body === 'string' ? body : JSON.stringify(body),
@@ -48,11 +53,12 @@ test('no path leak: base path never appears in a 201, a 4xx, or the 500 base_una
   const body400 = await res400.json();
   assert.equal(JSON.stringify(body400).includes(base), false);
 
-  const missingBaseServer = createAgentServer({ baseDir: path.join(base, 'does-not-exist') });
+  // Same authCtx (same tokens Map) so the one token above authorizes here too.
+  const missingBaseServer = fixtureServer({ baseDir: path.join(base, 'does-not-exist'), ...authCtx });
   await new Promise((resolve) => missingBaseServer.listen(0, '127.0.0.1', resolve));
   const missingPort = missingBaseServer.address().port;
   try {
-    const res500 = await fetch(`http://127.0.0.1:${missingPort}/api/projects`, {
+    const res500 = await makeAuthedFetch(`http://127.0.0.1:${missingPort}`, token)('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'anything' }),
@@ -100,7 +106,7 @@ test('a JSON array body -> 400 invalid_request', async () => {
 });
 
 test('body > 8 KiB -> 413 payload_too_large', async () => {
-  const res = await fetch(`${origin}/api/projects`, {
+  const res = await authedFetch('/api/projects', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'x'.repeat(9000) }),
@@ -127,7 +133,7 @@ test('a name with a space round-trips intact', async () => {
 
 test('a created project appears in the very next GET /api/projects, sorted into place', async () => {
   await postJson({ name: 'Zebra Project' });
-  const res = await fetch(`${origin}/api/projects`);
+  const res = await authedFetch('/api/projects');
   const body = await res.json();
   const names = body.projects.map((p) => p.name);
   assert.ok(names.includes('Zebra Project'));
@@ -136,11 +142,11 @@ test('a created project appears in the very next GET /api/projects, sorted into 
 });
 
 test('missing base dir server -> 500, body deepEqual { error: "base_unavailable" }', async () => {
-  const missingBaseServer = createAgentServer({ baseDir: path.join(base, 'does-not-exist-2') });
+  const missingBaseServer = fixtureServer({ baseDir: path.join(base, 'does-not-exist-2'), ...authCtx });
   await new Promise((resolve) => missingBaseServer.listen(0, '127.0.0.1', resolve));
   const missingPort = missingBaseServer.address().port;
   try {
-    const res = await fetch(`http://127.0.0.1:${missingPort}/api/projects`, {
+    const res = await makeAuthedFetch(`http://127.0.0.1:${missingPort}`, token)('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'anything' }),
@@ -154,28 +160,28 @@ test('missing base dir server -> 500, body deepEqual { error: "base_unavailable"
 });
 
 test('PUT /api/projects -> 404 not_found', async () => {
-  const res = await fetch(`${origin}/api/projects`, { method: 'PUT' });
+  const res = await authedFetch('/api/projects', { method: 'PUT' });
   assert.equal(res.status, 404);
   const body = await res.json();
   assert.deepEqual(body, { error: 'not_found' });
 });
 
 test('DELETE /api/projects -> 404 not_found', async () => {
-  const res = await fetch(`${origin}/api/projects`, { method: 'DELETE' });
+  const res = await authedFetch('/api/projects', { method: 'DELETE' });
   assert.equal(res.status, 404);
   const body = await res.json();
   assert.deepEqual(body, { error: 'not_found' });
 });
 
 test('POST /api/projects/ (trailing slash) -> 404 not_found', async () => {
-  const res = await fetch(`${origin}/api/projects/`, { method: 'POST' });
+  const res = await authedFetch('/api/projects/', { method: 'POST' });
   assert.equal(res.status, 404);
   const body = await res.json();
   assert.deepEqual(body, { error: 'not_found' });
 });
 
 test('POST /api/sessions still behaves exactly as before (server edit was additive)', async () => {
-  const res = await fetch(`${origin}/api/sessions`, {
+  const res = await authedFetch('/api/sessions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ project: '../nope' }),

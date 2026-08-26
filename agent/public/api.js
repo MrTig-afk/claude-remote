@@ -1,7 +1,15 @@
-// The ONLY module in the app that calls fetch(). T33 adds the passcode
-// header on the one line marked below, and every request carries it.
-const AUTH_HEADERS = {}; // T33: { 'X-Claude-Remote-Passcode': ... }
+// The ONLY module in the app that calls fetch(). The unlock token lives only
+// in this module-level variable, deliberately not in any browser persistence
+// layer, cookie, or on-device database - so a reload or relaunch loses it and
+// the lock screen returns. Nothing is written to the phone's disk, so a
+// stolen device yields no credential at rest.
+let token = null;
+let authLost = null;
 const TIMEOUT_MS = 10_000;
+
+export function setToken(t) { token = t; }
+export function clearToken() { token = null; }
+export function onAuthLost(cb) { authLost = cb; }
 
 /**
  * @returns {{ok:true, status:number, data:object}
@@ -17,7 +25,7 @@ async function request(path, options = {}) {
       cache: 'no-store',
       headers: {
         Accept: 'application/json',
-        ...AUTH_HEADERS,
+        ...(token ? { 'X-Claude-Remote-Token': token } : {}),
         ...(options.headers || {}),
       },
       signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -43,7 +51,24 @@ async function request(path, options = {}) {
   if (res.ok) {
     return { ok: true, status: res.status, data };
   }
-  return { ok: false, status: res.status, code: typeof data.error === 'string' ? data.error : 'http' };
+
+  // One place, so every current AND future caller re-locks without its own
+  // 401 branch. /api/auth/* is excluded: a wrong passcode there is not a
+  // lost session, it's the lock screen's own business.
+  if (res.status === 401 && !path.startsWith('/api/auth/') && authLost) {
+    clearToken();
+    authLost();
+  }
+
+  return { ok: false, status: res.status, code: typeof data.error === 'string' ? data.error : 'http', data };
+}
+
+function post(path, body) {
+  return request(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 export function getProjects() {
@@ -55,17 +80,21 @@ export function getSessions() {
 }
 
 export function launchSession(projectName) {
-  return request('/api/sessions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ project: projectName }),
-  });
+  return post('/api/sessions', { project: projectName });
 }
 
 export function createProject(name) {
-  return request('/api/projects', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
+  return post('/api/projects', { name });
+}
+
+export function getAuthStatus() {
+  return request('/api/auth/status');
+}
+
+export function setPasscode(pc, confirm) {
+  return post('/api/auth/passcode', { passcode: pc, confirm });
+}
+
+export function unlock(pc) {
+  return post('/api/auth/unlock', { passcode: pc });
 }

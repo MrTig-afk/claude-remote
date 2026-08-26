@@ -195,6 +195,9 @@ test('icons/icon.svg uses only tokenized colours', () => {
   assertOnlyTokenColours(read('icons/icon.svg'), 'icons/icon.svg');
 });
 
+// No tokenized-colour test for lock.js: it writes text, never style, so it
+// holds no colour literal for the assertion to look at.
+
 test('app.css contains the required literal values', () => {
   const css = read('app.css');
   assert.match(css, /min-height:\s*44px/);
@@ -210,10 +213,14 @@ test('app.js never calls fetch() directly; api.js does', () => {
   assert.ok(read('api.js').includes('fetch('), 'api.js must be the one place fetch() is called');
 });
 
+test('lock.js never calls fetch() directly - it only calls into api.js', () => {
+  assert.ok(!read('lock.js').includes('fetch('), 'lock.js must not call fetch() directly');
+});
+
 // --- No egress ---
 
 test('no shipped asset embeds an absolute http(s) URL', () => {
-  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js']) {
+  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js']) {
     const source = read(f);
     assert.ok(!source.includes('http://'), `${f} must not contain http://`);
     assert.ok(!source.includes('https://'), `${f} must not contain https://`);
@@ -237,4 +244,77 @@ test('app.js has no standing poll: no setInterval, one bounded sleep', () => {
   assert.ok(!read('api.js').includes('setTimeout'), 'api.js must not use setTimeout');
   const hits = read('app.js').split('setTimeout').length - 1;
   assert.ok(hits <= 1, `app.js must have at most one setTimeout (the sleep helper), found ${hits}`);
+});
+
+test('lock.js has no timers: no setInterval, no setTimeout (no live countdown)', () => {
+  assert.ok(!read('lock.js').includes('setInterval'), 'lock.js must not use setInterval');
+  assert.ok(!read('lock.js').includes('setTimeout'), 'lock.js must not use setTimeout');
+});
+
+// --- Passcode gate ---
+
+test('PRECACHE includes /lock.js', () => {
+  const source = read('sw.js');
+  const match = source.match(/const PRECACHE = (\[[\s\S]*?\]);/);
+  const precache = new Function(`return ${match[1]};`)();
+  assert.ok(precache.includes('/lock.js'));
+});
+
+test('api.js carries the token header and never persists the token to the device', () => {
+  const source = read('api.js');
+  assert.ok(source.includes('X-Claude-Remote-Token'));
+  assert.ok(!source.includes('localStorage'), 'api.js must never touch localStorage - the token must not survive a reload');
+  assert.ok(!source.includes('sessionStorage'), 'api.js must never touch sessionStorage - the token must not survive a reload');
+});
+
+test('index.html ships both wrappers hidden - fail-closed markup', () => {
+  const html = read('index.html');
+  assert.match(html, /<main id="picker" hidden>/);
+  assert.match(html, /<main id="gate" hidden>/);
+});
+
+// The test above is a source-string check and CANNOT see the cascade. It
+// passed while the picker was in fact rendering behind the lock screen,
+// because `hidden` is only a user-agent `display: none` and every author
+// rule that sets `display` overrides it. Anything that ships `hidden` and is
+// also given a `display` by our own stylesheet therefore needs the
+// `!important` guard to stay hidden. Assert the guard exists, and assert the
+// pairing that makes it necessary, so deleting either side fails here.
+test('app.css force-hides [hidden] - the picker must not render behind the lock screen', () => {
+  const css = read('app.css');
+  const html = read('index.html');
+
+  const guard = css.match(/\[hidden\]\s*\{[^}]*\}/);
+  assert.ok(guard, 'app.css must carry a [hidden] rule');
+  assert.match(
+    guard[0],
+    /display:\s*none\s*!important/,
+    '[hidden] must use !important - an id selector setting display would otherwise win',
+  );
+
+  // Every element shipping the hidden attribute that our CSS also gives a
+  // display to is a candidate for this bug. Prove at least the two wrappers
+  // are in that state, so the guard is not silently protecting nothing.
+  const hiddenIds = [...html.matchAll(/id="([A-Za-z0-9_-]+)"[^>]*\shidden[\s>]/g)].map((m) => m[1]);
+  assert.ok(hiddenIds.includes('picker') && hiddenIds.includes('gate'), 'both wrappers must ship hidden');
+  for (const id of ['picker', 'gate']) {
+    const rule = css.match(new RegExp(`#${id}\\s*\\{[^}]*\\}`));
+    assert.ok(rule, `#${id} should have a rule`);
+    assert.match(rule[0], /display:/, `#${id} sets display, which is what makes the guard load-bearing`);
+  }
+});
+
+test('every passcode input in index.html carries autocomplete="off" and inputmode="numeric"', () => {
+  const html = read('index.html');
+  const pinTags = [...html.matchAll(/<input class="pin"[^>]*>/g)].map((m) => m[0]);
+  assert.ok(pinTags.length > 0, 'expected at least one class="pin" input in index.html');
+  for (const tag of pinTags) {
+    assert.match(tag, /autocomplete="off"/, tag);
+    assert.match(tag, /inputmode="numeric"/, tag);
+  }
+});
+
+test('app.css keeps #picker as a flex column with flex-grow, or .spacer stops pushing the footer down', () => {
+  const css = read('app.css');
+  assert.match(css, /#picker\s*\{[^}]*flex-grow:\s*1[^}]*\}/);
 });

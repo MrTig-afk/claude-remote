@@ -5,8 +5,8 @@ import path from 'node:path';
 import { test, after } from 'node:test';
 
 import { deriveSessionName, resolveProjectPath, launchSession } from '../sessions.js';
-import { createAgentServer } from '../server.js';
 import { STARTING_GRACE_MS } from '../registry.js';
+import { seedPasscode, issueTestToken, authHeaders, fixtureServer } from './helper-auth.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-sessions-'));
 fs.mkdirSync(path.join(base, 'Pull Requests'));
@@ -44,16 +44,37 @@ function makeFakeSpawner() {
 // directory, so the owner's real profile (~/.claude/plugins/data/...) is
 // never read or written by the suite. isPidAlive defaults to "nothing is
 // alive" since the fake spawner never writes a pid file anyway.
+//
+// The passcode gate sits above every /api route (see server.js), so any ctx
+// used to build a real HTTP server needs to already be configured and hold a
+// valid token - folded in here so every one of the many fixtureServer
+// call sites below needs no change of its own. ctx.now is one seam shared by
+// both the registry and the token/attempts bookkeeping, so a caller that
+// overrides `now` (time-travel tests) gets a token issued against that same
+// clock, not the real one.
 function makeRegCtx(extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-registry-'));
   perTestDirs.push(dir);
-  return {
+  const ctx = {
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
     isPidAlive: () => false,
     now: () => Date.now(),
+    passcodePath: path.join(dir, 'passcode.json'),
+    attemptsPath: path.join(dir, 'passcode-attempts.json'),
+    tokens: new Map(),
     ...extra,
   };
+  seedPasscode(ctx, '481902');
+  ctx.token = issueTestToken(ctx);
+  return ctx;
+}
+
+// Swaps a plain fetch(url, opts) call for one carrying regCtx's token -
+// the mechanical step every /api/* fetch in this file needs now that the
+// gate sits above those routes.
+function authedFetch(regCtx, url, opts = {}) {
+  return fetch(url, { ...opts, headers: { ...authHeaders(regCtx.token), ...(opts.headers || {}) } });
 }
 
 // --- 6.3 deriveSessionName - the naming contract ---------------------------
@@ -257,11 +278,11 @@ test('HTTP - POST /api/sessions launches and returns the flat SessionView body',
   const { spawner, calls } = makeFakeSpawner();
   const fixedNow = Date.parse('2026-08-25T21:14:03.123Z');
   const regCtx = makeRegCtx({ now: () => fixedNow });
-  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'Pull Requests' }),
@@ -284,11 +305,12 @@ test('HTTP - POST /api/sessions launches and returns the flat SessionView body',
 
 test('HTTP - 202 has JSON content-type', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'Pull Requests' }),
@@ -301,11 +323,12 @@ test('HTTP - 202 has JSON content-type', async () => {
 
 test('HTTP - 202 has Cache-Control: no-store', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'Pull Requests' }),
@@ -318,11 +341,12 @@ test('HTTP - 202 has Cache-Control: no-store', async () => {
 
 test('HTTP - body not JSON at all -> 400 invalid_request, no spawn', async () => {
   const { spawner, calls } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: 'not json at all',
@@ -338,11 +362,12 @@ test('HTTP - body not JSON at all -> 400 invalid_request, no spawn', async () =>
 
 test('HTTP - body a valid-JSON string (not object) -> 400 invalid_request, no spawn', async () => {
   const { spawner, calls } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify('just a string'),
@@ -358,11 +383,12 @@ test('HTTP - body a valid-JSON string (not object) -> 400 invalid_request, no sp
 
 test('HTTP - body [] -> 400 invalid_request, no spawn', async () => {
   const { spawner, calls } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify([]),
@@ -378,12 +404,13 @@ test('HTTP - body [] -> 400 invalid_request, no spawn', async () => {
 
 test('HTTP - body over 8 KB -> 413 payload_too_large, no spawn', async () => {
   const { spawner, calls } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
     const bigBody = JSON.stringify({ project: 'x'.repeat(9 * 1024) });
-    const res = await fetch(`${origin}/api/sessions`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: bigBody,
@@ -399,11 +426,12 @@ test('HTTP - body over 8 KB -> 413 payload_too_large, no spawn', async () => {
 
 test('HTTP - GET /api/sessions -> 200 { sessions: [] } with an empty registry', async () => {
   const { spawner, calls } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`);
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`);
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
     assert.equal(res.headers.get('cache-control'), 'no-store');
@@ -417,16 +445,17 @@ test('HTTP - GET /api/sessions -> 200 { sessions: [] } with an empty registry', 
 
 test('HTTP - GET /api/sessions after a launch -> one entry, exactly the SessionView keys', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    await fetch(`${origin}/api/sessions`, {
+    await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'Pull Requests' }),
     });
-    const res = await fetch(`${origin}/api/sessions`);
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`);
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.equal(body.sessions.length, 1);
@@ -441,11 +470,12 @@ test('HTTP - GET /api/sessions after a launch -> one entry, exactly the SessionV
 
 test('HTTP - GET /api/sessions/ (trailing slash) -> 404 not_found', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions/`);
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/`);
     assert.equal(res.status, 404);
     const body = await res.json();
     assert.deepEqual(body, { error: 'not_found' });
@@ -456,11 +486,12 @@ test('HTTP - GET /api/sessions/ (trailing slash) -> 404 not_found', async () => 
 
 test('HTTP - DELETE /api/sessions -> 404 not_found (no kill surface in M7)', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions`, { method: 'DELETE' });
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, { method: 'DELETE' });
     assert.equal(res.status, 404);
     const body = await res.json();
     assert.deepEqual(body, { error: 'not_found' });
@@ -471,11 +502,12 @@ test('HTTP - DELETE /api/sessions -> 404 not_found (no kill surface in M7)', asy
 
 test('HTTP - POST /api/sessions/ (trailing slash) -> 404 not_found, no spawn', async () => {
   const { spawner, calls } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/sessions/`, {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'Pull Requests' }),
@@ -491,11 +523,12 @@ test('HTTP - POST /api/sessions/ (trailing slash) -> 404 not_found, no spawn', a
 
 test('HTTP - POST /api/nope -> 404 not_found', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/nope`, { method: 'POST' });
+    const res = await authedFetch(regCtx, `${origin}/api/nope`, { method: 'POST' });
     assert.equal(res.status, 404);
     const body = await res.json();
     assert.deepEqual(body, { error: 'not_found' });
@@ -506,11 +539,12 @@ test('HTTP - POST /api/nope -> 404 not_found', async () => {
 
 test('HTTP - GET /api/projects still 200 with fixture names (survives async rewrite)', async () => {
   const { spawner } = makeFakeSpawner();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx() });
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res = await fetch(`${origin}/api/projects`);
+    const res = await authedFetch(regCtx, `${origin}/api/projects`);
     assert.equal(res.status, 200);
     const body = await res.json();
     const names = body.projects.map((p) => p.name);
@@ -527,11 +561,12 @@ test('HTTP - GET /api/projects still 200 with fixture names (survives async rewr
 test('HTTP - two POSTs, no pid file ever written, ctx.now fixed -> spawn stays at 1', async () => {
   const { spawner, calls } = makeFakeSpawner();
   const fixedNow = Date.now();
-  const server = createAgentServer({ baseDir: base, spawner, ...makeRegCtx({ now: () => fixedNow }) });
+  const regCtx = makeRegCtx({ now: () => fixedNow });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const req = () => fetch(`${origin}/api/sessions`, {
+    const req = () => authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'email-lint' }),
@@ -554,11 +589,11 @@ test('HTTP - two POSTs, ctx.now advanced past STARTING_GRACE_MS -> spawns again'
   const { spawner, calls } = makeFakeSpawner();
   let currentTime = Date.now();
   const regCtx = makeRegCtx({ now: () => currentTime });
-  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const req = () => fetch(`${origin}/api/sessions`, {
+    const req = () => authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'email-lint' }),
@@ -585,11 +620,11 @@ test('HTTP - pid file written between two POSTs, pid alive -> reuse, running, pi
   const { spawner, calls } = makeFakeSpawner();
   const livePids = new Set([555]);
   const regCtx = makeRegCtx({ isPidAlive: (pid) => livePids.has(pid) });
-  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const req = () => fetch(`${origin}/api/sessions`, {
+    const req = () => authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'email-lint' }),
@@ -615,11 +650,11 @@ test('HTTP - pid file written between two POSTs, pid dead -> spawns again', asyn
   const { spawner, calls } = makeFakeSpawner();
   const livePids = new Set(); // nothing alive
   const regCtx = makeRegCtx({ isPidAlive: (pid) => livePids.has(pid) });
-  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const req = () => fetch(`${origin}/api/sessions`, {
+    const req = () => authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'email-lint' }),
@@ -645,11 +680,11 @@ test('HTTP - a stale pid file is deleted before the spawn, not inherited', async
   const pidFilePath = path.join(regCtx.pidDir, 'email-lint.pid');
   fs.writeFileSync(pidFilePath, '77777', 'ascii');
 
-  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const res1 = await fetch(`${origin}/api/sessions`, {
+    const res1 = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'email-lint' }),
@@ -668,15 +703,15 @@ test('HTTP - a corrupt sessions.json does not break the endpoints', async () => 
   fs.mkdirSync(path.dirname(regCtx.registryPath), { recursive: true });
   fs.writeFileSync(regCtx.registryPath, '{"sessions": [{"sess', 'utf8');
 
-  const server = createAgentServer({ baseDir: base, spawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
-    const getRes = await fetch(`${origin}/api/sessions`);
+    const getRes = await authedFetch(regCtx, `${origin}/api/sessions`);
     assert.equal(getRes.status, 200);
     assert.deepEqual(await getRes.json(), { sessions: [] });
 
-    const postRes = await fetch(`${origin}/api/sessions`, {
+    const postRes = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ project: 'Pull Requests' }),

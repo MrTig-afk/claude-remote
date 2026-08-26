@@ -6,6 +6,19 @@
 
 * { box-sizing: border-box; }
 
+/* SECURITY, not styling. The locked screen must never render the project
+   list behind it - names and counts are exactly what locking is meant to
+   withhold. The wrappers ship with the `hidden` attribute, but `hidden` is
+   only a user-agent rule (`display: none`), and ANY author rule that sets
+   `display` beats it regardless of specificity - `#picker { display: flex }`
+   below would silently un-hide the picker. `!important` is required here for
+   that reason, not out of laziness: an author declaration cannot otherwise
+   lose to another author declaration with higher specificity.
+   Verified failing without this line: the picker's zone headers, counts,
+   REFRESH and + button rendered behind the lock form, with JavaScript
+   entirely disabled. */
+[hidden] { display: none !important; }
+
 body {
   background: #0a0d0a;
   color: #c9d1c9;
@@ -291,3 +304,74 @@ body {
 }
 
 :focus-visible { outline: 1px solid #5fae6f; outline-offset: 2px; }
+
+/* --- Passcode screens (lock + first-run set) --- */
+
+/* #picker must reproduce the flex column .app used to own directly, or
+   .spacer stops pushing the footer down. It must NOT be position:relative -
+   .newproj is absolutely positioned against .app. */
+#picker { display: flex; flex-direction: column; flex-grow: 1; }
+
+#gate { display: flex; flex-direction: column; flex-grow: 1; }
+
+.gate {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  max-width: 300px;
+  margin-inline: auto;
+  padding: 48px 20px 24px;   /* top-anchored, not centred: a centred form
+                                jumps when the phone keyboard opens */
+}
+
+.gate-label      { font-size: 11px; letter-spacing: 0.08em; color: #4a5a4a; }
+.gate-title      { font-size: 14px; font-weight: 500; color: #eafbea; }
+.gate-sub        { font-size: 11px; line-height: 1.5; color: #9aab9a; margin-top: -8px; }
+.gate-field      { display: flex; flex-direction: column; gap: 5px; }
+.gate-fieldlabel { font-size: 11px; letter-spacing: 0.08em; color: #4a5a4a; }
+
+/* Fallback if a device ignores inputmode on a password field: swap
+   type="password" for type="text" and add -webkit-text-security: disc.
+   Not pre-built. */
+.pin {
+  width: 100%;
+  min-height: 44px;
+  padding: 12px 14px;
+  background: #0f150f;
+  border: 1px solid #1b231b;
+  border-radius: 4px;
+  color: #eafbea;
+  font: inherit;
+  font-size: 19px;
+  letter-spacing: 0.35em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  caret-color: #7ee787;
+  appearance: none;
+}
+.pin:focus { border-color: #3d4a3d; outline: none; }
+
+.gate-go {
+  width: 100%;
+  min-height: 44px;
+  padding: 12px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: #7ee787;
+  background: none;
+  border: 1px solid #3d4a3d;
+  border-radius: 4px;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.gate-go[disabled] { color: #4a5a4a; border-color: #1b231b; cursor: default; }
+
+.gate-msg {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #c9d1c9;
+  min-height: 33px;   /* two lines reserved so the form never jumps */
+}

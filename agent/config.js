@@ -22,6 +22,16 @@ export function getPidDirPath() {
   return path.join(path.dirname(getConfigFilePath()), 'session-pids');
 }
 
+/** Absolute path of the passcode hash file, beside the config. */
+export function getPasscodeFilePath() {
+  return path.join(path.dirname(getConfigFilePath()), 'passcode.json');
+}
+
+/** Absolute path of the failed-attempt counter, beside the config. */
+export function getAttemptsFilePath() {
+  return path.join(path.dirname(getConfigFilePath()), 'passcode-attempts.json');
+}
+
 /**
  * Resolves the base project directory from the claude-remote config file,
  * mirroring Get-DefaultBaseFolder (ClaudeRemote.psm1:133) and falling back

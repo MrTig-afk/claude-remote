@@ -249,6 +249,23 @@ tailscale serve --https=8790 off           # every time you step away, until T33
    literal rather than theoretical. Set the passcode immediately after first
    launch, not tomorrow.
 
+### Rollout order that closes the first-run window completely
+
+Better than "set it quickly": done in this order, the set-passcode route is
+never reachable from the tailnet at all, so the accepted window above shrinks
+to nothing.
+
+1. Land the passcode gate.
+2. Start the agent on loopback only: `node agent/server.js`.
+3. **At the desk**, open `http://127.0.0.1:8790` and set the passcode. The
+   set-passcode route closes permanently at that point — it answers 409 from
+   then on.
+4. **Only then** run `tailscale serve --bg --https=8790 8790`.
+
+Step 4 before step 3 is the whole exposure. The proxy cannot forward a route
+that has already closed, so setting the passcode first means no tailnet device
+ever had a chance to claim it.
+
 ### One thing serve gives for free that does NOT replace T33
 
 `tailscale serve` injects identity headers (`Tailscale-User-Login`,
