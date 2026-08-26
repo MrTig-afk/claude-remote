@@ -28,7 +28,14 @@ foreach ($dir in @('venv', '.venv')) {
 # 'Stop', so with stdio:'ignore' the agent reports 202 "starting" and
 # nothing ever starts. Verified on this machine 2026-08-25.
 $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -PassThru -ArgumentList @(
-    '--channels', 'plugin:whatsapp-claude-channel@whatsapp-claude-plugin',
+    # `--channels=<value>` as ONE argument. The plugin is `whatsapp-channel`;
+    # the MARKETPLACE is `whatsapp-claude-plugin`, which is the easy thing to
+    # confuse it with. An earlier release carried the marketplace's wording in
+    # the plugin half of the spec, and that stale form resolves to "plugin not
+    # installed": the channel is allowlisted, then fails to load, so outbound
+    # tools keep working while inbound messages never arrive. A test asserts
+    # this whole token and that the stale form is absent.
+    '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',
     '--remote-control', $SessionName
 )
 

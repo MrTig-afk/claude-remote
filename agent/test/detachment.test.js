@@ -120,8 +120,9 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   const requiredTokens = [
     'CLAUDE_CONFIG_DIR',
     '.claude-max',
-    '--channels',
-    'plugin:whatsapp-claude-channel@whatsapp-claude-plugin',
+    // Whole token, not the bare flag: the plugin is `whatsapp-channel` and the
+    // marketplace is `whatsapp-claude-plugin`, which is the easy confusion.
+    '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',
     '--remote-control',
     'Activate.ps1',
     'Start-Process',

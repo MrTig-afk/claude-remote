@@ -732,8 +732,17 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   );
   assert.ok(script.includes('CLAUDE_CONFIG_DIR'));
   assert.ok(script.includes('.claude-max'));
-  assert.ok(script.includes('--channels'));
-  assert.ok(script.includes('plugin:whatsapp-claude-channel@whatsapp-claude-plugin'));
+  // The plugin is `whatsapp-channel`; the MARKETPLACE is
+  // `whatsapp-claude-plugin`. An earlier release was `whatsapp-claude-channel`
+  // and that name silently resolves to "plugin not installed" - the channel is
+  // allowlisted, then fails to load, so outbound tools keep working while
+  // inbound messages never arrive. Asserting the whole `--channels=<value>`
+  // token, not just the flag, is what stops the stale name coming back.
+  assert.ok(script.includes('--channels=plugin:whatsapp-channel@whatsapp-claude-plugin'));
+  assert.ok(
+    !script.includes('whatsapp-claude-channel'),
+    'the pre-rename plugin name must not return',
+  );
   assert.ok(script.includes('--remote-control'));
   assert.ok(script.includes('Activate.ps1'));
   assert.ok(script.includes('Start-Process'));
