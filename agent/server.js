@@ -3,7 +3,7 @@ import http from 'node:http';
 
 import { resolveBaseDir } from './config.js';
 import { listProjects, createProject } from './projects.js';
-import { launchSession } from './sessions.js';
+import { launchSession, endSession } from './sessions.js';
 import { listSessions } from './registry.js';
 import { serveStatic } from './static.js';
 import { isConfigured, setPasscode, attemptUnlock, authStatus, authorize } from './auth.js';
@@ -219,6 +219,21 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
       sendJson(res, result.reused ? 200 : 202, result.session);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/sessions/end') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { error: parsed.error });
+        return;
+      }
+      const result = await endSession(ctx, parsed.value.project);
+      if (!result.ok) {
+        sendJson(res, result.status, { error: result.error });
+        return;
+      }
+      sendJson(res, result.status, result.body);
       return;
     }
 

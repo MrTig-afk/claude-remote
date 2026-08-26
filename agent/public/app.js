@@ -1,4 +1,4 @@
-import { getProjects, getSessions, launchSession, createProject, onAuthLost } from './api.js';
+import { getProjects, getSessions, launchSession, endSession, createProject, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
@@ -9,7 +9,14 @@ const state = {
   launching: new Set(), // project names with a POST in flight
   results: new Map(), // name -> { kind:'started'|'reused'|'error', session?, code? }
   reachable: null, // null = not tried yet, true, false
+  stopping: new Set(), // project names with an end POST in flight - CLIENT ONLY
+  confirmName: null, // the ONE project whose tile is currently the question
 };
+
+// Session names whose ended record has already been announced. Never reset
+// by load() - a page reload is what clears it, which is exactly the
+// "shown on the next open" behaviour the 24h retention window wants.
+const reported = new Set();
 
 const ERROR_COPY = {
   network: 'Cannot reach the agent. Check the PC is awake and Tailscale is connected, then tap REFRESH.',
@@ -20,6 +27,7 @@ const ERROR_COPY = {
   payload_too_large: 'The request was too big to send. This is a bug in the app - note what you tapped.',
   internal_error: 'The agent hit an internal error. Check its terminal window on the PC.',
   bad_response: "The agent replied with something this app doesn't understand. It may be a different version.",
+  session_not_running: "That session isn't running yet, or is already being ended. Tap REFRESH.",
   // These should never surface - onAuthLost intercepts a 401 first - but a
   // race must not print a raw error code if one ever does.
   unauthorized: 'Your session ended. Enter your passcode again.',
@@ -124,7 +132,7 @@ function elapsed(startedAt) {
 // another.
 function sessionFor(p) {
   if (!state.sessions) return null;
-  return state.sessions.find((s) => s.path === p.path || s.project === p.name) ?? null;
+  return state.sessions.find((s) => (s.path === p.path || s.project === p.name) && s.status !== 'ended') ?? null;
 }
 
 /**
@@ -138,13 +146,20 @@ function rowState(p) {
     return { zone: 'tile', dot: 'accent', status: 'starting...', idle: '—' };
   }
 
+  if (state.stopping.has(p.name)) {
+    return { zone: 'tile', dot: 'accent', status: 'ending...', idle: '—' };
+  }
+
   const session = sessionFor(p);
   if (session) {
     if (session.status === 'running') {
-      return { zone: 'tile', dot: 'filled', status: 'active session', idle: elapsed(session.started_at) };
+      return { zone: 'tile', dot: 'filled', status: 'active session', idle: elapsed(session.started_at), stop: true };
     }
     if (session.status === 'failed') {
       return { zone: 'list', dot: 'dim', status: 'launch unconfirmed', idle: elapsed(session.started_at) };
+    }
+    if (session.status === 'handoff') {
+      return { zone: 'tile', dot: 'accent', status: 'writing handoff...', idle: '—' };
     }
     return { zone: 'tile', dot: 'accent', status: 'starting - not confirmed', idle: elapsed(session.started_at) };
   }
@@ -205,7 +220,7 @@ function statusLine(rs) {
 function buildTile(p, rs) {
   const el = document.createElement('div');
   el.className = 'tile';
-  if (state.launching.has(p.name)) el.setAttribute('aria-busy', 'true');
+  if (state.launching.has(p.name) || state.stopping.has(p.name)) el.setAttribute('aria-busy', 'true');
   el.appendChild(buildDot(rs.dot));
   const name = document.createElement('span');
   name.className = 'tile-name';
@@ -215,6 +230,33 @@ function buildTile(p, rs) {
   status.className = 'tile-status';
   status.textContent = statusLine(rs);
   el.appendChild(status);
+
+  if (state.confirmName === p.name) {
+    const q = document.createElement('div');
+    q.className = 'tile-confirm';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'tile-stop-cancel';
+    cancel.dataset.stopCancel = p.name;
+    cancel.textContent = 'CANCEL';
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'tile-stop-go';
+    go.dataset.stopConfirm = p.name;
+    go.textContent = 'END & WRITE HANDOFF';
+    q.append(cancel, go);
+    el.appendChild(q);
+  } else if (rs.stop) {
+    el.classList.add('has-stop');
+    const stop = document.createElement('button');
+    stop.type = 'button';
+    stop.className = 'tile-stop';
+    stop.dataset.stop = p.name;
+    stop.setAttribute('aria-label', `Stop ${p.name}`);
+    stop.textContent = 'STOP';
+    el.appendChild(stop);
+  }
+
   return el;
 }
 
@@ -274,6 +316,18 @@ function setErrorBanner(code, status) {
   // The '!' glyph is the only visual weight an error gets - no red exists
   // in this palette (design/tokens.md has one accent and no error colour).
   setBanner('error', [{ text: '! ' + errorCopy(code, status) }]);
+}
+
+// Announces each ended record exactly once, keyed by session_name in the
+// module-level `reported` set. Accepted ceiling: with two unreported ended
+// records the last one processed wins the single banner line.
+function reportEnded() {
+  for (const s of (state.sessions || [])) {
+    if (s.status !== 'ended' || reported.has(s.session_name)) continue;
+    reported.add(s.session_name);
+    if (s.handoff_ok) setBanner('info', [{ text: 'Handoff written for ' }, { b: s.project }, { text: '.' }]);
+    else setBanner('error', [{ text: '! Session ended, but the handoff was not written.' }]);
+  }
 }
 
 function failedSessions() {
@@ -350,6 +404,41 @@ async function confirmStarting(force = false) {
       rearm = false;
       confirmStarting(true);
     }
+    // A `starting` entry that just turned `running` (or `handoff`) here is
+    // exactly what the 5s watch loop exists to keep polling - without this
+    // call it never starts, since the loop's only other call sites run
+    // before the new session is in state.sessions. `watching` makes this
+    // free when a loop is already up.
+    watchSessions();
+  }
+}
+
+const WATCH_GAP_MS = 5000;
+let watching = false;
+
+function anyWatchable() {
+  return (state.sessions || []).some((s) => s.status === 'running' || s.status === 'handoff');
+}
+
+// A separate loop from confirmStarting(), deliberately: that sequence is
+// bounded and exists to catch a launch landing. This one has an explicit
+// stop condition and no timer at all when nothing is running.
+async function watchSessions() {
+  if (watching) return;
+  watching = true;
+  try {
+    while (document.visibilityState === 'visible' && anyWatchable()) {
+      await sleep(WATCH_GAP_MS);
+      if (document.visibilityState !== 'visible') return;
+      if (!anyWatchable()) return;
+      const s = await getSessions();
+      if (!s.ok) return;
+      state.sessions = s.data.sessions;
+      reportEnded();
+      render();
+    }
+  } finally {
+    watching = false;
   }
 }
 
@@ -406,6 +495,16 @@ function renderProjects() {
   listEl.innerHTML = '';
 
   const rows = state.projects.map((p) => ({ p, rs: rowState(p) }));
+
+  // A stale confirm re-attaching to a later session is worse than the
+  // accepted "one stale history entry" ceiling: it is a live STOP confirm
+  // sitting on a project the owner never asked to end. Reconciled here,
+  // before tiles are built, so this same render never draws it either.
+  if (state.confirmName && !rows.some((r) => r.p.name === state.confirmName && r.rs.stop)) {
+    state.confirmName = null;
+    if (confirmPushed) { confirmPushed = false; history.back(); }
+  }
+
   const tiles = rows.filter((r) => r.rs.zone === 'tile');
   const list = rows.filter((r) => r.rs.zone === 'list');
 
@@ -485,10 +584,12 @@ async function load() {
   // the project list and never sets reachable = false on its own.
   const s = sess.value;
   state.sessions = s.ok ? s.data.sessions : null;
+  reportEnded();
 
   render();
   if (state.reachable) maybeFailedBanner();
   confirmStarting();
+  watchSessions();
 }
 
 async function onProjectTap(e) {
@@ -524,6 +625,76 @@ async function onProjectTap(e) {
   // force: state.sessions does not yet contain the new entry, and the first
   // check at 3s is what brings it in.
   if (res.ok && res.status === 202) confirmStarting(true);
+  watchSessions();
+}
+
+function onTileTap(e) {
+  const cancel = e.target.closest('[data-stop-cancel]');
+  if (cancel) {
+    // Mutate and render SYNCHRONOUSLY before the history call: a double tap
+    // must never issue a second history.back() and pop the app's own entry.
+    state.confirmName = null;
+    render();
+    if (confirmPushed) { confirmPushed = false; history.back(); }
+    return;
+  }
+  const go = e.target.closest('[data-stop-confirm]');
+  if (go) { runStop(go.dataset.stopConfirm); return; }
+  const stop = e.target.closest('[data-stop]');
+  if (stop) { openConfirm(stop.dataset.stop); }
+}
+
+// True exactly while a confirm's history entry is on the stack and this
+// session is the one that pushed it. Set on pushState, cleared on popstate
+// AND on any of our own history.back() calls that consume it - the second
+// tap of a double-tap must never fire a second history.back(), which would
+// pop the app's own entry instead of an already-gone confirm entry.
+let confirmPushed = false;
+
+function openConfirm(name) {
+  if (state.confirmName === name) return;
+  const first = state.confirmName === null;
+  state.confirmName = name;
+  if (first) {
+    history.pushState({ stopConfirm: true }, '');   // Android back = CANCEL
+    confirmPushed = true;
+  }
+  render();
+}
+
+// Reconciled by renderProjects() too: if the session ends server-side while
+// a confirm is open, the next render clears confirmName and pops the
+// history entry itself, rather than leaving a stale confirm to re-attach to
+// a later session.
+async function runStop(name) {
+  if (state.stopping.has(name)) return;
+  state.confirmName = null;
+  if (confirmPushed) { confirmPushed = false; history.back(); } // pop the confirm entry; popstate is then a no-op
+  state.stopping.add(name);
+  state.results.delete(name);
+  hideBanner();
+  render();
+
+  const res = await endSession(name);
+  state.stopping.delete(name);
+
+  if (res.ok && res.data.result === 'handoff_started') {
+    // no banner: the kill gets no toast, the handoff result gets the one line
+  } else if (res.ok && res.data.result === 'already_ended') {
+    setBanner('info', [{ b: name }, { text: ' had already ended.' }]);
+  } else if (res.ok && res.data.result === 'kill_failed') {
+    setBanner('error', [{ text: '! Could not end ' }, { b: name }, { text: '. It is still running - close it at the desk.' }]);
+  } else if (res.ok) {
+    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a result this app doesn't know. Check its terminal window on the PC." }]);
+  } else {
+    setErrorBanner(res.code, res.status);
+  }
+
+  const s = await getSessions();          // never optimistic: the agent decides
+  if (s.ok) state.sessions = s.data.sessions;
+  reportEnded();
+  render();
+  watchSessions();
 }
 
 function newProjectNameEl() { return document.getElementById('newproj-name'); }
@@ -615,6 +786,7 @@ function onNewProject() {
 
 function wireEvents() {
   document.getElementById('projects').addEventListener('click', onProjectTap);
+  document.getElementById('tiles').addEventListener('click', onTileTap);
   document.getElementById('newproj').addEventListener('click', onNewProject);
   document.getElementById('refresh').addEventListener('click', () => load());
   document.getElementById('newproj-cancel').addEventListener('click', closeNewProjectPanel);
@@ -622,6 +794,10 @@ function wireEvents() {
   newProjectNameEl().addEventListener('input', updateNewProjectTarget);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') load();
+  });
+  window.addEventListener('popstate', () => {
+    confirmPushed = false;
+    if (state.confirmName !== null) { state.confirmName = null; render(); }
   });
 }
 

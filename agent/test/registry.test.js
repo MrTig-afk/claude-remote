@@ -8,12 +8,14 @@ import { deriveSessionName } from '../sessions.js';
 import {
   STARTING_GRACE_MS,
   FAILED_RETENTION_MS,
+  HANDOFF_TIMEOUT_MS,
   REGISTRY_VERSION,
   isPidAlive,
   listSessions,
   findLiveSession,
   recordLaunch,
   clearPidFile,
+  markSessionState,
 } from '../registry.js';
 
 // One shared project fixture (read-only across tests): Pull Requests,
@@ -533,4 +535,233 @@ test('clearPidFile - a plain session name inside pidDir is still removed', () =>
   clearPidFile({ registryPath, pidDir, isPidAlive: () => false, now: () => Date.now() }, 'email-lint');
 
   assert.equal(fs.existsSync(real), false, 'the guard must not break the normal case');
+});
+
+// --- R1-R15: handoff / ended registry states -----------------------------------
+
+test('listSessions - handoff entry with no pid file -> status handoff, pid null', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date(now - 1000).toISOString(),
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'handoff');
+  assert.equal(views[0].pid, null);
+});
+
+test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_result', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'ended',
+    ended_at: new Date(now - 1000).toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'ended');
+  assert.equal(views[0].ended_at, entry.ended_at);
+  assert.equal(views[0].handoff_ok, true);
+  assert.equal(views[0].handoff_result, 'written');
+});
+
+test('listSessions - running/starting views still carry exactly the six original keys', () => {
+  const now = Date.now();
+  const livePids = new Set([555]);
+  const ctx = makeCtx({ now: () => now, livePids });
+  const running = validEntry('Pull Requests', new Date(now - 1000).toISOString());
+  const starting = validEntry('email-lint', new Date(now - 1000).toISOString());
+  writeSessions(ctx.registryPath, [running, starting]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 2);
+  for (const v of views) {
+    assert.deepEqual(
+      Object.keys(v).sort(),
+      ['path', 'pid', 'project', 'session_name', 'started_at', 'status'].sort(),
+      `unexpected keys on status ${v.status}`,
+    );
+  }
+});
+
+test('listSessions - ended record inside FAILED_RETENTION_MS survives', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'ended',
+    ended_at: new Date(now - (FAILED_RETENTION_MS - 60_000)).toISOString(),
+    handoff_ok: false,
+    handoff_result: 'not_written',
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+});
+
+test('listSessions - ended record past FAILED_RETENTION_MS is pruned and written back', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'ended',
+    ended_at: new Date(now - (FAILED_RETENTION_MS + 1000)).toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  assert.deepEqual(listSessions(ctx), []);
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 0);
+});
+
+test('listSessions - handoff past HANDOFF_TIMEOUT_MS but inside 24h -> ended / interrupted', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const handoffStarted = new Date(now - (HANDOFF_TIMEOUT_MS + 60_000)).toISOString();
+  const entry = validEntry('Pull Requests', new Date(now - (HANDOFF_TIMEOUT_MS + 120_000)).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: handoffStarted,
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'ended');
+  assert.equal(views[0].handoff_ok, false);
+  assert.equal(views[0].handoff_result, 'interrupted');
+  assert.equal(views[0].ended_at, handoffStarted);
+});
+
+test('listSessions - handoff entry past FAILED_RETENTION_MS is pruned', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - (FAILED_RETENTION_MS + 120_000)).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date(now - (FAILED_RETENTION_MS + 60_000)).toISOString(),
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  assert.deepEqual(listSessions(ctx), []);
+});
+
+test('listSessions - drop table for malformed handoff/ended/unknown status entries', () => {
+  const now = Date.now();
+  const rows = [
+    { status: 'handoff', handoff_started_at: 'not-a-date' },
+    { status: 'ended', ended_at: 'not-a-date', handoff_ok: true, handoff_result: 'written' },
+    { status: 'ended', ended_at: new Date(now).toISOString(), handoff_ok: 'yes', handoff_result: 'written' },
+    { status: 'nonsense' },
+  ];
+  for (const overrides of rows) {
+    const ctx = makeCtx({ now: () => now });
+    const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString(), overrides);
+    writeSessions(ctx.registryPath, [entry]);
+    assert.deepEqual(listSessions(ctx), [], `overrides: ${JSON.stringify(overrides)}`);
+  }
+});
+
+test('findLiveSession - returns a handoff entry (blocks relaunch)', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date(now - 1000).toISOString(),
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const found = findLiveSession(ctx, 'pull-requests');
+  assert.ok(found);
+  assert.equal(found.status, 'handoff');
+});
+
+test('findLiveSession - null for an ended record (does not block relaunch)', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'ended',
+    ended_at: new Date(now - 1000).toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  assert.equal(findLiveSession(ctx, 'pull-requests'), null);
+});
+
+test('recordLaunch - replaces an ended record with the same session_name rather than accumulating', () => {
+  const ctx = makeCtx();
+  const ended = validEntry('Pull Requests', new Date(Date.now() - 60_000).toISOString(), {
+    status: 'ended',
+    ended_at: new Date().toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  });
+  writeSessions(ctx.registryPath, [ended]);
+
+  recordLaunch(ctx, {
+    sessionName: 'pull-requests',
+    project: 'Pull Requests',
+    projectPath: path.resolve(base, 'Pull Requests'),
+  });
+
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 1);
+  assert.equal(onDisk.sessions[0].status, undefined);
+});
+
+test('markSessionState - patches when fromStatus matches, returns true', () => {
+  const ctx = makeCtx();
+  const entry = validEntry('Pull Requests', new Date().toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date().toISOString(),
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const patched = markSessionState(ctx, 'pull-requests', 'handoff', {
+    status: 'ended',
+    ended_at: new Date().toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  });
+
+  assert.equal(patched, true);
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions[0].status, 'ended');
+  assert.equal(onDisk.sessions[0].handoff_result, 'written');
+});
+
+test('markSessionState - returns false and leaves the file byte-identical when fromStatus does not match', () => {
+  const ctx = makeCtx();
+  const entry = validEntry('Pull Requests', new Date().toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date().toISOString(),
+  });
+  writeSessions(ctx.registryPath, [entry]);
+  const before = fs.readFileSync(ctx.registryPath, 'utf8');
+
+  const patched = markSessionState(ctx, 'pull-requests', null, { status: 'ended' });
+
+  assert.equal(patched, false);
+  const after = fs.readFileSync(ctx.registryPath, 'utf8');
+  assert.equal(after, before);
+});
+
+test('markSessionState - never appends for a session name that is absent', () => {
+  const ctx = makeCtx();
+
+  const patched = markSessionState(ctx, 'no-such-session', null, { status: 'handoff' });
+
+  assert.equal(patched, false);
+  assert.equal(fs.existsSync(ctx.registryPath), false);
 });

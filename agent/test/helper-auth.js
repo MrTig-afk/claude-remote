@@ -52,6 +52,28 @@ function refuseSpawn() {
   );
 }
 
+// The two seams endSession() uses. Same reasoning as refuseSpawn above: a
+// fixture with neither would tree-kill a real pid and start a real handoff
+// run on the owner's account.
+function refuseKill() {
+  throw new Error(
+    'helper-auth: this fixture server has no killSpawner, so ending a session would run a REAL '
+    + 'taskkill against a pid on this machine. Pass an explicit killSpawner to the ctx.',
+  );
+}
+function refuseHandoff() {
+  throw new Error(
+    'helper-auth: this fixture server has no handoffSpawner, so ending a session would start a REAL '
+    + "handoff run on the owner's account. Pass an explicit handoffSpawner to the ctx.",
+  );
+}
+function refusePidImageName() {
+  throw new Error(
+    'helper-auth: this fixture server has no pidImageName, so ending a session would query a REAL '
+    + "process's image name via tasklist on this machine. Pass an explicit pidImageName to the ctx.",
+  );
+}
+
 /** createAgentServer, but it refuses a ctx that could write the owner's real data dir. */
 export function fixtureServer(ctx) {
   const tmp = path.resolve(os.tmpdir()) + path.sep;
@@ -65,8 +87,8 @@ export function fixtureServer(ctx) {
       );
     }
   }
-  // Fill the spawner IN PLACE rather than building `{ spawner, ...ctx }`.
-  // Two reasons, both learned the hard way:
+  // Fill the seams IN PLACE rather than building `{ spawner, ...ctx }`. Two
+  // reasons, both learned the hard way:
   //   - a copy breaks object identity, and auth.js hangs `attemptFloor` on the
   //     object the server holds - so callers asserting on their own ctx would
   //     silently be measuring a different object;
@@ -75,6 +97,9 @@ export function fixtureServer(ctx) {
   //     sessions.js's `spawner = spawn` default resolve to the REAL spawn.
   // A typeof check covers both the missing and the undefined case.
   if (typeof ctx.spawner !== 'function') ctx.spawner = refuseSpawn;
+  if (typeof ctx.killSpawner !== 'function') ctx.killSpawner = refuseKill;
+  if (typeof ctx.handoffSpawner !== 'function') ctx.handoffSpawner = refuseHandoff;
+  if (typeof ctx.pidImageName !== 'function') ctx.pidImageName = refusePidImageName;
   return createAgentServer(ctx);
 }
 

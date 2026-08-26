@@ -169,6 +169,7 @@ test('index.html links the manifest and an apple-touch-icon, and every local hre
 const TOKEN_SET = new Set([
   '0a0d0a', '0f150f', 'eafbea', 'c9d1c9', '9aab9a', '4a5a4a',
   '3d4a3d', '2a332a', '7ee787', '5fae6f', '1b231b', '6b7a6b',
+  'ff7b72', 'e5534b',
 ]);
 
 function assertOnlyTokenColours(source, label) {
@@ -615,4 +616,145 @@ test('a list row folds its elapsed time into the status line, so the removed idl
     assert.ok(!buildRow.includes(cls), `list rows must not rebuild .${cls}`);
     assert.ok(!new RegExp(`\\.${cls}\\s*\\{`).test(css), `app.css must not restyle .${cls}`);
   }
+});
+
+// --- STOP / confirm / watch loop ---
+
+test('the danger colours (#ff7b72, #e5534b) appear only in stop/confirm rules, never on a banner', () => {
+  const css = read('app.css');
+  const blocks = css.split('}').filter((chunk) => chunk.includes('{'));
+  for (const chunk of blocks) {
+    const selector = chunk.slice(0, chunk.indexOf('{'));
+    const body = chunk.slice(chunk.indexOf('{') + 1);
+    if (/#ff7b72|#e5534b/i.test(body)) {
+      assert.match(
+        selector,
+        /tile-stop|tile-confirm/,
+        `selector "${selector.trim()}" carries a danger colour but is not a stop/confirm rule`,
+      );
+    }
+  }
+
+  const bannerRule = css.match(/\.banner\s*\{[^}]*\}/);
+  const bannerErrorRule = css.match(/\.banner\.error\s*\{[^}]*\}/);
+  assert.ok(bannerRule, 'app.css must carry a .banner rule');
+  assert.ok(bannerErrorRule, 'app.css must carry a .banner.error rule');
+  assert.ok(!/#ff7b72|#e5534b/i.test(bannerRule[0]), '.banner must not use a danger colour');
+  assert.ok(!/#ff7b72|#e5534b/i.test(bannerErrorRule[0]), '.banner.error must not use a danger colour');
+});
+
+test('anyWatchable is true only for running/handoff, and the watch loop is a bounded 5s poll gated on visibility', () => {
+  const js = read('app.js');
+  const body = js.match(/function anyWatchable\(\) \{\s*return ([^;]+);/);
+  assert.ok(body, 'app.js must carry anyWatchable');
+  const anyWatchable = new Function('state', `return ${body[1]};`);
+  assert.equal(anyWatchable({ sessions: [{ status: 'running' }] }), true);
+  assert.equal(anyWatchable({ sessions: [{ status: 'handoff' }] }), true);
+  assert.equal(anyWatchable({ sessions: [{ status: 'starting' }] }), false);
+  assert.equal(anyWatchable({ sessions: [{ status: 'failed' }] }), false);
+  assert.equal(anyWatchable({ sessions: [{ status: 'ended' }] }), false);
+  assert.equal(anyWatchable({ sessions: [] }), false);
+  assert.equal(anyWatchable({ sessions: null }), false);
+
+  assert.match(js, /const WATCH_GAP_MS = 5000;/);
+
+  const watchSessions = js.slice(js.indexOf('async function watchSessions()'), js.indexOf('function hideSplash()'));
+  assert.match(
+    watchSessions,
+    /document\.visibilityState !== 'visible'/,
+    'watchSessions must guard on document.visibilityState',
+  );
+});
+
+test('the stop control has a 48px tap band on every layout, and the single-tile name/status pad clear of it', () => {
+  const css = read('app.css');
+
+  const baseRule = css.match(/^\.tile-stop\s*\{[^}]*\}/m);
+  assert.ok(baseRule, 'app.css must carry a base .tile-stop rule');
+  assert.match(baseRule[0], /min-height:\s*48px/);
+
+  const singleRule = css.match(/\.tiles\.single \.tile-stop\s*\{[^}]*\}/);
+  assert.ok(singleRule, 'app.css must carry .tiles.single .tile-stop');
+  assert.match(singleRule[0], /width:\s*48px/);
+  assert.match(singleRule[0], /height:\s*48px/);
+
+  const nameRule = css.match(/\.tiles\.single \.tile\.has-stop \.tile-name[\s\S]*?\{([^}]*)\}/);
+  assert.ok(nameRule, 'app.css must pad .tiles.single .tile.has-stop .tile-name clear of the corner chip');
+  assert.match(nameRule[0], /padding-right:\s*48px/);
+});
+
+test('the confirm carries exactly CANCEL and END & WRITE HANDOFF, and no other kill-button wording exists', () => {
+  const js = read('app.js');
+  const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
+  assert.match(buildTile, /'CANCEL'/);
+  assert.match(buildTile, /'END & WRITE HANDOFF'/);
+  for (const forbidden of ['END IT', 'KILL', 'FORCE', 'input type="checkbox"']) {
+    assert.ok(!js.includes(forbidden), `app.js must not contain "${forbidden}"`);
+  }
+});
+
+test('the four stop/handoff banner strings from the brief appear verbatim in app.js', () => {
+  const js = read('app.js');
+  assert.ok(js.includes("' had already ended.'"), 'already-ended banner text');
+  assert.ok(js.includes("'! Could not end '") && js.includes("'. It is still running - close it at the desk.'"), 'kill-failed banner text');
+  assert.ok(js.includes("'Handoff written for '"), 'handoff-written banner text');
+  assert.ok(js.includes("'! Session ended, but the handoff was not written.'"), 'handoff-not-written banner text');
+});
+
+test('the end-session request is issued only from api.js, never from app.js', () => {
+  assert.ok(read('api.js').includes('/api/sessions/end'), 'api.js must carry the end-session endpoint');
+  assert.ok(!read('app.js').includes('/api/sessions/end'), 'app.js must go through api.js, never the path literal itself');
+});
+
+// --- fix round 1: review findings 1, 2, 4, 5 -------------------------------
+
+test('confirmStarting always calls watchSessions() in its finally, unconditionally after the rearm branch', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function confirmStarting('), js.indexOf('function anyWatchable('));
+  assert.ok(fn.includes('} finally {'), 'confirmStarting must still have a finally block');
+  const finallyBody = fn.slice(fn.indexOf('} finally {'));
+  const rearmMatch = finallyBody.match(/if \(rearm\) \{[\s\S]*?\n    \}/);
+  assert.ok(rearmMatch, 'confirmStarting must still carry the rearm branch');
+  const afterRearm = finallyBody.slice(finallyBody.indexOf(rearmMatch[0]) + rearmMatch[0].length);
+  assert.ok(
+    afterRearm.includes('watchSessions();'),
+    'confirmStarting\'s finally must call watchSessions() after the rearm branch, or a launch landing never starts the watch loop',
+  );
+  assert.ok(
+    !afterRearm.slice(0, afterRearm.indexOf('watchSessions();')).includes('if ('),
+    'the watchSessions() call must be unconditional, not gated behind another branch',
+  );
+});
+
+test('runStop clears state.results before the end request goes out', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function runStop('), js.indexOf('function newProjectNameEl('));
+  assert.ok(fn.includes('state.results.delete(name);'), 'runStop must clear state.results, or an ended session\'s tile can resurrect via the results branch');
+  assert.ok(
+    fn.indexOf('state.results.delete(name);') < fn.indexOf('await endSession(name)'),
+    'state.results must be cleared before the end request is issued, mirroring onProjectTap',
+  );
+});
+
+test('the CANCEL branch renders synchronously before a guarded history.back(), so a double tap cannot pop the app', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function onTileTap('), js.indexOf('function openConfirm('));
+  const cancelBlock = fn.slice(fn.indexOf('if (cancel) {'), fn.indexOf('const go ='));
+  assert.match(
+    cancelBlock,
+    /state\.confirmName = null;\s*render\(\);\s*if \(confirmPushed\) \{ confirmPushed = false; history\.back\(\); \}/,
+    'CANCEL must clear confirmName and render() BEFORE any history.back(), and history.back() must be guarded by confirmPushed',
+  );
+});
+
+test('renderProjects reconciles a stale confirmName before tiles are built', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
+  const reconcile = /if \(state\.confirmName && !rows\.some\(\(r\) => r\.p\.name === state\.confirmName && r\.rs\.stop\)\) \{\s*state\.confirmName = null;\s*if \(confirmPushed\) \{ confirmPushed = false; history\.back\(\); \}\s*\}/;
+  assert.match(fn, reconcile, 'renderProjects must drop a confirmName whose project no longer has a stoppable session');
+  const match = fn.match(reconcile);
+  assert.ok(
+    fn.indexOf(match[0]) < fn.indexOf('const tiles = rows.filter'),
+    'the reconciliation must run before tiles are built, so the same render never draws the stale confirm',
+  );
 });

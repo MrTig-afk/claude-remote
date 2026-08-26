@@ -2,7 +2,7 @@
    (design/ is gitignored, so design/tokens.md is not in the repo).
    Token set - do not introduce any colour outside this list:
    #0a0d0a #0f150f #eafbea #c9d1c9 #9aab9a #4a5a4a #3d4a3d #2a332a
-   #7ee787 #5fae6f #1b231b #6b7a6b */
+   #7ee787 #5fae6f #1b231b #6b7a6b #ff7b72 #e5534b */
 
 * { box-sizing: border-box; }
 
@@ -161,6 +161,78 @@ body {
   color: #5fae6f;
   font-variant-numeric: tabular-nums;
 }
+
+/* STOP - the one destructive control. `#e5534b` at rest, `#ff7b72` on press:
+   design/tokens.md's danger role, which is narrower than the accent's - it
+   means "this ends something" and is never used for a warning, an error or a
+   banner. The word STOP carries the meaning on its own; the colour only
+   reinforces it, because a green running dot sits inches away and red/green
+   is the common colour-vision deficiency. */
+.tile-stop {
+  width: 100%;
+  min-height: 48px;      /* Material 48dp and iOS HIG 44pt, one number */
+  margin-top: auto;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #e5534b;
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tile-stop:active { color: #ff7b72; }
+
+/* ONE running session: the tile is full-width, so STOP is a corner chip. The
+   tap band is the full 48px, not the ~38px of visible glyph, and the name and
+   status reserve that width - otherwise a long name's tail renders under an
+   invisible target and the tap that was meant to do nothing ends a session. */
+.tiles.single .tile { position: relative; }
+.tiles.single .tile-stop {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 48px;
+  height: 48px;
+  min-height: 0;
+  margin: 0;
+}
+.tiles.single .tile.has-stop .tile-name,
+.tiles.single .tile.has-stop .tile-status { padding-right: 48px; }
+
+/* TWO OR MORE: 184px tiles, so a corner chip would cost 6.5 characters of
+   name and its 48px floor would cover most of a 60px tile. Full-width strip
+   along the bottom instead - the base .tile-stop rule above already is one.
+   No media query: the grid is 1fr 1fr, so 360dp and 412dp both fall out. */
+
+/* The confirm replaces the control in place - the tile becomes the question.
+   Stacked, not side by side: END & WRITE HANDOFF does not fit beside CANCEL
+   on a 184px tile. */
+.tile-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: auto;
+}
+.tile-confirm button {
+  width: 100%;
+  min-height: 48px;
+  padding: 6px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  background: none;
+  border: 1px solid #3d4a3d;
+  border-radius: 4px;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.tile-stop-cancel { color: #9aab9a; }
+.tile-stop-go { color: #ff7b72; border-color: #e5534b; }
 
 /* Zone 2 - ALL PROJECTS (list) */
 .allhdr {

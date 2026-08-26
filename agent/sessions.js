@@ -1,12 +1,45 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { getPidDirPath } from './config.js';
-import { findLiveSession, clearPidFile, recordLaunch } from './registry.js';
+import {
+  findLiveSession, clearPidFile, recordLaunch, markSessionState,
+  isPidAlive, HANDOFF_TIMEOUT_MS,
+} from './registry.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
+const HANDOFF_SCRIPT = fileURLToPath(new URL('./handoff-session.ps1', import.meta.url));
+
+// The kill is confirmed by polling the pid, not by trusting taskkill's exit.
+// Bounded by ITERATIONS, not wall clock, so an injected fast interval cannot
+// turn this into a spin loop.
+export const KILL_POLL_ATTEMPTS = 20;
+export const KILL_POLL_INTERVAL_MS = 250;   // 20 x 250ms = 5s ceiling
+
+const execFileAsync = promisify(execFile);
+
+// F1: the pid file names a pid at launch time and is never re-checked until
+// STOP. If the session already ended outside the agent, Windows can have
+// handed that pid to anything by the time STOP is tapped. Before killing it,
+// confirm the pid is still the cmd.exe wrapper launch-session.ps1 started -
+// `tasklist /FI "PID eq <pid>"` is the cheapest check that does not require
+// changing the pid-file format. pid is always a validated positive integer
+// from readPidFile by the time this is called, never request-derived.
+async function defaultPidImageName(pid) {
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']));
+  } catch {
+    return null;
+  }
+  const line = stdout.split(/\r?\n/).find((l) => l.trim() !== '');
+  if (!line) return null;
+  const match = line.match(/^"([^"]*)"/);      // CSV, first field, quoted
+  return match ? match[1] : null;
+}
 
 /**
  * Byte-for-byte port of ConvertTo-SessionName (ClaudeRemote.psm1:1-16).
@@ -140,4 +173,207 @@ export function launchSession(ctx, project) {
   const view = recordLaunch(ctx, { sessionName, project, projectPath: r.path });
 
   return { ok: true, reused: false, session: view };
+}
+
+/** mtimeMs of <projectPath>/HANDOFF.md, or null if it does not (yet) exist. */
+function handoffMtime(projectPath) {
+  try {
+    return fs.statSync(path.join(projectPath, 'HANDOFF.md')).mtimeMs;
+  } catch {
+    return null;            // file may simply not exist yet
+  }
+}
+
+// `--continue` resumes the most recent conversation in that project
+// directory, not a named session - normally that is the session just killed.
+// If the owner was also working in that project at the desk, the desk
+// conversation may be more recent and the handoff would be written from the
+// wrong context. The agent stores the Remote Control session name, not the
+// Claude Code conversation id, so `--resume <id>` cannot be targeted from
+// what it holds today. Accepted; one session per project is the norm.
+// Capturing the conversation id at launch is out of scope for this build.
+//
+// Races the runner's exit against a timeout and never rejects: whichever
+// settles first wins, and the loser is a no-op.
+function watchHandoff(ctx, sessionName, projectPath, mtimeBefore, runner) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const killer = ctx.killSpawner || spawn;
+
+    const finish = (handoffOk, handoffResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      markSessionState(ctx, sessionName, 'handoff', {
+        status: 'ended',
+        ended_at: new Date((ctx.now || Date.now)()).toISOString(),
+        handoff_ok: handoffOk,
+        handoff_result: handoffResult,
+      });
+      resolve({ handoff_ok: handoffOk, handoff_result: handoffResult });
+    };
+
+    const timer = setTimeout(() => {
+      if (Number.isInteger(runner.pid) && runner.pid > 0) {
+        const killChild = killer('taskkill', ['/PID', String(runner.pid), '/T', '/F'], {
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        if (killChild && typeof killChild.on === 'function') {
+          killChild.on('error', (err) => {
+            console.error(`claude-remote agent: taskkill for handoff runner of '${sessionName}' failed to spawn:`, err);
+          });
+        }
+      }
+      finish(false, 'timeout');
+    }, ctx.handoffTimeoutMs ?? HANDOFF_TIMEOUT_MS);
+
+    runner.on('exit', () => {
+      // The exit code is never consulted - a declined write exits 0 having
+      // written nothing (verified on this host 2026-08-26). The file is the
+      // verdict.
+      const after = handoffMtime(projectPath);
+      const written = after !== null && (mtimeBefore === null || after > mtimeBefore);
+      finish(written, written ? 'written' : 'not_written');
+    });
+
+    runner.on('error', () => {
+      finish(false, 'spawn_failed');
+    });
+  });
+}
+
+/**
+ * Force tree-kills the session's process, then spawns a hidden handoff run
+ * in the project folder. ctx.killSpawner and ctx.handoffSpawner are the two
+ * injectable seams, mirroring ctx.spawner; both default to child_process.spawn.
+ */
+export async function endSession(ctx, project) {
+  const r = resolveProjectPath(ctx.baseDir, project);
+  if (!r.ok) return r;
+
+  const sessionName = deriveSessionName(r.path);
+  const existing = findLiveSession(ctx, sessionName);
+
+  if (!existing) {
+    // listSessions has already pruned the dead entry and unlinked its pid
+    // file as part of that read; this is a belt-and-braces no-op.
+    clearPidFile(ctx, sessionName);
+    return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
+  }
+
+  if (existing.status !== 'running' || !Number.isInteger(existing.pid) || existing.pid <= 0) {
+    // Covers `starting` (no pid to kill yet) and `handoff` (already being
+    // ended). Unreachable from a healthy UI - neither state draws a STOP
+    // control - so one code and one message is the whole surface.
+    return { ok: false, status: 409, error: 'session_not_running' };
+  }
+
+  const pid = existing.pid;
+
+  // F2 / two-STOP-races: claim the transition BEFORE touching a real
+  // process. The registry write is the mutex - markSessionState only
+  // patches an entry whose status is still exactly `fromStatus` (null =
+  // "no status field", i.e. `running`), so a second concurrent STOP for the
+  // same project sees `claimed === false` and gets 409 here, and a START in
+  // the same window sees the `handoff` entry as live and returns `reused`
+  // (launchSession / findLiveSession, unchanged). Do NOT prune the entry -
+  // its survival until the handoff finishes is the T45 collision fix.
+  const startedIso = new Date((ctx.now || Date.now)()).toISOString();
+  const claimed = markSessionState(ctx, sessionName, null, { status: 'handoff', handoff_started_at: startedIso });
+  if (!claimed) {
+    return { ok: false, status: 409, error: 'session_not_running' };
+  }
+
+  // Revert helper for every path below that decides NOT to proceed with a
+  // real kill: puts the entry back to status-less (`running`, if the pid
+  // file is left alone) so a later STOP or a relaunch is not blocked by a
+  // claim this call is abandoning. JSON.stringify drops the undefined keys.
+  const revertClaim = () => markSessionState(ctx, sessionName, 'handoff', {
+    status: undefined, handoff_started_at: undefined,
+  });
+
+  // F1: guard against pid reuse before taskkill ever runs. The pid file is
+  // written once at launch and never re-checked; if the session already
+  // ended outside the agent, Windows can have handed that pid to anything.
+  // process.kill(pid, 0) on OUR OWN pid always succeeds, so that case must
+  // be refused explicitly - it is never the session's cmd.exe wrapper.
+  if (pid === process.pid) {
+    clearPidFile(ctx, sessionName);
+    revertClaim();
+    return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
+  }
+
+  // Not wrapped in try/catch: a missing seam (helper-auth's refusePidImageName)
+  // must propagate and fail loudly, same as a missing killSpawner/
+  // handoffSpawner. A genuine real-world lookup failure is handled INSIDE
+  // defaultPidImageName, which never throws - it resolves to null, and null
+  // is not 'cmd.exe', so it already falls into the mismatch branch below.
+  const pidImageName = ctx.pidImageName || defaultPidImageName;
+  const image = await pidImageName(pid);
+  if (image !== 'cmd.exe') {
+    // Not the wrapper launch-session.ps1 started (or the lookup failed) -
+    // treat as already dead. Clear the stale pid file: unlike kill_failed
+    // below, there is no real process here whose truth the entry should
+    // keep deriving.
+    clearPidFile(ctx, sessionName);
+    revertClaim();
+    return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
+  }
+
+  const killer = ctx.killSpawner || spawn;
+  const killChild = killer('taskkill', ['/PID', String(pid), '/T', '/F'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  if (killChild && typeof killChild.on === 'function') {
+    killChild.on('error', (err) => {
+      console.error(`claude-remote agent: taskkill for '${sessionName}' failed to spawn:`, err);
+    });
+  }
+
+  // Bounded post-kill liveness poll. Never process.kill(0) - on Windows that
+  // kills the agent itself; registry.js's isPidAlive is the only liveness
+  // check in the codebase.
+  const isAlive = ctx.isPidAlive || isPidAlive;
+  let dead = !isAlive(pid);
+  for (let i = 0; !dead && i < KILL_POLL_ATTEMPTS; i += 1) {
+    await new Promise((res) => setTimeout(res, ctx.killPollIntervalMs ?? KILL_POLL_INTERVAL_MS));
+    dead = !isAlive(pid);
+  }
+
+  if (!dead) {
+    // Do NOT unlink the pid file. Revert the claim so the entry keeps
+    // deriving `running`, which is the truth - do NOT spawn the handoff.
+    revertClaim();
+    return { ok: true, status: 200, body: { result: 'kill_failed', project, session_name: sessionName } };
+  }
+
+  clearPidFile(ctx, sessionName);
+  // Registry is already at `status: 'handoff'` from the claim above - no
+  // second write needed here.
+
+  const mtimeBefore = handoffMtime(r.path);  // read BEFORE the spawn
+
+  const handoffSpawn = ctx.handoffSpawner || spawn;
+  const runner = handoffSpawn('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', HANDOFF_SCRIPT,
+    '-ProjectPath', r.path,
+  ], {
+    // NO shell, NO detached, NO unref() - the agent must still get the exit
+    // event. windowsHide is what keeps a console window off the owner's desk.
+    stdio: 'ignore',
+    windowsHide: true,
+    cwd: r.path,
+  });
+
+  return {
+    ok: true,
+    status: 200,
+    body: { result: 'handoff_started', project, session_name: sessionName },
+    handoff: watchHandoff(ctx, sessionName, r.path, mtimeBefore, runner),
+  };
 }

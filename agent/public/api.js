@@ -83,6 +83,10 @@ export function launchSession(projectName) {
   return post('/api/sessions', { project: projectName });
 }
 
+export function endSession(projectName) {
+  return post('/api/sessions/end', { project: projectName });
+}
+
 export function createProject(name) {
   return post('/api/projects', { name });
 }

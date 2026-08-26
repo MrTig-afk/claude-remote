@@ -14,6 +14,11 @@ export const REGISTRY_VERSION = 1;
 // PWA. Not worth an endpoint for one banner.
 export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
+// A handoff run the agent is no longer watching (it restarted mid-run) is
+// reported as an ended-with-failure record past this window, so a `handoff`
+// entry can never block a relaunch forever.
+export const HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
+
 /** process.kill(pid, 0): true if a process with that pid exists. Never throws. */
 // Known ceiling: Windows recycles pids, and nothing in node's builtins can tell a
 // recycled pid from the original. A session whose pid is later reused by an
@@ -182,53 +187,131 @@ export function listSessions(ctx) {
       continue;
     }
 
-    const pid = readPidFile(pidDir, sessionName);
-    let status;
-    if (pid !== null) {
-      if (isAlive(pid)) {
-        status = 'running';
+    if (entry.status === undefined) {
+      const pid = readPidFile(pidDir, sessionName);
+      let status;
+      if (pid !== null) {
+        if (isAlive(pid)) {
+          status = 'running';
+        } else {
+          drop(sessionName);          // unchanged: a session that ran and exited
+          continue;                   // is finished, not failed - keep pruning it
+        }
       } else {
-        drop(sessionName);          // unchanged: a session that ran and exited
-        continue;                   // is finished, not failed - keep pruning it
+        const age = nowMs - Date.parse(startedAt);
+        // A started_at in the future is either a tampered file or a clock that
+        // moved backwards. Only a clearly impossible future is dropped: without
+        // some drop the entry stays `starting` forever and blocks every future
+        // relaunch. A SMALL backward step is tolerated and clamped instead,
+        // because deleting here would erase a launch that is very likely
+        // running - and the next tap would then spawn a duplicate session with
+        // the same name, which is the outcome this whole status exists to
+        // prevent. w32time slews small offsets but steps larger ones.
+        if (age < -STARTING_GRACE_MS) {
+          drop(sessionName);
+          continue;
+        }
+        const effectiveAge = Math.max(0, age);
+        if (effectiveAge < STARTING_GRACE_MS) {
+          status = 'starting';
+        } else if (effectiveAge < FAILED_RETENTION_MS) {
+          // No pid file past the grace window. The agent cannot tell "never
+          // started" from "started but the pid write failed" - `failed` here
+          // means only "never confirmed, and never will be". The UI must say
+          // that, not "it failed".
+          status = 'failed';
+        } else {
+          drop(sessionName);
+          continue;
+        }
       }
-    } else {
-      const age = nowMs - Date.parse(startedAt);
-      // A started_at in the future is either a tampered file or a clock that
-      // moved backwards. Only a clearly impossible future is dropped: without
-      // some drop the entry stays `starting` forever and blocks every future
-      // relaunch. A SMALL backward step is tolerated and clamped instead,
-      // because deleting here would erase a launch that is very likely
-      // running - and the next tap would then spawn a duplicate session with
-      // the same name, which is the outcome this whole status exists to
-      // prevent. w32time slews small offsets but steps larger ones.
+
+      survivors.push(entry);
+      views.push({
+        session_name: sessionName,
+        project,
+        path: r.path,
+        status,
+        started_at: startedAt,
+        pid: status === 'running' ? pid : null,
+      });
+    } else if (entry.status === 'handoff') {
+      // No pid-file read here: it is unlinked the moment the kill is
+      // confirmed, so its absence carries no information for this branch.
+      if (!Number.isFinite(Date.parse(entry.handoff_started_at))) {
+        drop(sessionName);
+        continue;
+      }
+      const age = nowMs - Date.parse(entry.handoff_started_at);
+      // Same clock-tamper rule the `starting` branch uses above - without a
+      // drop here a tampered timestamp blocks every future relaunch.
       if (age < -STARTING_GRACE_MS) {
         drop(sessionName);
         continue;
       }
-      const effectiveAge = Math.max(0, age);
-      if (effectiveAge < STARTING_GRACE_MS) {
-        status = 'starting';
-      } else if (effectiveAge < FAILED_RETENTION_MS) {
-        // No pid file past the grace window. The agent cannot tell "never
-        // started" from "started but the pid write failed" - `failed` here
-        // means only "never confirmed, and never will be". The UI must say
-        // that, not "it failed".
-        status = 'failed';
+      const eff = Math.max(0, age);
+      if (eff < HANDOFF_TIMEOUT_MS) {
+        survivors.push(entry);
+        views.push({
+          session_name: sessionName,
+          project,
+          path: r.path,
+          status: 'handoff',
+          started_at: startedAt,
+          pid: null,
+        });
+      } else if (eff >= FAILED_RETENTION_MS) {
+        drop(sessionName);
+        continue;
       } else {
+        // Past the timeout but inside 24h: the agent restarted mid-run and
+        // never got to record a verdict. Report it as an interrupted end
+        // rather than leaving the entry stuck as `handoff` forever.
+        survivors.push(entry);
+        views.push({
+          session_name: sessionName,
+          project,
+          path: r.path,
+          status: 'ended',
+          started_at: startedAt,
+          pid: null,
+          ended_at: entry.handoff_started_at,
+          handoff_ok: false,
+          handoff_result: 'interrupted',
+        });
+      }
+    } else if (entry.status === 'ended') {
+      if (!Number.isFinite(Date.parse(entry.ended_at)) || typeof entry.handoff_ok !== 'boolean') {
         drop(sessionName);
         continue;
       }
+      if (typeof entry.handoff_result !== 'string' || entry.handoff_result === '') {
+        drop(sessionName);
+        continue;
+      }
+      // Clamped, never dropped for a future timestamp - losing the record
+      // loses the only report the owner gets.
+      const age = Math.max(0, nowMs - Date.parse(entry.ended_at));
+      if (age >= FAILED_RETENTION_MS) {
+        drop(sessionName);
+        continue;
+      }
+      survivors.push(entry);
+      views.push({
+        session_name: sessionName,
+        project,
+        path: r.path,
+        status: 'ended',
+        started_at: startedAt,
+        pid: null,
+        ended_at: entry.ended_at,
+        handoff_ok: entry.handoff_ok,
+        handoff_result: entry.handoff_result,
+      });
+    } else {
+      drop(sessionName);
+      continue;
     }
-
-    survivors.push(entry);
-    views.push({
-      session_name: sessionName,
-      project,
-      path: r.path,
-      status,
-      started_at: startedAt,
-      pid: status === 'running' ? pid : null,
-    });
   }
 
   if (droppedAny) {
@@ -239,11 +322,15 @@ export function listSessions(ctx) {
 }
 
 /** The live SessionView whose session_name === sessionName, or null.
- *  `failed` is deliberately NOT live: it is retained only to be shown, and
- *  treating it as live would make the project permanently unlaunchable. */
+ *  `failed` and `ended` are deliberately NOT live: both are retained only to
+ *  be shown, and treating either as live would make the project permanently
+ *  unlaunchable. `handoff` IS live - it blocks relaunch while the run is in
+ *  flight, which keeps the session inside the agent's own knowledge until a
+ *  verdict is recorded. */
 export function findLiveSession(ctx, sessionName) {
   const sessions = listSessions(ctx);
-  return sessions.find((s) => s.session_name === sessionName && s.status !== 'failed') || null;
+  return sessions.find((s) => s.session_name === sessionName
+    && s.status !== 'failed' && s.status !== 'ended') || null;
 }
 
 /**
@@ -295,4 +382,40 @@ export function recordLaunch(ctx, { sessionName, project, projectPath }) {
     started_at: startedAt,
     pid: null,
   };
+}
+
+/**
+ * Patches the registry entry named sessionName IF its current `status` field
+ * equals fromStatus (pass null to mean "the entry has no status field").
+ * Returns true iff it patched. NEVER appends - a name that is gone stays gone,
+ * which is what stops a finishing handoff from marking a freshly relaunched
+ * session as ended. Never throws.
+ */
+export function markSessionState(ctx, sessionName, fromStatus, patch) {
+  const { registryPath = getRegistryFilePath() } = ctx;
+
+  let sessions = [];
+  try {
+    const raw = fs.readFileSync(registryPath, 'utf8');
+    if (raw.trim() !== '') {
+      const parsed = JSON.parse(raw);
+      if (
+        parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+        parsed.version === REGISTRY_VERSION && Array.isArray(parsed.sessions)
+      ) {
+        sessions = parsed.sessions;
+      }
+    }
+  } catch {
+    // Missing or corrupt - treated as empty, same contract as recordLaunch.
+  }
+
+  const entry = sessions.find((e) => e && typeof e === 'object' && e.session_name === sessionName);
+  if (!entry || (entry.status ?? null) !== fromStatus) {
+    return false;
+  }
+
+  Object.assign(entry, patch);
+  writeRegistry(registryPath, sessions);
+  return true;
 }

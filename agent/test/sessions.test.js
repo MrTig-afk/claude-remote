@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, after } from 'node:test';
 
-import { deriveSessionName, resolveProjectPath, launchSession } from '../sessions.js';
-import { STARTING_GRACE_MS } from '../registry.js';
+import { deriveSessionName, resolveProjectPath, launchSession, endSession } from '../sessions.js';
+import { STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION } from '../registry.js';
 import { seedPasscode, issueTestToken, authHeaders, fixtureServer } from './helper-auth.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-sessions-'));
@@ -75,6 +75,56 @@ function makeRegCtx(extra = {}) {
 // gate sits above those routes.
 function authedFetch(regCtx, url, opts = {}) {
   return fetch(url, { ...opts, headers: { ...authHeaders(regCtx.token), ...(opts.headers || {}) } });
+}
+
+// A kill seam that behaves like the real taskkill from endSession's point of
+// view: the pid it is asked to kill is reported alive right up until this
+// spawner is actually called, then dead - the same order endSession itself
+// checks in (findLiveSession, THEN the kill, THEN the poll).
+function makeKillingSpawner(trackedPid) {
+  const calls = [];
+  let alive = true;
+  function spawner(file, args, options) {
+    const child = {
+      pid: 5555,
+      handlers: {},
+      on(event, fn) { this.handlers[event] = fn; return this; },
+    };
+    calls.push({ file, args, options, child });
+    alive = false;
+    return child;
+  }
+  return { spawner, calls, isPidAlive: (pid) => pid === trackedPid && alive };
+}
+
+// Seeds a `running` registry entry directly (recordLaunch + a pid file),
+// bypassing launchSession entirely - endSession never launches anything.
+function makeRunningEntry(regCtx, project, pid) {
+  const projectPath = path.resolve(base, project);
+  const sessionName = deriveSessionName(projectPath);
+  recordLaunch(regCtx, { sessionName, project, projectPath });
+  fs.mkdirSync(regCtx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(regCtx.pidDir, `${sessionName}.pid`), String(pid), 'ascii');
+  return { sessionName, projectPath };
+}
+
+// Seeds a `handoff` registry entry directly - this state is never reached
+// through recordLaunch, so it is written raw, the same way registry.test.js
+// seeds non-default states.
+function seedHandoffEntry(regCtx, project, handoffStartedAt = new Date().toISOString()) {
+  const projectPath = path.resolve(base, project);
+  const sessionName = deriveSessionName(projectPath);
+  const sessions = [{
+    session_name: sessionName,
+    project,
+    original_path: projectPath,
+    started_at: new Date(Date.now() - 60_000).toISOString(),
+    status: 'handoff',
+    handoff_started_at: handoffStartedAt,
+  }];
+  fs.mkdirSync(path.dirname(regCtx.registryPath), { recursive: true });
+  fs.writeFileSync(regCtx.registryPath, JSON.stringify({ version: REGISTRY_VERSION, sessions }), 'utf8');
+  return sessionName;
 }
 
 // --- 6.3 deriveSessionName - the naming contract ---------------------------
@@ -807,4 +857,657 @@ test('launchSession still succeeds when the pid dir cannot be created - fails to
 
   assert.equal(r.ok, true, 'a broken pid dir must NOT block the launch');
   assert.equal(calls.length, 1, 'the spawn must still happen');
+});
+
+// --- POST /api/sessions/end - the gate, validation and Lane D1 -------------
+
+test('HTTP - POST /api/sessions/end with no token -> 401, the route sits below the gate', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await fetch(`${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 401);
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end unknown project -> 404 project_not_found', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'no-such-project' }),
+    });
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), { error: 'project_not_found' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end with a traversing project -> 400 invalid_project', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: '../evil' }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: 'invalid_project' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end with project missing -> 400 invalid_request', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: 'invalid_request' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end malformed-body table (not JSON / array / over 8KB)', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const notJson = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: 'not json at all',
+    });
+    assert.equal(notJson.status, 400);
+    assert.deepEqual(await notJson.json(), { error: 'invalid_request' });
+
+    const arrayBody = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify([]),
+    });
+    assert.equal(arrayBody.status, 400);
+    assert.deepEqual(await arrayBody.json(), { error: 'invalid_request' });
+
+    const bigBody = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'x'.repeat(9 * 1024) }),
+    });
+    assert.equal(bigBody.status, 413);
+    assert.deepEqual(await bigBody.json(), { error: 'payload_too_large' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - GET /api/sessions/end -> 404 not_found', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`);
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), { error: 'not_found' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end/ (trailing slash) -> 404 not_found', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 404);
+    assert.deepEqual(await res.json(), { error: 'not_found' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end with no live session -> 200 already_ended, nothing left in the registry', async () => {
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      result: 'already_ended',
+      project: 'Pull Requests',
+      session_name: 'pull-requests',
+    });
+    assert.equal(fs.existsSync(regCtx.registryPath), false);
+  } finally {
+    server.close();
+  }
+});
+
+// --- POST /api/sessions/end - the kill and the handoff spawn ----------------
+
+test('HTTP - POST /api/sessions/end on a running session: exact taskkill argv and options', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7777);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  makeRunningEntry(regCtx, 'Pull Requests', 7777);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 200);
+    assert.equal(killer.calls.length, 1);
+    assert.equal(killer.calls[0].file, 'taskkill');
+    assert.deepEqual(killer.calls[0].args, ['/PID', '7777', '/T', '/F']);
+    assert.deepEqual(killer.calls[0].options, { stdio: 'ignore', windowsHide: true });
+    assert.ok(!killer.calls[0].args.some((a) => a.includes(' ')));
+  } finally {
+    // server.js never awaits endSession's handoff promise, so its internal
+    // timer is still armed; settle it the same way the runner exiting would,
+    // or this test leaves a real 10-minute timer running.
+    handoffCalls[0].child.handlers.exit();
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end on a running session: response, pid file, registry state, handoff spawn count', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7778);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 7778);
+  const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      result: 'handoff_started',
+      project: 'Pull Requests',
+      session_name: sessionName,
+    });
+
+    assert.equal(fs.existsSync(pidFilePath), false);
+
+    const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+    const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+    assert.ok(entry, 'the entry must still exist after the kill, not be pruned');
+    assert.equal(entry.status, 'handoff');
+    assert.ok(Number.isFinite(Date.parse(entry.handoff_started_at)));
+
+    assert.equal(handoffCalls.length, 1);
+  } finally {
+    handoffCalls[0].child.handlers.exit();
+    server.close();
+  }
+});
+
+test('HTTP - handoff seam receives the exact recipe argv, cwd and options', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7779);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  makeRunningEntry(regCtx, 'Pull Requests', 7779);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(handoffCalls.length, 1);
+    const call = handoffCalls[0];
+    const HANDOFF_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'handoff-session.ps1');
+    const projectPath = path.join(base, 'Pull Requests');
+    assert.equal(call.file, 'powershell.exe');
+    assert.deepEqual(call.args, [
+      '-NoProfile',
+      '-NonInteractive',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', HANDOFF_SCRIPT,
+      '-ProjectPath', projectPath,
+    ]);
+    assert.deepEqual(call.options, { stdio: 'ignore', windowsHide: true, cwd: projectPath });
+  } finally {
+    handoffCalls[0].child.handlers.exit();
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end when the pid survives the kill -> kill_failed, no handoff, session still running', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => true, killPollIntervalMs: 1, pidImageName: () => 'cmd.exe' });
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 8888);
+  const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
+  const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      result: 'kill_failed',
+      project: 'Pull Requests',
+      session_name: sessionName,
+    });
+    assert.equal(killCalls.length, 1);
+    assert.equal(handoffCalls.length, 0);
+    assert.equal(fs.existsSync(pidFilePath), true);
+
+    const listRes = await authedFetch(regCtx, `${origin}/api/sessions`);
+    const listBody = await listRes.json();
+    const entry = listBody.sessions.find((s) => s.session_name === sessionName);
+    assert.ok(entry);
+    assert.equal(entry.status, 'running');
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end while already in handoff -> 409, kill not called again', async () => {
+  const regCtx = makeRegCtx();
+  seedHandoffEntry(regCtx, 'Pull Requests');
+  const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
+  const { spawner: handoffSpawner } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 409);
+    assert.deepEqual(await res.json(), { error: 'session_not_running' });
+    assert.equal(killCalls.length, 0);
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end on a starting session (no pid file) -> 409, no seam call', async () => {
+  const regCtx = makeRegCtx();
+  const projectPath = path.resolve(base, 'Pull Requests');
+  const sessionName = deriveSessionName(projectPath);
+  recordLaunch(regCtx, { sessionName, project: 'Pull Requests', projectPath });
+  const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
+  const { spawner: handoffSpawner } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 409);
+    assert.deepEqual(await res.json(), { error: 'session_not_running' });
+    assert.equal(killCalls.length, 0);
+  } finally {
+    server.close();
+  }
+});
+
+// --- endSession - F1 (pid reuse) and F2 (concurrent STOP/START) guards -----
+
+test('endSession - pid equals the agent\'s own process.pid -> already_ended, no taskkill, claim reverted', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: (pid) => pid === process.pid });
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', process.pid);
+  const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner, handoffSpawner: makeFakeSpawner().spawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.body.result, 'already_ended');
+  assert.equal(killCalls.length, 0, 'taskkill must never be called against the agent\'s own pid');
+
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.equal(entry.status, undefined, 'the handoff claim must be reverted, not left in place');
+});
+
+test('endSession - pid image is not cmd.exe (reused pid) -> already_ended, no taskkill, claim reverted', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => true, pidImageName: () => 'notepad.exe' });
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 9991);
+  const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
+  const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner, handoffSpawner: makeFakeSpawner().spawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.body.result, 'already_ended');
+  assert.equal(killCalls.length, 0, 'taskkill must never run against a pid whose image is not cmd.exe');
+  assert.equal(fs.existsSync(pidFilePath), false, 'the stale pid file must be cleared');
+
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.equal(entry.status, undefined, 'the handoff claim must be reverted, not left in place');
+});
+
+test('endSession - two concurrent calls for the same project: exactly one runner spawned, the loser gets 409', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(9992);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  makeRunningEntry(regCtx, 'Pull Requests', 9992);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const [r1, r2] = await Promise.all([
+    endSession(ctx, 'Pull Requests'),
+    endSession(ctx, 'Pull Requests'),
+  ]);
+
+  const started = [r1, r2].filter((r) => r.ok && r.body && r.body.result === 'handoff_started');
+  const rejected = [r1, r2].filter((r) => !r.ok && r.status === 409);
+  assert.equal(started.length, 1, 'exactly one call must win the claim and spawn the runner');
+  assert.equal(rejected.length, 1, 'the loser must get 409 session_not_running');
+  assert.deepEqual(rejected[0], { ok: false, status: 409, error: 'session_not_running' });
+  assert.equal(killer.calls.length, 1, 'taskkill must run exactly once');
+  assert.equal(handoffCalls.length, 1, 'exactly one handoff runner must be spawned');
+
+  handoffCalls[0].child.handlers.exit();
+  await started[0].handoff;
+});
+
+test('endSession - a launch landing during the kill poll returns reused with the handoff entry', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(9993);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  makeRunningEntry(regCtx, 'Pull Requests', 9993);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const endPromise = endSession(ctx, 'Pull Requests');
+
+  // The claim (status: 'handoff') is written synchronously before endSession
+  // ever awaits, so a launch landing in this window - the exact T45 race the
+  // comments in sessions.js worry about - sees it immediately.
+  const launchResult = launchSession(ctx, 'Pull Requests');
+  assert.equal(launchResult.ok, true);
+  assert.equal(launchResult.reused, true);
+  assert.equal(launchResult.session.status, 'handoff');
+
+  const result = await endPromise;
+  assert.equal(result.body.result, 'handoff_started');
+  handoffCalls[0].child.handlers.exit();
+  await result.handoff;
+});
+
+test('recipe-integrity - handoff-session.ps1 carries the proven handoff recipe', () => {
+  const script = fs.readFileSync(
+    path.join(path.resolve(import.meta.dirname, '..'), 'handoff-session.ps1'),
+    'utf8',
+  );
+  for (const token of [
+    'claude.cmd', '-p', '--continue', '/handoff', '--allowedTools', 'Write', 'Edit',
+    'CLAUDE_CONFIG_DIR', '.claude-max',
+  ]) {
+    assert.ok(script.includes(token), `handoff-session.ps1 must include ${token}`);
+  }
+  assert.ok(!script.includes('--remote-control'));
+  assert.ok(!script.includes('--dangerously-skip-permissions'));
+  assert.ok(!script.includes('Start-Process'));
+});
+
+// --- endSession - the background handoff verdict (unit level) --------------
+
+test('endSession - handoff exit with HANDOFF.md mtime moved -> ended record written/true', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(1111);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Pull Requests', 1111);
+  const handoffPath = path.join(projectPath, 'HANDOFF.md');
+  fs.writeFileSync(handoffPath, 'old');
+  const oldTime = new Date(Date.now() - 60_000);
+  fs.utimesSync(handoffPath, oldTime, oldTime);
+
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests');
+  assert.equal(result.body.result, 'handoff_started');
+
+  fs.writeFileSync(handoffPath, 'new');
+  const newTime = new Date();
+  fs.utimesSync(handoffPath, newTime, newTime);
+  handoffCalls[0].child.handlers.exit();
+
+  const verdict = await result.handoff;
+  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
+
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.equal(entry.status, 'ended');
+  assert.equal(entry.handoff_ok, true);
+  assert.equal(entry.handoff_result, 'written');
+  assert.ok(Number.isFinite(Date.parse(entry.ended_at)));
+});
+
+test('endSession - handoff exits 0 with mtime unchanged -> ended record not_written/false (exit code not consulted)', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(1112);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  // A project folder of its own, not 'Pull Requests' - other tests in this
+  // file write a HANDOFF.md into that shared fixture folder, and this test
+  // needs to control the file's presence itself.
+  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Video Editing', 1112);
+  const handoffPath = path.join(projectPath, 'HANDOFF.md');
+  fs.writeFileSync(handoffPath, 'unchanged');
+  const fixedTime = new Date(Date.now() - 60_000);
+  fs.utimesSync(handoffPath, fixedTime, fixedTime);
+
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Video Editing');
+  // Fire with an explicit exit code argument - the implementation must not
+  // read it at all.
+  handoffCalls[0].child.handlers.exit(0);
+
+  const verdict = await result.handoff;
+  assert.deepEqual(verdict, { handoff_ok: false, handoff_result: 'not_written' });
+
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.equal(entry.handoff_ok, false);
+  assert.equal(entry.handoff_result, 'not_written');
+});
+
+test('endSession - HANDOFF.md absent before, present after -> written/true', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(1113);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  // A third project folder of its own, same reason as the test above.
+  const { projectPath } = makeRunningEntry(regCtx, 'email-lint', 1113);
+  const handoffPath = path.join(projectPath, 'HANDOFF.md');
+  assert.equal(fs.existsSync(handoffPath), false);
+
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const result = await endSession(ctx, 'email-lint');
+  fs.writeFileSync(handoffPath, 'brand new');
+  handoffCalls[0].child.handlers.exit();
+
+  const verdict = await result.handoff;
+  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
+});
+
+test('endSession - handoff timeout kills the runner via the same kill seam and records timeout', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(2222);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 2222);
+  const { spawner: handoffSpawner } = makeFakeSpawner(); // never fires exit/error
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, handoffTimeoutMs: 10, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests');
+  const verdict = await result.handoff;
+
+  assert.deepEqual(verdict, { handoff_ok: false, handoff_result: 'timeout' });
+  assert.equal(killer.calls.length, 2);
+  assert.equal(killer.calls[1].file, 'taskkill');
+  assert.deepEqual(killer.calls[1].args, ['/PID', '4242', '/T', '/F']);
+
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.equal(entry.status, 'ended');
+  assert.equal(entry.handoff_result, 'timeout');
+  assert.equal(entry.handoff_ok, false);
+});
+
+test('endSession - handoff spawn error -> ended record spawn_failed/false', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(3333);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 3333);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests');
+  handoffCalls[0].child.handlers.error(new Error('boom'));
+  const verdict = await result.handoff;
+
+  assert.deepEqual(verdict, { handoff_ok: false, handoff_result: 'spawn_failed' });
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.equal(entry.handoff_result, 'spawn_failed');
+});
+
+test('endSession - a relaunch during the in-flight handoff is not overwritten when the run finishes', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(4444);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Pull Requests', 4444);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests');
+  assert.equal(result.body.result, 'handoff_started');
+
+  // The owner relaunches the same project from the phone while the handoff
+  // is still running - recordLaunch replaces the entry with a fresh one.
+  recordLaunch(regCtx, { sessionName, project: 'Pull Requests', projectPath });
+
+  handoffCalls[0].child.handlers.exit();
+  await result.handoff;
+
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
+  assert.notEqual(entry.status, 'ended');
+  assert.equal(entry.status, undefined);
+});
+
+// --- helper-auth.js's refusal property, exercised through the real route ---
+
+test('HTTP - POST /api/sessions/end with no killSpawner in the fixture ctx -> 500, never touches a real process', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => true, pidImageName: () => 'cmd.exe' });
+  makeRunningEntry(regCtx, 'Pull Requests', 6666);
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 500);
+    assert.deepEqual(await res.json(), { error: 'internal_error' });
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end with no handoffSpawner in the fixture ctx -> 500 after a real-shaped kill', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(6667);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  makeRunningEntry(regCtx, 'Pull Requests', 6667);
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests' }),
+    });
+    assert.equal(res.status, 500);
+    assert.deepEqual(await res.json(), { error: 'internal_error' });
+  } finally {
+    server.close();
+  }
 });
