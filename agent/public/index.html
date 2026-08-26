@@ -52,18 +52,21 @@
         <div class="ver">v0.1</div>
       </div>
       <!-- Ships hidden and is revealed only when the project list itself is
-           rendered. This line reports the agent link for that list, so on a
-           passcode screen it has nothing true to say - it would claim
-           CONNECTING while the truth is "connected, and locked" - and it is
-           one more element that could otherwise put state on a locked
+           rendered. This line reports whether the agent answered for that
+           list, so on a passcode screen it has nothing true to say - it would
+           claim CONNECTING while the truth is "connected, and locked" - and
+           it is one more element that could otherwise put state on a locked
            screen. The hidden attribute is what hides it, so the force-hide
            rule at the top of app.css covers it: no author display rule can
-           quietly bring it back. -->
+           quietly bring it back.
+           It carries no hostname. There is exactly one agent and one machine,
+           and the app can only have been installed from that machine's
+           origin, so the name is a constant rather than state - and on a
+           390px screen the full tailnet name pushed this line to three and
+           four wrapped rows of chrome above the first project. -->
       <div class="conn" id="conn" hidden>
         <svg class="dot" width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><circle cx="4" cy="4" r="3.5" fill="none" stroke="#3d4a3d" stroke-width="1"/></svg>
         <span class="conn-text">CONNECTING</span>
-        <span class="conn-sep">&middot;</span>
-        <span class="conn-host"></span>
       </div>
     </header>
 

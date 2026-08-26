@@ -165,7 +165,11 @@ function rowState(p) {
   if (state.sessions === null) {
     return { zone: 'list', dot: 'dim', status: 'session state unknown', idle: '—' };
   }
-  return { zone: 'list', dot: 'dim', status: 'no session', idle: '—' };
+  // implicit: this is the default state of every project that is not running,
+  // and the hollow dot already says it. Drawing it on all fifteen rows cost a
+  // second line of height each and told the owner nothing he could act on.
+  // The string stays so a screen reader still gets it.
+  return { zone: 'list', dot: 'dim', status: 'no session', idle: '—', implicit: true };
 }
 
 function setDot(svg, kind) {
@@ -190,7 +194,11 @@ function buildDot(kind) {
   return svg;
 }
 
-function tileStatusLine(rs) {
+// Tiles and list rows both use this. The list has no separate idle column any
+// more, so this is the only thing carrying a row's elapsed time - the one
+// list state that has a real one (a launch that was never confirmed) would
+// otherwise lose it silently.
+function statusLine(rs) {
   return rs.idle && rs.idle !== '—' ? `${rs.status} - ${rs.idle}` : rs.status;
 }
 
@@ -205,7 +213,7 @@ function buildTile(p, rs) {
   el.appendChild(name);
   const status = document.createElement('span');
   status.className = 'tile-status';
-  status.textContent = tileStatusLine(rs);
+  status.textContent = statusLine(rs);
   el.appendChild(status);
   return el;
 }
@@ -215,6 +223,10 @@ function buildRow(p, rs) {
   btn.type = 'button';
   btn.className = 'row';
   btn.dataset.project = p.name;
+  // The dot is decorative and the default status is not drawn, so the row's
+  // state has to reach a screen reader some other way. This is that way, and
+  // it says the same thing for every row whether or not the line is visible.
+  btn.setAttribute('aria-label', `${p.name}, ${statusLine(rs)}`);
 
   const dot = buildDot(rs.dot);
   btn.appendChild(dot);
@@ -224,21 +236,14 @@ function buildRow(p, rs) {
   const nameEl = document.createElement('span');
   nameEl.className = 'row-name';
   nameEl.textContent = p.name;
-  const statusEl = document.createElement('span');
-  statusEl.className = 'row-status';
-  statusEl.textContent = rs.status;
-  main.append(nameEl, statusEl);
+  main.appendChild(nameEl);
+  if (!rs.implicit) {
+    const statusEl = document.createElement('span');
+    statusEl.className = 'row-status';
+    statusEl.textContent = statusLine(rs);
+    main.appendChild(statusEl);
+  }
   btn.appendChild(main);
-
-  const idleEl = document.createElement('span');
-  idleEl.className = 'row-idle';
-  idleEl.textContent = rs.idle;
-  btn.appendChild(idleEl);
-
-  const chev = document.createElement('span');
-  chev.className = 'row-chev';
-  chev.textContent = '>';
-  btn.appendChild(chev);
 
   return btn;
 }
@@ -366,8 +371,6 @@ function renderConn() {
   const conn = document.getElementById('conn');
   const dot = conn.querySelector('.dot');
   const text = conn.querySelector('.conn-text');
-  const host = conn.querySelector('.conn-host');
-  host.textContent = location.host;
 
   if (state.reachable === null) {
     setDot(dot, 'dim');

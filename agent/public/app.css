@@ -60,11 +60,14 @@ body {
    sits on the wordmark's baseline, and centres the 22px square optically
    against the 19px wordmark. */
 .mark { align-self: center; margin-block: -11px; margin-right: 10px; }
-.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.03em; }
+/* nowrap is the guarantee, not the measurement: this line is monospace with
+   no bundled font file, so every device picks its own fallback at its own
+   advance width and a line that fits here can still wrap to three rows on a
+   phone. One line of status, or it overflows visibly - never four rows of
+   chrome above the first project. */
+.conn { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.03em; white-space: nowrap; }
 .conn-text { color: #9aab9a; }
 .conn-text.reachable { color: #7ee787; }
-.conn-sep { color: #3d4a3d; }
-.conn-host { color: #6b7a6b; }
 
 /* Splash - the first thing painted, before any script has parsed. Covers the
    whole viewport (z-index because the floating + button is positioned too),
@@ -174,11 +177,12 @@ body {
 .list {
   display: flex;
   flex-direction: column;
-  /* Load-bearing, not dead space: .newproj is position:fixed, so scrolled to
-     the bottom it sits 100-144px up from the viewport edge. This padding
-     reserves that band so the button can never cover the last project row.
-     Deleting it recreates the overlap against a row instead of REFRESH. */
-  padding: 0 12px 46px;
+  /* No bottom reserve here any more. The reserve still exists and is still
+     load-bearing - it moved to .footer, because that is where the fixed +
+     button now sits. Re-measured at 390x844 with 15 projects: scrolled to the
+     end the last row ends 100px above the button's top edge. Putting a reserve
+     back here would only be dead space. */
+  padding: 0 12px;
   gap: 2px;
 }
 .row {
@@ -201,9 +205,13 @@ body {
 .row .dot { flex-shrink: 0; }
 .row-main { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0; }
 .row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: #9aab9a; }
+/* Only informative states draw a status line, so on most rows this rule is
+   unused and the row collapses to the 44px tap-target floor. The right-hand
+   idle column and chevron are gone: a project in this list is by definition
+   not running, so the column could only ever draw an em-dash, and a chevron
+   distinguishes nothing on a list where every row is tappable. Both were
+   spending the right third of a 390px row on decoration. */
 .row-status { font-size: 11px; color: #9aab9a; }
-.row-idle { font-size: 12px; width: 32px; text-align: right; flex-shrink: 0; color: #3d4a3d; }
-.row-chev { font-size: 14px; color: #2a332a; }
 
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 
@@ -272,11 +280,17 @@ body {
    so an absolutely positioned button sits at the DOCUMENT bottom, invisible
    until scrolled all the way down and overlapping REFRESH there. fixed
    anchors it to the viewport instead, staying clear of REFRESH at every
-   scroll position. */
+   scroll position.
+   The 13px inset is the same on both axes, so it reads as anchored to the
+   corner. An earlier 100px bottom parked it four fifths of the way down the
+   screen, over a project row, which read as misplaced rather than floating;
+   it was that high only because nothing below the list reserved room for it.
+   .footer now does, so the button can sit where a thumb expects it. Move it
+   and that reserve has to move with it - they are one decision. */
 .newproj {
   position: fixed;
   right: max(13px, calc(50% - 215px + 13px));
-  bottom: calc(100px + env(safe-area-inset-bottom));
+  bottom: calc(13px + env(safe-area-inset-bottom));
   width: 44px;
   height: 44px;
   padding: 0;
@@ -322,7 +336,12 @@ body {
 .refresh:active { color: #9aab9a; }
 
 .footer {
-  padding: 14px 20px calc(22px + env(safe-area-inset-bottom));
+  /* 22px of footer inset, then 57px more: the band the fixed + button
+     occupies at the bottom-right corner (44px of button plus its 13px
+     inset). Scrolled to the end of a long list this is what keeps the button
+     off REFRESH and off the summary line - the same job .list's old 46px
+     bottom padding did when the button floated mid-list. */
+  padding: 14px 20px calc(22px + 57px + env(safe-area-inset-bottom));
   font-size: 10px;
   color: #2a332a;
   text-align: center;

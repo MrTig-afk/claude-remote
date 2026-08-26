@@ -500,3 +500,119 @@ test('app.css keeps #picker as a flex column with flex-grow, or .spacer stops pu
   const css = read('app.css');
   assert.match(css, /#picker\s*\{[^}]*flex-grow:\s*1[^}]*\}/);
 });
+
+// --- Picker layout on a phone ---
+
+// The mechanism, not the pixel count. This app bundles no font file, so every
+// device resolves the monospace stack to its own face at its own advance
+// width - a status line that measures one row in a desktop browser really did
+// render as two on the phone, above two more rows of wrapped hostname. nowrap
+// is what makes the height independent of that; a measurement in one browser
+// is not.
+test('the connection line is one line on any device, and names no host', () => {
+  const css = read('app.css');
+  const rule = css.match(/\.conn\s*\{[^}]*\}/);
+  assert.ok(rule, 'app.css must carry a .conn rule');
+  assert.match(
+    rule[0],
+    /white-space:\s*nowrap/,
+    'the status line must not be allowed to wrap - a wider fallback font is what put it on four rows',
+  );
+
+  // One agent, one machine, and the app can only have been installed from
+  // that machine's origin: the hostname is a constant, not state, and it is
+  // what wrapped.
+  assert.ok(!read('index.html').includes('conn-host'), 'the header must not carry a hostname element');
+  assert.ok(!read('app.js').includes('location.host'), 'app.js must not put the hostname in the header');
+});
+
+// The standing decision this replaces: while the + floated 100px up, .list
+// reserved 46px so the button could not cover the last project row. The
+// button now sits in the bottom corner, so the reserve has to be below the
+// footer instead. Both halves are one decision - this checks the arithmetic
+// that ties them, so moving either alone fails here.
+test('the + button is anchored to the bottom corner and the page reserves the band it occupies', () => {
+  const css = read('app.css');
+  const btn = css.match(/\.newproj\s*\{[^}]*\}/);
+  assert.ok(btn, 'app.css must carry a .newproj rule');
+
+  const inset = Number(btn[0].match(/bottom:\s*calc\((\d+)px/)[1]);
+  const height = Number(btn[0].match(/height:\s*(\d+)px/)[1]);
+  assert.ok(
+    inset <= 24,
+    `the + must sit in the corner, not over the list: bottom inset is ${inset}px`,
+  );
+
+  const footer = css.match(/\.footer\s*\{[^}]*\}/);
+  assert.ok(footer, 'app.css must carry a .footer rule');
+  const calc = footer[0].match(/padding:\s*[^;]*calc\(([^)]*)\)/);
+  assert.ok(calc, '.footer must reserve its bottom band in a calc()');
+  const reserve = [...calc[1].matchAll(/(\d+)px/g)].reduce((sum, m) => sum + Number(m[1]), 0);
+  assert.ok(
+    reserve >= inset + height,
+    `scrolled to the end the + occupies the bottom ${inset + height}px, so .footer must reserve at least that; it reserves ${reserve}px`,
+  );
+});
+
+// Executed, not grepped: the literal is lifted out of rowState and evaluated,
+// so a status quietly put back fails here rather than passing on a string
+// match. It cannot prove what a browser paints - it proves the two halves
+// that decide it.
+test('a project with no session renders as its name alone - the hollow dot is the state', () => {
+  const js = read('app.js');
+  const rowState = js.slice(js.indexOf('function rowState('), js.indexOf('function setDot('));
+  const returns = [...rowState.matchAll(/return (\{[^}]*\});/g)];
+  assert.ok(returns.length > 0, 'rowState must return row descriptors');
+  const fallback = new Function(`return ${returns[returns.length - 1][1]};`)();
+  assert.equal(fallback.zone, 'list');
+  assert.equal(fallback.implicit, true, 'the default idle state must be marked as the one not drawn');
+
+  const buildRow = js.slice(js.indexOf('function buildRow('), js.indexOf('function setBanner('));
+  assert.match(buildRow, /if \(!rs\.implicit\)/, 'buildRow must skip the status line for that state');
+
+  // Dropping the visible line must not drop the state for a screen reader:
+  // the dot is aria-hidden, so without this a row would announce a bare name.
+  // Scoped to what the label SAYS, not merely that the attribute is set - a
+  // bare /aria-label/ stays green when the value is narrowed to the name
+  // alone, which is exactly the regression this guards.
+  assert.match(
+    buildRow,
+    /aria-label',\s*`\$\{p\.name\},\s*\$\{statusLine\(rs\)\}`/,
+    'the row must announce its state, not just carry an aria-label',
+  );
+  assert.equal(fallback.status, 'no session', 'and the words it announces live in one place');
+});
+
+// The right-hand column is gone, so this is now the ONLY thing carrying a
+// row's elapsed time. A launch that was never confirmed is the one list state
+// that has a real one, and losing it silently is the risk of removing the
+// column at all.
+test('a list row folds its elapsed time into the status line, so the removed idle column costs nothing', () => {
+  const js = read('app.js');
+  const body = js.match(/function statusLine\(rs\) \{\s*return ([^;]+);/);
+  assert.ok(body, 'app.js must carry statusLine');
+  const statusLine = new Function('rs', `return ${body[1]};`);
+  assert.equal(statusLine({ status: 'launch unconfirmed', idle: '3m' }), 'launch unconfirmed - 3m');
+  assert.equal(statusLine({ status: 'could not start', idle: '—' }), 'could not start');
+
+  // The VISIBLE line specifically. Asserting on a bare statusLine(rs) passed
+  // while the drawn text had been swapped back to rs.status, because the
+  // aria-label a few lines up calls it too - the row still announced the time
+  // and no longer showed it.
+  const buildRow = js.slice(js.indexOf('function buildRow('), js.indexOf('function setBanner('));
+  assert.match(
+    buildRow,
+    /statusEl\.textContent = statusLine\(rs\)/,
+    'the line the owner reads must use it, not just the aria-label',
+  );
+
+  // A project in this list is by definition not running, so an idle column
+  // could only ever draw an em-dash and a chevron distinguishes nothing on a
+  // list where every row is tappable. Both spent the right third of a 390px
+  // row on decoration.
+  const css = read('app.css');
+  for (const cls of ['row-idle', 'row-chev']) {
+    assert.ok(!buildRow.includes(cls), `list rows must not rebuild .${cls}`);
+    assert.ok(!new RegExp(`\\.${cls}\\s*\\{`).test(css), `app.css must not restyle .${cls}`);
+  }
+});
