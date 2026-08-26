@@ -23,9 +23,13 @@ export const HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
 // Known ceiling: Windows recycles pids, and nothing in node's builtins can tell a
 // recycled pid from the original. A session whose pid is later reused by an
 // unrelated process reports "running" forever, so the owner can never relaunch
-// that project from the phone. Upgrade path if it ever bites: store the
-// process start time alongside the pid and compare both. Not worth it until
-// someone actually hits it - pid space is large and sessions are short-lived.
+// that project from the phone. sessions.js's endSession narrows this for the
+// STOP path only, by checking the pid's image name is cmd.exe before killing
+// (see the comment there) - that is a name check, not an identity check, and
+// this function has no such guard at all. Upgrade path if it ever bites: store
+// the process start time alongside the pid and compare both here too. Not
+// worth it until someone actually hits it - pid space is large and sessions
+// are short-lived.
 export function isPidAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -82,6 +86,24 @@ export function clearPidFile(ctx, sessionName) {
   }
 }
 
+/** Reads sessions[] from registryPath, or [] on missing/corrupt/wrong-shape. Never throws. */
+function readEntries(registryPath) {
+  try {
+    const raw = fs.readFileSync(registryPath, 'utf8');
+    if (raw.trim() === '') return [];
+    const parsed = JSON.parse(raw);
+    if (
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+      parsed.version === REGISTRY_VERSION && Array.isArray(parsed.sessions)
+    ) {
+      return parsed.sessions;
+    }
+  } catch {
+    // Missing or corrupt - treated as empty, same contract everywhere it's used.
+  }
+  return [];
+}
+
 function writeRegistry(registryPath, sessions) {
   try {
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
@@ -95,8 +117,10 @@ function writeRegistry(registryPath, sessions) {
     // log compacted on read.
     fs.writeFileSync(tmp, json, 'utf8');
     fs.renameSync(tmp, registryPath);
+    return true;
   } catch (err) {
     console.warn(`claude-remote agent: could not write registry '${registryPath}': ${err.code || err.message}`);
+    return false;
   }
 }
 
@@ -187,55 +211,10 @@ export function listSessions(ctx) {
       continue;
     }
 
-    if (entry.status === undefined) {
-      const pid = readPidFile(pidDir, sessionName);
-      let status;
-      if (pid !== null) {
-        if (isAlive(pid)) {
-          status = 'running';
-        } else {
-          drop(sessionName);          // unchanged: a session that ran and exited
-          continue;                   // is finished, not failed - keep pruning it
-        }
-      } else {
-        const age = nowMs - Date.parse(startedAt);
-        // A started_at in the future is either a tampered file or a clock that
-        // moved backwards. Only a clearly impossible future is dropped: without
-        // some drop the entry stays `starting` forever and blocks every future
-        // relaunch. A SMALL backward step is tolerated and clamped instead,
-        // because deleting here would erase a launch that is very likely
-        // running - and the next tap would then spawn a duplicate session with
-        // the same name, which is the outcome this whole status exists to
-        // prevent. w32time slews small offsets but steps larger ones.
-        if (age < -STARTING_GRACE_MS) {
-          drop(sessionName);
-          continue;
-        }
-        const effectiveAge = Math.max(0, age);
-        if (effectiveAge < STARTING_GRACE_MS) {
-          status = 'starting';
-        } else if (effectiveAge < FAILED_RETENTION_MS) {
-          // No pid file past the grace window. The agent cannot tell "never
-          // started" from "started but the pid write failed" - `failed` here
-          // means only "never confirmed, and never will be". The UI must say
-          // that, not "it failed".
-          status = 'failed';
-        } else {
-          drop(sessionName);
-          continue;
-        }
-      }
-
-      survivors.push(entry);
-      views.push({
-        session_name: sessionName,
-        project,
-        path: r.path,
-        status,
-        started_at: startedAt,
-        pid: status === 'running' ? pid : null,
-      });
-    } else if (entry.status === 'handoff') {
+    // handoff / ended / any other explicit status are handled here, each
+    // exiting the loop via `continue`; entry.status === undefined falls
+    // through to the original status-derivation block below unchanged.
+    if (entry.status === 'handoff') {
       // No pid-file read here: it is unlinked the moment the kill is
       // confirmed, so its absence carries no information for this branch.
       if (!Number.isFinite(Date.parse(entry.handoff_started_at))) {
@@ -243,7 +222,7 @@ export function listSessions(ctx) {
         continue;
       }
       const age = nowMs - Date.parse(entry.handoff_started_at);
-      // Same clock-tamper rule the `starting` branch uses above - without a
+      // Same clock-tamper rule the `starting` branch uses below - without a
       // drop here a tampered timestamp blocks every future relaunch.
       if (age < -STARTING_GRACE_MS) {
         drop(sessionName);
@@ -280,7 +259,10 @@ export function listSessions(ctx) {
           handoff_result: 'interrupted',
         });
       }
-    } else if (entry.status === 'ended') {
+      continue;
+    }
+
+    if (entry.status === 'ended') {
       if (!Number.isFinite(Date.parse(entry.ended_at)) || typeof entry.handoff_ok !== 'boolean') {
         drop(sessionName);
         continue;
@@ -308,10 +290,61 @@ export function listSessions(ctx) {
         handoff_ok: entry.handoff_ok,
         handoff_result: entry.handoff_result,
       });
-    } else {
+      continue;
+    }
+
+    if (entry.status !== undefined) {
       drop(sessionName);
       continue;
     }
+
+    const pid = readPidFile(pidDir, sessionName);
+    let status;
+    if (pid !== null) {
+      if (isAlive(pid)) {
+        status = 'running';
+      } else {
+        drop(sessionName);          // unchanged: a session that ran and exited
+        continue;                   // is finished, not failed - keep pruning it
+      }
+    } else {
+      const age = nowMs - Date.parse(startedAt);
+      // A started_at in the future is either a tampered file or a clock that
+      // moved backwards. Only a clearly impossible future is dropped: without
+      // some drop the entry stays `starting` forever and blocks every future
+      // relaunch. A SMALL backward step is tolerated and clamped instead,
+      // because deleting here would erase a launch that is very likely
+      // running - and the next tap would then spawn a duplicate session with
+      // the same name, which is the outcome this whole status exists to
+      // prevent. w32time slews small offsets but steps larger ones.
+      if (age < -STARTING_GRACE_MS) {
+        drop(sessionName);
+        continue;
+      }
+      const effectiveAge = Math.max(0, age);
+      if (effectiveAge < STARTING_GRACE_MS) {
+        status = 'starting';
+      } else if (effectiveAge < FAILED_RETENTION_MS) {
+        // No pid file past the grace window. The agent cannot tell "never
+        // started" from "started but the pid write failed" - `failed` here
+        // means only "never confirmed, and never will be". The UI must say
+        // that, not "it failed".
+        status = 'failed';
+      } else {
+        drop(sessionName);
+        continue;
+      }
+    }
+
+    survivors.push(entry);
+    views.push({
+      session_name: sessionName,
+      project,
+      path: r.path,
+      status,
+      started_at: startedAt,
+      pid: status === 'running' ? pid : null,
+    });
   }
 
   if (droppedAny) {
@@ -343,21 +376,7 @@ export function recordLaunch(ctx, { sessionName, project, projectPath }) {
 
   const startedAt = new Date(now()).toISOString();
 
-  let sessions = [];
-  try {
-    const raw = fs.readFileSync(registryPath, 'utf8');
-    if (raw.trim() !== '') {
-      const parsed = JSON.parse(raw);
-      if (
-        parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
-        parsed.version === REGISTRY_VERSION && Array.isArray(parsed.sessions)
-      ) {
-        sessions = parsed.sessions;
-      }
-    }
-  } catch {
-    // Missing or corrupt - treated as empty, same contract as listSessions.
-  }
+  let sessions = readEntries(registryPath);
 
   // A retained `failed` entry for this session name is superseded by the new
   // launch, not accumulated beside it.
@@ -394,21 +413,7 @@ export function recordLaunch(ctx, { sessionName, project, projectPath }) {
 export function markSessionState(ctx, sessionName, fromStatus, patch) {
   const { registryPath = getRegistryFilePath() } = ctx;
 
-  let sessions = [];
-  try {
-    const raw = fs.readFileSync(registryPath, 'utf8');
-    if (raw.trim() !== '') {
-      const parsed = JSON.parse(raw);
-      if (
-        parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
-        parsed.version === REGISTRY_VERSION && Array.isArray(parsed.sessions)
-      ) {
-        sessions = parsed.sessions;
-      }
-    }
-  } catch {
-    // Missing or corrupt - treated as empty, same contract as recordLaunch.
-  }
+  const sessions = readEntries(registryPath);
 
   const entry = sessions.find((e) => e && typeof e === 'object' && e.session_name === sessionName);
   if (!entry || (entry.status ?? null) !== fromStatus) {
@@ -416,6 +421,29 @@ export function markSessionState(ctx, sessionName, fromStatus, patch) {
   }
 
   Object.assign(entry, patch);
+  // The write IS the claim. A swallowed rename failure must not report a
+  // transition that never reached disk, or two stops could both "win".
+  return writeRegistry(registryPath, sessions);
+}
+
+/**
+ * Removes the registry entry named sessionName outright (not a status
+ * patch). Used when a claimed transition backs out to a state with no
+ * process behind it, so the entry does not linger as a status-less ghost
+ * that listSessions would otherwise age into `failed` after STARTING_GRACE_MS
+ * and draw a false "no session confirmed" banner for a session that in fact
+ * ran and ended. Never throws.
+ */
+export function dropSession(ctx, sessionName, fromStatus) {
+  const { registryPath = getRegistryFilePath() } = ctx;
+  // Compare-and-swap like markSessionState: only the entry whose status is
+  // still fromStatus is removed, so a concurrent relaunch's fresh entry
+  // (status-less) is never deleted by a stop that lost the race.
+  const all = readEntries(registryPath);
+  const sessions = all.filter(
+    (e) => !(e && typeof e === 'object' && e.session_name === sessionName
+      && (e.status ?? null) === fromStatus),
+  );
+  if (sessions.length === all.length) return;   // nothing matched: leave the file untouched
   writeRegistry(registryPath, sessions);
-  return true;
 }

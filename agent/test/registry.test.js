@@ -16,6 +16,7 @@ import {
   recordLaunch,
   clearPidFile,
   markSessionState,
+  dropSession,
 } from '../registry.js';
 
 // One shared project fixture (read-only across tests): Pull Requests,
@@ -755,6 +756,52 @@ test('markSessionState - returns false and leaves the file byte-identical when f
   assert.equal(patched, false);
   const after = fs.readFileSync(ctx.registryPath, 'utf8');
   assert.equal(after, before);
+});
+
+test('dropSession - removes only the entry whose status matches fromStatus', () => {
+  const ctx = makeCtx();
+  const handoff = validEntry('Pull Requests', new Date().toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date().toISOString(),
+  });
+  const other = validEntry('email-lint');
+  writeSessions(ctx.registryPath, [handoff, other]);
+
+  dropSession(ctx, 'pull-requests', 'handoff');
+
+  const left = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions;
+  assert.deepEqual(left.map((e) => e.session_name), ['email-lint']);
+});
+
+test('dropSession - leaves a same-name entry alone when its status is not fromStatus', () => {
+  const ctx = makeCtx();
+  // The shape a concurrent relaunch writes: same name, no status field.
+  const relaunched = validEntry('Pull Requests');
+  writeSessions(ctx.registryPath, [relaunched]);
+  const before = fs.readFileSync(ctx.registryPath, 'utf8');
+
+  dropSession(ctx, 'pull-requests', 'handoff');
+
+  assert.equal(fs.readFileSync(ctx.registryPath, 'utf8'), before);
+});
+
+test('markSessionState - returns false and leaves the file byte-identical when the atomic write fails', () => {
+  const ctx = makeCtx();
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests')]);
+  const before = fs.readFileSync(ctx.registryPath, 'utf8');
+  // A directory where the temp file goes makes writeFileSync(tmp) throw, so
+  // the rename never happens - the same shape as a transient EPERM on
+  // Windows. The claim must report that, not a success that never landed.
+  fs.mkdirSync(`${ctx.registryPath}.tmp`);
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const claimed = markSessionState(ctx, 'pull-requests', null, { status: 'handoff' });
+    assert.equal(claimed, false);
+    assert.equal(fs.readFileSync(ctx.registryPath, 'utf8'), before);
+  } finally {
+    console.warn = warn;
+  }
 });
 
 test('markSessionState - never appends for a session name that is absent', () => {

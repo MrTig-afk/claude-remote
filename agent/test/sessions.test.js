@@ -5,7 +5,9 @@ import path from 'node:path';
 import { test, after } from 'node:test';
 
 import { deriveSessionName, resolveProjectPath, launchSession, endSession } from '../sessions.js';
-import { STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION } from '../registry.js';
+import {
+  STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION, listSessions,
+} from '../registry.js';
 import { seedPasscode, issueTestToken, authHeaders, fixtureServer } from './helper-auth.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-sessions-'));
@@ -1211,7 +1213,7 @@ test('HTTP - POST /api/sessions/end on a starting session (no pid file) -> 409, 
 
 // --- endSession - F1 (pid reuse) and F2 (concurrent STOP/START) guards -----
 
-test('endSession - pid equals the agent\'s own process.pid -> already_ended, no taskkill, claim reverted', async () => {
+test('endSession - pid equals the agent\'s own process.pid -> already_ended, no taskkill, entry dropped entirely', async () => {
   const regCtx = makeRegCtx({ isPidAlive: (pid) => pid === process.pid });
   const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', process.pid);
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
@@ -1225,10 +1227,11 @@ test('endSession - pid equals the agent\'s own process.pid -> already_ended, no 
 
   const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
   const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.equal(entry.status, undefined, 'the handoff claim must be reverted, not left in place');
+  assert.equal(entry, undefined, 'the entry must be dropped, not left status-less for listSessions to age into failed');
+  assert.equal(listSessions(ctx).find((s) => s.session_name === sessionName), undefined);
 });
 
-test('endSession - pid image is not cmd.exe (reused pid) -> already_ended, no taskkill, claim reverted', async () => {
+test('endSession - pid image is not cmd.exe (reused pid) -> already_ended, no taskkill, entry dropped entirely', async () => {
   const regCtx = makeRegCtx({ isPidAlive: () => true, pidImageName: () => 'notepad.exe' });
   const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 9991);
   const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
@@ -1244,7 +1247,26 @@ test('endSession - pid image is not cmd.exe (reused pid) -> already_ended, no ta
 
   const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
   const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.equal(entry.status, undefined, 'the handoff claim must be reverted, not left in place');
+  assert.equal(entry, undefined, 'the entry must be dropped, not left status-less for listSessions to age into failed');
+  assert.equal(listSessions(ctx).find((s) => s.session_name === sessionName), undefined);
+});
+
+test('source - defaultPidImageName\'s tasklist call hides its console window and is bounded by a timeout', () => {
+  const src = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'sessions.js'), 'utf8');
+  const fn = src.slice(
+    src.indexOf('async function defaultPidImageName('),
+    src.indexOf(' * Byte-for-byte port'),   // no newline in the marker: a CRLF checkout must not widen the slice
+  );
+  assert.ok(fn.length > 0 && fn.length < 2000, `slice must be the one function, got ${fn.length} chars`);
+  assert.ok(fn.includes("'tasklist'"), 'must still call tasklist');
+  assert.ok(
+    fn.includes('windowsHide: true'),
+    'the tasklist call must hide its console window, like every other child process in the agent',
+  );
+  assert.ok(
+    fn.includes('timeout: 5000'),
+    'the tasklist call must have a bounded timeout, or a wedged lookup hangs endSession with the handoff claim already written',
+  );
 });
 
 test('endSession - two concurrent calls for the same project: exactly one runner spawned, the loser gets 409', async () => {
