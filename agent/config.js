@@ -22,6 +22,15 @@ export function getPidDirPath() {
   return path.join(path.dirname(getConfigFilePath()), 'session-pids');
 }
 
+/** The two Claude Code profile session directories, newest-profile-first order
+ *  is irrelevant - both are read. Only <pid>.json is ever opened from them. */
+export function getSessionDirPaths() {
+  return [
+    path.join(os.homedir(), '.claude-max', 'sessions'),
+    path.join(os.homedir(), '.claude-pro', 'sessions'),
+  ];
+}
+
 /** Absolute path of the passcode hash file, beside the config. */
 export function getPasscodeFilePath() {
   return path.join(path.dirname(getConfigFilePath()), 'passcode.json');

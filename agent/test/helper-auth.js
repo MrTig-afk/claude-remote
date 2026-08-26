@@ -9,6 +9,18 @@ import { setPasscode, TOKEN_HEADER, TOKEN_TTL_MS } from '../auth.js';
 import { createAgentServer } from '../server.js';
 
 /**
+ * [<dir>/claude-sessions] - the one sessionDirs value every test ctx that
+ * can reach listSessions/readSessionFiles must carry, so a forgotten key
+ * never falls back to config.js's real ~/.claude-max or ~/.claude-pro (the
+ * exact bug review round 1 found in tree-kill.test.js). Deliberately does
+ * NOT create the directory - a missing one must be tolerated by the reader
+ * (ENOENT = empty, per registry.js's readSessionFiles).
+ */
+export function testSessionDirs(dir) {
+  return [path.join(dir, 'claude-sessions')];
+}
+
+/**
  * A fresh mkdtemp-backed ctx carrying EVERY path an agent server writes:
  * passcodePath, attemptsPath, registryPath, pidDir - plus tokens and now.
  * All four live in one temp dir that cleanupAuthCtx removes.
@@ -26,6 +38,7 @@ export function makeAuthCtx({ now } = {}) {
     attemptsPath: path.join(dir, 'passcode-attempts.json'),
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
+    sessionDirs: testSessionDirs(dir),
     tokens: new Map(),
     now: now || Date.now,
   };
@@ -86,6 +99,19 @@ export function fixtureServer(ctx) {
         + "to the owner's real data directory and the suite writes it",
       );
     }
+  }
+  // sessionDirs is read-only, but a ctx that omits it falls back to
+  // config.js's getSessionDirPaths() - the owner's real ~/.claude-max and
+  // ~/.claude-pro sessions directories - and the suite reads the owner's
+  // real Claude Code session files.
+  if (
+    !Array.isArray(ctx.sessionDirs) || ctx.sessionDirs.length === 0
+    || !ctx.sessionDirs.every((d) => typeof d === 'string' && path.resolve(d).startsWith(tmp))
+  ) {
+    throw new Error(
+      `helper-auth: ctx.sessionDirs must be a non-empty array of strings each resolving under ${tmp} `
+      + "or the suite reads the owner's real Claude Code session files",
+    );
   }
   // Fill the seams IN PLACE rather than building `{ spawner, ...ctx }`. Two
   // reasons, both learned the hard way:

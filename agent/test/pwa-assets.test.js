@@ -758,3 +758,39 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
     'the reconciliation must run before tiles are built, so the same render never draws the stale confirm',
   );
 });
+
+// --- T45: desk-started sessions in the PWA ----------------------------------
+
+test('sw.js CACHE is claude-remote-shell-v6', () => {
+  const source = read('sw.js');
+  const match = source.match(/const CACHE = '([^']+)'/);
+  assert.ok(match, 'sw.js must declare CACHE');
+  assert.equal(match[1], 'claude-remote-shell-v6');
+});
+
+test('buildTile carries the desktop confirm label and still carries the plain one', () => {
+  const js = read('app.js');
+  const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
+  assert.match(buildTile, /'END & WRITE HANDOFF \(DESKTOP\)'/);
+  assert.match(buildTile, /'END & WRITE HANDOFF'/);
+});
+
+test("rowState's running branch carries source === 'desk' and the 'desktop' suffix literal", () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function rowState('), js.indexOf('function setDot('));
+  assert.match(fn, /session\.source === 'desk'/);
+  assert.match(fn, /'desktop'/);
+});
+
+test('statusLine appends an optional suffix on top of its existing behaviour', () => {
+  const js = read('app.js');
+  const body = js.match(/function statusLine\(rs\) \{\s*return ([^;]+);/);
+  assert.ok(body, 'app.js must carry statusLine');
+  const statusLine = new Function('rs', `return ${body[1]};`);
+  assert.equal(statusLine({ status: 'launch unconfirmed', idle: '3m' }), 'launch unconfirmed - 3m');
+  assert.equal(statusLine({ status: 'could not start', idle: '—' }), 'could not start');
+  assert.equal(
+    statusLine({ status: 'active session', idle: '36m', suffix: 'desktop' }),
+    'active session - 36m - desktop',
+  );
+});

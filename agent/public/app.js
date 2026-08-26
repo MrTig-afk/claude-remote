@@ -152,7 +152,12 @@ function rowState(p) {
   const session = sessionFor(p);
   if (session) {
     if (session.status === 'running') {
-      return { zone: 'tile', dot: 'filled', status: 'active session', idle: elapsed(session.started_at), stop: true };
+      const desk = session.source === 'desk';
+      return {
+        zone: 'tile', dot: 'filled', status: 'active session',
+        idle: elapsed(session.started_at), stop: true,
+        ...(desk ? { suffix: 'desktop', desk: true } : {}),
+      };
     }
     if (session.status === 'failed') {
       return { zone: 'list', dot: 'dim', status: 'launch unconfirmed', idle: elapsed(session.started_at) };
@@ -213,7 +218,7 @@ function buildDot(kind) {
 // list state that has a real one (a launch that was never confirmed) would
 // otherwise lose it silently.
 function statusLine(rs) {
-  return rs.idle && rs.idle !== '—' ? `${rs.status} - ${rs.idle}` : rs.status;
+  return [rs.status, rs.idle && rs.idle !== '—' ? rs.idle : null, rs.suffix || null].filter(Boolean).join(' - ');
 }
 
 function buildTile(p, rs) {
@@ -242,7 +247,7 @@ function buildTile(p, rs) {
     go.type = 'button';
     go.className = 'tile-stop-go';
     go.dataset.stopConfirm = p.name;
-    go.textContent = 'END & WRITE HANDOFF';
+    go.textContent = rs.desk ? 'END & WRITE HANDOFF (DESKTOP)' : 'END & WRITE HANDOFF';
     q.append(cancel, go);
     el.appendChild(q);
   } else if (rs.stop) {

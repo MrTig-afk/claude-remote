@@ -13,6 +13,7 @@ import { test, after } from 'node:test';
 
 import { deriveSessionName, endSession } from '../sessions.js';
 import { recordLaunch, isPidAlive } from '../registry.js';
+import { testSessionDirs } from './helper-auth.js';
 
 const perTestDirs = [];
 const capturedPids = [];
@@ -110,6 +111,7 @@ test(
       baseDir: base,
       registryPath,
       pidDir,
+      sessionDirs: testSessionDirs(dir),
       now: Date.now,
       // killSpawner and isPidAlive are left at their REAL defaults on purpose
       // - this is the one test allowed to touch a real process. The handoff

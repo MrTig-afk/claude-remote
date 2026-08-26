@@ -17,7 +17,12 @@ import {
   clearPidFile,
   markSessionState,
   dropSession,
+  discoverDeskSessions,
+  resolveDeskSessionId,
+  claimDeskSession,
 } from '../registry.js';
+import { listProjects } from '../projects.js';
+import { testSessionDirs } from './helper-auth.js';
 
 // One shared project fixture (read-only across tests): Pull Requests,
 // email-lint, notes.txt. Each test gets its OWN registry file + pid dir
@@ -43,6 +48,7 @@ function makeDataDirs() {
   return {
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
+    sessionDirs: testSessionDirs(dir),
   };
 }
 
@@ -273,6 +279,8 @@ test('listSessions - no pid file, started_at 10 minutes ago -> failed', () => {
   assert.equal(views.length, 1);
   assert.equal(views[0].status, 'failed');
   assert.equal(views[0].pid, null);
+  assert.equal(views[0].source, 'launched');
+  assert.equal(views[0].session_id, null);
 });
 
 test('listSessions - no pid file, started_at 60s ago (past grace, inside retention) -> failed, and retained on disk', () => {
@@ -513,7 +521,7 @@ test('clearPidFile - a traversing session_name cannot delete a file outside pidD
   const victim = path.join(outsideDir, 'victim.pid');
   fs.writeFileSync(victim, '1234');
 
-  const ctx = { registryPath, pidDir, isPidAlive: () => false, now: () => Date.now() };
+  const ctx = { registryPath, pidDir, sessionDirs: testSessionDirs(path.dirname(registryPath)), isPidAlive: () => false, now: () => Date.now() };
 
   for (const evil of ['../victim', '..\\victim', '../../victim', 'sub/../../victim']) {
     clearPidFile(ctx, evil);
@@ -533,7 +541,7 @@ test('clearPidFile - a plain session name inside pidDir is still removed', () =>
   const real = path.join(pidDir, 'email-lint.pid');
   fs.writeFileSync(real, '4242');
 
-  clearPidFile({ registryPath, pidDir, isPidAlive: () => false, now: () => Date.now() }, 'email-lint');
+  clearPidFile({ registryPath, pidDir, sessionDirs: testSessionDirs(path.dirname(registryPath)), isPidAlive: () => false, now: () => Date.now() }, 'email-lint');
 
   assert.equal(fs.existsSync(real), false, 'the guard must not break the normal case');
 });
@@ -553,6 +561,8 @@ test('listSessions - handoff entry with no pid file -> status handoff, pid null'
   assert.equal(views.length, 1);
   assert.equal(views[0].status, 'handoff');
   assert.equal(views[0].pid, null);
+  assert.equal(views[0].source, 'launched');
+  assert.equal(views[0].session_id, null);
 });
 
 test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_result', () => {
@@ -572,9 +582,11 @@ test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_r
   assert.equal(views[0].ended_at, entry.ended_at);
   assert.equal(views[0].handoff_ok, true);
   assert.equal(views[0].handoff_result, 'written');
+  assert.equal(views[0].source, 'launched');
+  assert.equal(views[0].session_id, null);
 });
 
-test('listSessions - running/starting views still carry exactly the six original keys', () => {
+test('listSessions - running/starting views still carry exactly the eight original+source keys, source:launched, session_id:null', () => {
   const now = Date.now();
   const livePids = new Set([555]);
   const ctx = makeCtx({ now: () => now, livePids });
@@ -589,9 +601,11 @@ test('listSessions - running/starting views still carry exactly the six original
   for (const v of views) {
     assert.deepEqual(
       Object.keys(v).sort(),
-      ['path', 'pid', 'project', 'session_name', 'started_at', 'status'].sort(),
+      ['path', 'pid', 'project', 'session_id', 'session_name', 'source', 'started_at', 'status'].sort(),
       `unexpected keys on status ${v.status}`,
     );
+    assert.equal(v.source, 'launched', `status ${v.status}`);
+    assert.equal(v.session_id, null, `status ${v.status}`);
   }
 });
 
@@ -811,4 +825,286 @@ test('markSessionState - never appends for a session name that is absent', () =>
 
   assert.equal(patched, false);
   assert.equal(fs.existsSync(ctx.registryPath), false);
+});
+
+// --- T45: desk-started session discovery ------------------------------------
+
+/** Writes <dir>/<pid>.json in the shape Claude Code 2.1.246 writes it. */
+function writeDeskFile(dir, { pid, sessionId, cwd, startedAt = new Date().toISOString(), kind = 'interactive' }) {
+  fs.mkdirSync(dir, { recursive: true });
+  const data = { pid, cwd, startedAt, kind, entrypoint: 'cli', status: 'idle', updatedAt: startedAt };
+  if (sessionId !== undefined) data.sessionId = sessionId;
+  fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify(data), 'utf8');
+}
+
+test('discoverDeskSessions - alive pid + exact project cwd + no registry entry -> one desk view', () => {
+  const livePids = new Set([4242]);
+  const ctx = makeCtx({ livePids });
+  const cwd = path.join(base, 'Pull Requests');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4242, sessionId: 'abc-123', cwd });
+
+  const views = discoverDeskSessions(ctx, listProjects(base), new Set());
+  assert.equal(views.length, 1);
+  assert.equal(views[0].source, 'desk');
+  assert.equal(views[0].status, 'running');
+  assert.equal(views[0].pid, 4242);
+  assert.equal(views[0].session_id, 'abc-123');
+  assert.equal(views[0].session_name, 'pull-requests');
+  assert.equal(views[0].project, 'Pull Requests');
+  assert.equal(views[0].path, path.join(base, 'Pull Requests'));
+  assert.equal(views[0].config_dir, path.dirname(ctx.sessionDirs[0]));
+  assert.ok(Number.isFinite(Date.parse(views[0].started_at)));
+
+  // Also reachable through the normal entry point, with NO registry file on
+  // disk at all - the case T45 exists for (a machine that has never
+  // launched anything through the agent).
+  assert.equal(fs.existsSync(ctx.registryPath), false);
+  assert.equal(listSessions(ctx).length, 1);
+});
+
+test('discoverDeskSessions - dead pid -> not listed', () => {
+  const ctx = makeCtx({ livePids: new Set() });
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4243, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
+  assert.deepEqual(listSessions(ctx), []);
+});
+
+test('discoverDeskSessions - kind !== interactive (the hidden `claude -p` handoff run) -> not listed', () => {
+  const ctx = makeCtx({ livePids: new Set([4244]) });
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4244, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests'), kind: 'print',
+  });
+  assert.deepEqual(
+    listSessions(ctx),
+    [],
+    'kind:print (the handoff run) must stay invisible - this is what keeps it from ever surfacing as a session',
+  );
+});
+
+test('discoverDeskSessions - cwd is a subfolder of a project -> not listed', () => {
+  const ctx = makeCtx({ livePids: new Set([4245]) });
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4245, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests', 'sub'),
+  });
+  assert.deepEqual(listSessions(ctx), []);
+});
+
+test('discoverDeskSessions - cwd outside baseDir -> not listed', () => {
+  const ctx = makeCtx({ livePids: new Set([4246]) });
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4246, sessionId: 'abc-123', cwd: os.tmpdir() });
+  assert.deepEqual(listSessions(ctx), []);
+});
+
+test('discoverDeskSessions - a registry entry for the project wins over a live desk file', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now, livePids: new Set([555, 4247]) });
+  const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4247, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].source, 'launched');
+  assert.equal(views[0].status, 'running');
+});
+
+test('discoverDeskSessions - a registry entry still wins even when its status is ended', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now, livePids: new Set([4248]) });
+  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'ended', ended_at: new Date(now - 1000).toISOString(), handoff_ok: true, handoff_result: 'written',
+  });
+  writeSessions(ctx.registryPath, [entry]);
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4248, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].source, 'launched');
+  assert.equal(views[0].status, 'ended');
+});
+
+test('discoverDeskSessions - two desk files, same cwd, different startedAt -> newest wins', () => {
+  const ctx = makeCtx({ livePids: new Set([4249, 4250]) });
+  const cwd = path.join(base, 'Pull Requests');
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4249, sessionId: 'older', cwd, startedAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4250, sessionId: 'newer', cwd, startedAt: new Date().toISOString(),
+  });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].pid, 4250);
+  assert.equal(views[0].session_id, 'newer');
+});
+
+test('discoverDeskSessions - two desk files in two different sessionDirs, same cwd -> newest wins across profiles', () => {
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-registry-data2-'));
+  perTestDirs.push(dir2);
+  const ctx = makeCtx({ livePids: new Set([4251, 4252]) });
+  ctx.sessionDirs = [ctx.sessionDirs[0], path.join(dir2, 'claude-sessions-2')];
+  const cwd = path.join(base, 'Pull Requests');
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4251, sessionId: 'profile-a', cwd, startedAt: new Date(Date.now() - 60_000).toISOString(),
+  });
+  writeDeskFile(ctx.sessionDirs[1], {
+    pid: 4252, sessionId: 'profile-b', cwd, startedAt: new Date().toISOString(),
+  });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].session_id, 'profile-b');
+});
+
+test('discoverDeskSessions - sessionDirs pointing at a missing directory -> no throw, registry view unaffected', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now, livePids: new Set([555]) });
+  ctx.sessionDirs = [path.join(base, 'does-not-exist')];
+  const entry = validEntry('email-lint', new Date(now - 1000).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, 'email-lint.pid'), '555', 'ascii');
+
+  assert.doesNotThrow(() => listSessions(ctx));
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].source, 'launched');
+});
+
+test('discoverDeskSessions - junk table: bad JSON / array / missing pid / missing cwd / unparseable startedAt all skipped, no throw', () => {
+  const ctx = makeCtx({ livePids: new Set([4260]) });
+  const dir = ctx.sessionDirs[0];
+  const cwd = path.join(base, 'Pull Requests');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'notjson.json'), 'not json at all', 'utf8');
+  fs.writeFileSync(path.join(dir, 'array.json'), '[]', 'utf8');
+  fs.writeFileSync(
+    path.join(dir, 'nopid.json'),
+    JSON.stringify({ sessionId: 'x', cwd, startedAt: new Date().toISOString(), kind: 'interactive' }),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(dir, 'nocwd.json'),
+    JSON.stringify({ pid: 4261, sessionId: 'x', startedAt: new Date().toISOString(), kind: 'interactive' }),
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(dir, 'badstart.json'),
+    JSON.stringify({ pid: 4262, sessionId: 'x', cwd, startedAt: 'not-a-date', kind: 'interactive' }),
+    'utf8',
+  );
+  writeDeskFile(dir, { pid: 4260, sessionId: 'good', cwd });
+
+  assert.doesNotThrow(() => listSessions(ctx));
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].pid, 4260);
+});
+
+test('discoverDeskSessions - sessionId missing or malformed -> still listed with session_id null', () => {
+  const cwd = path.join(base, 'Pull Requests');
+  const cases = [
+    { sessionId: undefined, label: 'missing' },
+    { sessionId: 'a b', label: 'contains a space' },
+    { sessionId: '-x', label: 'leading hyphen' },
+    { sessionId: 'x'.repeat(200), label: '200 chars' },
+  ];
+  for (const { sessionId, label } of cases) {
+    const ctx = makeCtx({ livePids: new Set([9001]) });
+    writeDeskFile(ctx.sessionDirs[0], { pid: 9001, sessionId, cwd });
+
+    const views = listSessions(ctx);
+    assert.equal(views.length, 1, label);
+    assert.equal(views[0].session_id, null, label);
+    assert.equal(views[0].pid, 9001, label);
+  }
+});
+
+test('discoverDeskSessions - credential guard: only *.json is ever opened', () => {
+  const ctx = makeCtx({ livePids: new Set([4280]) });
+  const dir = ctx.sessionDirs[0];
+  writeDeskFile(dir, { pid: 4280, sessionId: 'abc', cwd: path.join(base, 'Pull Requests') });
+  fs.writeFileSync(path.join(dir, '.credentials.txt'), 'NEVER-OPEN-THIS', 'utf8');
+  fs.writeFileSync(path.join(dir, 'token.pem'), 'NEVER-OPEN-THIS', 'utf8');
+  fs.writeFileSync(path.join(dir, 'notes'), 'NEVER-OPEN-THIS', 'utf8');
+
+  // The node:fs default export is the same object registry.js calls
+  // through, so wrapping it here is visible there too.
+  const realReadFileSync = fs.readFileSync;
+  const seen = [];
+  fs.readFileSync = (p, ...rest) => {
+    seen.push(p);
+    return realReadFileSync(p, ...rest);
+  };
+  try {
+    const views = listSessions(ctx);
+    assert.equal(views.length, 1, 'the desk session must still be listed');
+    assert.ok(seen.length > 0, 'the wrapper must have observed at least one read');
+    for (const p of seen) {
+      assert.ok(String(p).endsWith('.json'), `a non-.json path was opened: ${p}`);
+    }
+  } finally {
+    fs.readFileSync = realReadFileSync;
+  }
+});
+
+test('resolveDeskSessionId - { sessionId, configDir } of the newest live match, both null when dead/subfolder/dir missing', () => {
+  const cwd = path.join(base, 'Pull Requests');
+
+  {
+    const ctx = makeCtx({ livePids: new Set([4290, 4291]) });
+    writeDeskFile(ctx.sessionDirs[0], {
+      pid: 4290, sessionId: 'older', cwd, startedAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    writeDeskFile(ctx.sessionDirs[0], {
+      pid: 4291, sessionId: 'newer', cwd, startedAt: new Date().toISOString(),
+    });
+    assert.deepEqual(
+      resolveDeskSessionId(ctx, cwd),
+      { sessionId: 'newer', configDir: path.dirname(ctx.sessionDirs[0]) },
+    );
+  }
+
+  {
+    const ctx = makeCtx({ livePids: new Set() });
+    writeDeskFile(ctx.sessionDirs[0], { pid: 4292, sessionId: 'dead', cwd });
+    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
+  }
+
+  {
+    const ctx = makeCtx({ livePids: new Set([4293]) });
+    writeDeskFile(ctx.sessionDirs[0], { pid: 4293, sessionId: 'sub', cwd: path.join(cwd, 'sub') });
+    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
+  }
+
+  {
+    const ctx = makeCtx({ livePids: new Set() });
+    ctx.sessionDirs = [path.join(base, 'no-such-dir')];
+    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
+  }
+});
+
+test('claimDeskSession - writes a handoff entry listSessions then reports, and returns false when already claimed', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const projectPath = path.join(base, 'Pull Requests');
+  const startedAt = new Date(now - 60_000).toISOString();
+  const handoffStartedAt = new Date(now - 1000).toISOString();
+
+  const claimed = claimDeskSession(ctx, {
+    sessionName: 'pull-requests', project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
+  });
+  assert.equal(claimed, true);
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'handoff');
+  assert.equal(views[0].session_name, 'pull-requests');
+
+  const second = claimDeskSession(ctx, {
+    sessionName: 'pull-requests', project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
+  });
+  assert.equal(second, false, 'a second claim on the same session_name must write nothing and return false');
 });

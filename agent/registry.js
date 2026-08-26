@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { getRegistryFilePath, getPidDirPath } from './config.js';
+import { getRegistryFilePath, getPidDirPath, getSessionDirPaths } from './config.js';
 import { resolveProjectPath, deriveSessionName } from './sessions.js';
+import { listProjects } from './projects.js';
 
 export const STARTING_GRACE_MS = 30_000;
 export const REGISTRY_VERSION = 1;
@@ -125,6 +126,172 @@ function writeRegistry(registryPath, sessions) {
 }
 
 /**
+ * Every live, interactive session record from ctx.sessionDirs. Returns
+ * [{ pid, sessionId, cwd, startedAtMs }]. Never throws: a missing dir, an
+ * unreadable file, junk JSON or a missing field yields fewer records, never
+ * an error. Only names ending '.json' are opened - every other file in these
+ * directories is a credential.
+ */
+function readSessionFiles(ctx) {
+  const dirs = ctx.sessionDirs ?? getSessionDirPaths();
+  const isAlive = ctx.isPidAlive || isPidAlive;
+  const records = [];
+
+  for (const dir of dirs) {
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;   // ENOENT (profile does not exist) or anything else = empty
+    }
+
+    for (const name of names) {
+      // Filtered on the NAME before any other fs call touches this entry -
+      // every non-.json file in a Claude Code profile sessions dir is a
+      // credential and must never be opened.
+      if (!name.toLowerCase().endsWith('.json')) continue;
+
+      let raw;
+      try {
+        raw = fs.readFileSync(path.join(dir, name), 'utf8');
+      } catch {
+        continue;
+      }
+
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (data === null || typeof data !== 'object' || Array.isArray(data)) continue;
+
+      // Exact string. Anything else, including a missing key, is skipped -
+      // this is what keeps the hidden `claude -p` handoff run (kind:'print')
+      // from ever surfacing as a session. Verified live 2026-08-27: a
+      // `--remote-control` session (a plain desk-started one on the dev host,
+      // pid 23724, the session driving this run) ALSO writes kind:'interactive' -
+      // it carries an extra `bridgeSessionId` field this reader ignores -
+      // so it is correctly NOT excluded by this filter; Q14's launched-STOP
+      // id resolution depends on that being true.
+      if (data.kind !== 'interactive') continue;
+      if (!Number.isInteger(data.pid) || data.pid <= 0) continue;
+      if (typeof data.cwd !== 'string' || data.cwd === '') continue;
+      if (!Number.isFinite(Date.parse(data.startedAt))) continue;
+      if (!isAlive(data.pid)) continue;
+
+      // sessionId is optional and validated: it is later handed to
+      // PowerShell as an argument value. A record with no usable id is
+      // still listed - visibility is the point - it just falls back to
+      // --continue at STOP time.
+      const sessionId = typeof data.sessionId === 'string'
+        && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(data.sessionId)
+        ? data.sessionId
+        : null;
+
+      records.push({
+        pid: data.pid,
+        sessionId,
+        cwd: data.cwd,
+        startedAtMs: Date.parse(data.startedAt),
+        // The parent of the sessions dir this record was read from - e.g.
+        // ~/.claude-pro when read from ~/.claude-pro/sessions. Carried
+        // through so the handoff resumes in the SAME profile the desk
+        // session actually lived in, not whichever one is hardcoded as the
+        // default (T45 review round 1, ISSUE 2).
+        configDir: path.dirname(dir),
+      });
+    }
+  }
+
+  return records;
+}
+
+/**
+ * SessionViews for live desk-started sessions - one per project at most.
+ * projects is listProjects(ctx.baseDir) output; claimedSessionNames is the
+ * Set of session_name values the registry already produced a view for
+ * (registry wins, disjoint sets). Never throws.
+ */
+export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
+  const best = new Map(); // project -> { record, sessionName }
+
+  for (const record of readSessionFiles(ctx)) {
+    const cwd = path.resolve(record.cwd);
+    const project = projects.find((p) => path.relative(p.path, cwd) === '');
+    if (!project) continue;   // subfolder, parent, or outside baseDir
+
+    const sessionName = deriveSessionName(project.path);
+    if (claimedSessionNames.has(sessionName)) continue;   // registry wins
+
+    const existing = best.get(project);
+    if (!existing || record.startedAtMs > existing.record.startedAtMs) {
+      best.set(project, { record, sessionName });
+    }
+  }
+
+  const views = [];
+  for (const project of projects) {   // stable order across polls
+    const kept = best.get(project);
+    if (!kept) continue;
+    views.push({
+      session_name: kept.sessionName,
+      project: project.name,
+      path: project.path,
+      status: 'running',
+      started_at: new Date(kept.record.startedAtMs).toISOString(),
+      pid: kept.record.pid,
+      source: 'desk',
+      session_id: kept.record.sessionId,
+      config_dir: kept.record.configDir,
+    });
+  }
+  return views;
+}
+
+/** { sessionId, configDir } of the newest live interactive session whose
+ *  cwd IS projectPath, or { sessionId: null, configDir: null } when none
+ *  matches. Used by endSession to target --resume in the RIGHT profile -
+ *  configDir is set whenever a record matched at all, even if that record's
+ *  own sessionId failed validation, because the profile (not the id) is
+ *  what --continue also needs to run in the right place. */
+export function resolveDeskSessionId(ctx, projectPath) {
+  const target = path.resolve(projectPath);
+  let best = null;
+  for (const record of readSessionFiles(ctx)) {
+    if (path.relative(target, path.resolve(record.cwd)) !== '') continue;
+    if (!best || record.startedAtMs > best.startedAtMs) best = record;
+  }
+  return best ? { sessionId: best.sessionId, configDir: best.configDir } : { sessionId: null, configDir: null };
+}
+
+/**
+ * Inserts a `handoff` registry entry for a session the agent did NOT launch,
+ * ONLY IF no entry with that session_name exists. Returns true iff it wrote.
+ * The insert is the claim - the same "the write IS the claim" contract as
+ * markSessionState (registry.js:413) - and it is what makes discovery stop
+ * reporting the session the instant a STOP is accepted.
+ */
+export function claimDeskSession(ctx, { sessionName, project, projectPath, startedAt, handoffStartedAt }) {
+  const { registryPath = getRegistryFilePath() } = ctx;
+
+  const sessions = readEntries(registryPath);
+  if (sessions.some((e) => e && typeof e === 'object' && e.session_name === sessionName)) {
+    return false;
+  }
+
+  sessions.push({
+    session_name: sessionName,
+    project,
+    original_path: projectPath,
+    started_at: startedAt,
+    status: 'handoff',
+    handoff_started_at: handoffStartedAt,
+  });
+  return writeRegistry(registryPath, sessions);
+}
+
+/**
  * Every live session, pruned and re-validated against ctx.baseDir. Writes
  * the pruned registry back only if entries were dropped. Never throws: any
  * read/parse/validate failure yields [].
@@ -138,33 +305,38 @@ export function listSessions(ctx) {
     now = Date.now,
   } = ctx;
 
-  let raw;
+  // A missing, empty or corrupt registry is treated as zero registry
+  // entries, NOT as an early exit: discovery (below) must still run, or a
+  // desk-started session would be invisible on a machine that has never
+  // launched anything through the agent - exactly the case T45 exists for.
+  let raw = null;
   try {
     raw = fs.readFileSync(registryPath, 'utf8');
   } catch (err) {
     if (err.code !== 'ENOENT') {
       console.warn(`claude-remote agent: could not read registry '${registryPath}': ${err.code || err.message}`);
     }
-    return [];
   }
 
-  if (raw.trim() === '') return [];
-
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-
-  if (
-    data === null ||
-    typeof data !== 'object' ||
-    Array.isArray(data) ||
-    data.version !== REGISTRY_VERSION ||
-    !Array.isArray(data.sessions)
-  ) {
-    return [];
+  let entries = [];
+  if (raw !== null && raw.trim() !== '') {
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      data = null;
+    }
+    if (
+      data !== null &&
+      typeof data === 'object' &&
+      !Array.isArray(data) &&
+      data.version === REGISTRY_VERSION &&
+      Array.isArray(data.sessions)
+    ) {
+      entries = data.sessions;
+    }
+    // else: wrong shape - treated the same as absent, and never repaired
+    // here (droppedAny, below, only ever fires from inside the loop).
   }
 
   const nowMs = now();
@@ -172,7 +344,7 @@ export function listSessions(ctx) {
   const views = [];
   let droppedAny = false;
 
-  for (const entry of data.sessions) {
+  for (const entry of entries) {
     const drop = (sessionNameForCleanup) => {
       droppedAny = true;
       if (typeof sessionNameForCleanup === 'string' && sessionNameForCleanup !== '') {
@@ -238,6 +410,8 @@ export function listSessions(ctx) {
           status: 'handoff',
           started_at: startedAt,
           pid: null,
+          source: 'launched',
+          session_id: null,
         });
       } else if (eff >= FAILED_RETENTION_MS) {
         drop(sessionName);
@@ -257,6 +431,8 @@ export function listSessions(ctx) {
           ended_at: entry.handoff_started_at,
           handoff_ok: false,
           handoff_result: 'interrupted',
+          source: 'launched',
+          session_id: null,
         });
       }
       continue;
@@ -289,6 +465,8 @@ export function listSessions(ctx) {
         ended_at: entry.ended_at,
         handoff_ok: entry.handoff_ok,
         handoff_result: entry.handoff_result,
+        source: 'launched',
+        session_id: null,
       });
       continue;
     }
@@ -344,6 +522,8 @@ export function listSessions(ctx) {
       status,
       started_at: startedAt,
       pid: status === 'running' ? pid : null,
+      source: 'launched',
+      session_id: null,
     });
   }
 
@@ -351,6 +531,11 @@ export function listSessions(ctx) {
     writeRegistry(registryPath, survivors);
   }
 
+  // Discovery runs AFTER the prune/write and never writes anything itself -
+  // a read of /api/sessions must not mutate the registry on account of a
+  // desk session.
+  const claimed = new Set(views.map((v) => v.session_name));
+  views.push(...discoverDeskSessions(ctx, listProjects(baseDir), claimed));
   return views;
 }
 
