@@ -217,13 +217,23 @@ function readSessionFiles(ctx) {
  * Set of session_name values the registry already produced a view for
  * (registry wins, disjoint sets). Never throws.
  */
+// True when cwd is projectPath itself or anywhere below it. Owner decision
+// 2026-08-27: a desk session working in a subfolder of a project belongs to
+// that project's tile (name unchanged), and STOP on the tile ends it.
+// Projects are flat siblings under baseDir, so a cwd can sit inside at most
+// one of them.
+function isInsideProject(projectPath, cwd) {
+  const rel = path.relative(projectPath, cwd);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
   const best = new Map(); // project -> { record, sessionName }
 
   for (const record of readSessionFiles(ctx)) {
     const cwd = path.resolve(record.cwd);
-    const project = projects.find((p) => path.relative(p.path, cwd) === '');
-    if (!project) continue;   // subfolder, parent, or outside baseDir
+    const project = projects.find((p) => isInsideProject(p.path, cwd));
+    if (!project) continue;   // parent of a project, or outside baseDir
 
     const sessionName = deriveSessionName(project.path);
     if (claimedSessionNames.has(sessionName)) continue;   // registry wins
@@ -263,7 +273,7 @@ export function resolveDeskSessionId(ctx, projectPath) {
   const target = path.resolve(projectPath);
   let best = null;
   for (const record of readSessionFiles(ctx)) {
-    if (path.relative(target, path.resolve(record.cwd)) !== '') continue;
+    if (!isInsideProject(target, path.resolve(record.cwd))) continue;
     if (!best || record.startedAtMs > best.startedAtMs) best = record;
   }
   return best ? { sessionId: best.sessionId, configDir: best.configDir } : { sessionId: null, configDir: null };

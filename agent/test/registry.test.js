@@ -892,11 +892,20 @@ test('discoverDeskSessions - kind !== interactive (the hidden `claude -p` handof
   );
 });
 
-test('discoverDeskSessions - cwd is a subfolder of a project -> not listed', () => {
+test('discoverDeskSessions - cwd is a subfolder of a project -> listed under that project (owner, 2026-08-27)', () => {
   const ctx = makeCtx({ livePids: new Set([4245]) });
   writeDeskFile(ctx.sessionDirs[0], {
     pid: 4245, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests', 'sub'),
   });
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].project, 'Pull Requests');
+  assert.equal(views[0].pid, 4245);
+});
+
+test('discoverDeskSessions - a sibling folder whose name merely starts with the project name is NOT inside it', () => {
+  const ctx = makeCtx({ livePids: new Set([4247]) });
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4247, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests-2') });
   assert.deepEqual(listSessions(ctx), []);
 });
 
@@ -1062,7 +1071,7 @@ test('discoverDeskSessions - credential guard: only *.json is ever opened', () =
   }
 });
 
-test('resolveDeskSessionId - { sessionId, configDir } of the newest live match, both null when dead/subfolder/dir missing', () => {
+test('resolveDeskSessionId - { sessionId, configDir } of the newest live match, subfolder counts, null when dead/dir missing', () => {
   const cwd = path.join(base, 'Pull Requests');
 
   {
@@ -1088,7 +1097,8 @@ test('resolveDeskSessionId - { sessionId, configDir } of the newest live match, 
   {
     const ctx = makeCtx({ livePids: new Set([4293]) });
     writeDeskFile(ctx.sessionDirs[0], { pid: 4293, sessionId: 'sub', cwd: path.join(cwd, 'sub') });
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
+    // A subfolder session belongs to the project (owner, 2026-08-27), so STOP resumes it.
+    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: 'sub', configDir: path.dirname(ctx.sessionDirs[0]) });
   }
 
   {
