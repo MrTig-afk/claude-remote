@@ -1,42 +1,93 @@
 # Claude Remote
 
-Keep a Claude Code session running on your Windows desktop and reach it from
-any other device on your Tailscale network - phone, laptop, tablet - without
-losing state when you walk away, lock your phone, or switch networks.
+Start, watch, and stop a Claude Code session running on this Windows PC from
+your phone, anywhere, over Tailscale. Open the PWA, tap a project, and the
+session appears live in the Claude Code app - the same session whether you
+drive it from the phone or sit down at the desk. When you are done, STOP ends
+it and writes a handoff summary for next time.
 
-Works from any device with an SSH client. Android and iOS setup (ConnectBot /
-Blink Shell) is documented under `client/` once M5 lands; any SSH client
-works in principle since the transport is plain SSH.
+## Architecture
 
-## Stack
+```
+phone (PWA) --https(Tailscale)--> tailscale serve --http--> Local Agent
+                                                              (Node,
+                                                          127.0.0.1:8790)
+                                                                 |
+                                                                 v
+                                                      agent/launch-session.ps1
+                                                                 |
+                                                                 v
+                                                  claude.cmd --remote-control
+                                                    (Claude Code app, Code tab)
 
-- Host: Windows, Tailscale (assumed already installed), Windows OpenSSH
-  Server, PowerShell.
-- Session layer: WSL1 running tmux, Node, and the Claude Code CLI.
-- Client: any SSH app - ConnectBot (Android) and Blink Shell (iOS)
-  documented specifically.
-
-## Status
-
-Early scaffold. See `docs/claude-remote-prd.md` for the full spec,
-including the milestone breakdown (section 12). `claude-remote.ps1` now
-resolves the project folder, creates or reattaches the tmux session, and
-starts `claude` inside it on first creation; connection-string printing and
-`list-sessions` still land in later milestones.
-
-## Local setup (current scaffold)
-
-```powershell
-git clone <this repo>
-cd claude-remote
-.\claude-remote.ps1 -ProjectPath .
+STOP --> taskkill on the session's process --> agent/handoff-session.ps1
+         (hidden `claude -p ... /handoff`, writes the handoff, no
+         --remote-control so it never registers a session of its own)
 ```
 
-Running it with no argument uses the saved default folder instead, which the
-setup flow does not configure yet.
+`tailscale serve` terminates HTTPS on this machine's MagicDNS name and proxies
+to the agent on loopback; see `docs/tailscale-https.md` for why that step is
+required. The agent never binds to anything but `127.0.0.1`.
 
-## Running the tests
+## Daily use
+
+1. Open the PWA on your phone.
+2. Enter the passcode (set once at the desk - see Setup below).
+3. Tap a project in the list. It moves up into the RUNNING tiles as the
+   session launches and shows up in the Claude Code app's Code tab; work
+   there as normal.
+4. A session started at the desk (not from the phone) shows up in the picker
+   too, its tile marked "desktop" - you can end it from the phone the same
+   way.
+5. When finished, tap STOP, then confirm END & WRITE HANDOFF (shown as
+   END & WRITE HANDOFF (DESKTOP) for a desk-started session). The agent kills
+   the session's process and runs a hidden `claude -p ... /handoff` in the
+   project to write a handoff summary, then shows a banner once it is done.
+
+## Setup on this machine
+
+Prerequisites: Windows, Tailscale already installed and up, Node >= 24.2.0,
+the Claude Code CLI on PATH.
 
 ```powershell
-Invoke-Pester -Path .\tests
+node agent/server.js
 ```
+
+This listens on `http://127.0.0.1:8790` only. On first run it has no
+passcode and every `/api` route except the passcode routes themselves
+answers 403 - open
+`http://127.0.0.1:8790` at the desk and set one before doing anything
+else, and before turning on `tailscale serve` (see
+`docs/tailscale-https.md` for why the order matters).
+
+To have the agent start itself at logon, register the scheduled task -
+see `docs/agent-autostart.md`.
+
+To expose the agent to your phone over HTTPS via Tailscale, follow
+`docs/tailscale-https.md` (in short: `tailscale serve --bg --https=8790
+8790`, run only after the passcode is set).
+
+## Tests
+
+```powershell
+Invoke-Pester .\tests\ClaudeRemote.Tests.ps1
+```
+
+```
+node --test "agent/test/**/*.test.js"
+```
+
+Run the second one from the repo root; the bare-directory form
+(`node --test agent/test/`) fails on this host.
+
+## Legacy: SSH + WSL1 + tmux path
+
+`claude-remote.ps1`, `src/`, and `tests/` are the earlier Tailscale +
+Windows OpenSSH Server + WSL1 (tmux, Node, Claude Code CLI) design, driven
+from an SSH client such as ConnectBot or Blink Shell. That path is present in
+the repo but not supported and not documented further; the PWA and Local
+Agent above are the current design.
+
+## License
+
+MIT. See `LICENSE`.
