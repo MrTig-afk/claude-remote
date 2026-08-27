@@ -613,14 +613,14 @@ test('the danger colours (#ff7b72, #e5534b) appear only in stop/confirm rules, n
   assert.ok(!/#ff7b72|#e5534b/i.test(bannerErrorRule[0]), '.banner.error must not use a danger colour');
 });
 
-test('anyWatchable is true only for running/handoff, and the watch loop is a bounded 5s poll gated on visibility', () => {
+test('anyWatchable is true for running/handoff/starting, and the watch loop is a bounded 5s poll gated on visibility', () => {
   const js = read('app.js');
   const body = js.match(/function anyWatchable\(\) \{\s*return ([^;]+);/);
   assert.ok(body, 'app.js must carry anyWatchable');
   const anyWatchable = new Function('state', `return ${body[1]};`);
   assert.equal(anyWatchable({ sessions: [{ status: 'running' }] }), true);
   assert.equal(anyWatchable({ sessions: [{ status: 'handoff' }] }), true);
-  assert.equal(anyWatchable({ sessions: [{ status: 'starting' }] }), false);
+  assert.equal(anyWatchable({ sessions: [{ status: 'starting' }] }), true, 'a cancelled launch must be polled away, not left stale');
   assert.equal(anyWatchable({ sessions: [{ status: 'failed' }] }), false);
   assert.equal(anyWatchable({ sessions: [{ status: 'ended' }] }), false);
   assert.equal(anyWatchable({ sessions: [] }), false);
@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v8', () => {
+test('sw.js CACHE is claude-remote-shell-v9', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v8');
+  assert.equal(match[1], 'claude-remote-shell-v9');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------

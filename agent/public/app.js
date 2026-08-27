@@ -429,8 +429,13 @@ async function confirmStarting(force = false) {
 const WATCH_GAP_MS = 5000;
 let watching = false;
 
+// `starting` included (owner, 2026-08-27): a launch cancelled at the desk
+// otherwise sat on the phone as a stale tile until REFRESH, because the
+// bounded confirm sequence had ended and nothing else polled. The server
+// ages a dead `starting` entry into `failed` and prunes it; the watch just
+// has to keep asking until it is either running or gone.
 function anyWatchable() {
-  return (state.sessions || []).some((s) => s.status === 'running' || s.status === 'handoff');
+  return (state.sessions || []).some((s) => s.status === 'running' || s.status === 'handoff' || s.status === 'starting');
 }
 
 // A separate loop from confirmStarting(), deliberately: that sequence is
