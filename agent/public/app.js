@@ -343,6 +343,22 @@ function hideBanner() {
 // yet) or still starting; a `failed` entry clears it here and maybeFailedBanner()
 // puts the real message up immediately after, which is why callers run this
 // FIRST.
+// A launch result exists only to cover the gap between the 202 and the entry
+// showing up in state.sessions - rowState falls back to it when there is no
+// session yet. Once the server HAS an entry for that project the result is
+// redundant, and leaving it is what froze a tile on "starting..." after a
+// PWA-launched session was exited at the desk (owner, 2026-08-27): the entry
+// was pruned server-side, rowState fell back to the stale result, and with
+// nothing watchable the poll loop had already stopped - only a manual refresh
+// (which resets state.results) cleared it. Dropped as soon as it is covered,
+// so there is nothing left to fall back to when the session later goes away.
+function dropCoveredResults() {
+  for (const name of [...state.results.keys()]) {
+    const p = state.projects.find((x) => x.name === name);
+    if (p && sessionFor(p)) state.results.delete(name);
+  }
+}
+
 function clearSettledLaunchBanner() {
   if (launchBannerFor === null) return;
   const p = (state.projects || []).find((x) => x.name === launchBannerFor);
@@ -429,6 +445,7 @@ async function confirmStarting(force = false) {
       const s = await getSessions();
       if (!s.ok) return;
       state.sessions = s.data.sessions;
+      dropCoveredResults();
       render();
       clearSettledLaunchBanner();
       maybeFailedBanner();
@@ -482,6 +499,7 @@ async function watchSessions() {
       const s = await getSessions();
       if (!s.ok) return;
       state.sessions = s.data.sessions;
+      dropCoveredResults();
       clearSettledLaunchBanner();
       reportEnded();
       render();

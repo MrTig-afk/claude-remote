@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v11', () => {
+test('sw.js CACHE is claude-remote-shell-v12', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v11');
+  assert.equal(match[1], 'claude-remote-shell-v12');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -880,5 +880,78 @@ test('both poll loops clear the launch banner BEFORE the call that may set its o
   assert.ok(
     watch.indexOf('clearSettledLaunchBanner()') < watch.indexOf('reportEnded()'),
     'the handoff-written line must survive the clear',
+  );
+});
+
+// --- a launch result must not outlive the session it describes -------------
+
+function makeDropCovered(state) {
+  const js = read('app.js');
+  const src = js.slice(
+    js.indexOf('function dropCoveredResults('),
+    js.indexOf('function clearSettledLaunchBanner('),
+  );
+  const sessionFor = (p) =>
+    (state.sessions || []).find((s) => s.path === p.path && s.status !== 'ended') ?? null;
+  return new Function('state', 'sessionFor', src + '; return dropCoveredResults;')(state, sessionFor);
+}
+
+test('dropCoveredResults keeps the launch result while the entry has not landed yet', () => {
+  const state = {
+    projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }],
+    sessions: [],
+    results: new Map([['Sherlock', { kind: 'started' }]]),
+  };
+  makeDropCovered(state)();
+  assert.equal(state.results.size, 1, 'the 202 fires before the entry exists - the tile needs this to say starting');
+});
+
+test('dropCoveredResults drops the result the moment the server has an entry', () => {
+  const state = {
+    projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }],
+    sessions: [{ path: 'F:/p/Sherlock', status: 'starting' }],
+    results: new Map([['Sherlock', { kind: 'started' }]]),
+  };
+  makeDropCovered(state)();
+  assert.equal(state.results.size, 0, 'the session now speaks for itself');
+});
+
+test('a session pruned after being seen leaves NO stale result to fall back to', () => {
+  // The reported bug end to end: launch, entry appears, session exited at the
+  // desk, entry pruned. Without the drop, rowState fell back to the result and
+  // the tile sat on "starting..." until a manual refresh.
+  const state = {
+    projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }],
+    sessions: [{ path: 'F:/p/Sherlock', status: 'running' }],
+    results: new Map([['Sherlock', { kind: 'started' }]]),
+  };
+  const drop = makeDropCovered(state);
+  drop();                       // poll tick while it is running
+  state.sessions = [];          // desk exit, entry pruned server-side
+  drop();                       // next poll tick
+  assert.equal(state.results.size, 0);
+});
+
+test('dropCoveredResults leaves a result for a project that no longer exists alone', () => {
+  const state = {
+    projects: [],
+    sessions: [],
+    results: new Map([['Gone', { kind: 'error', code: 'x' }]]),
+  };
+  makeDropCovered(state)();
+  assert.equal(state.results.size, 1, 'no project row to render it on - not this function\'s business');
+});
+
+test('both poll loops drop covered results as soon as sessions are refreshed', () => {
+  const js = read('app.js');
+  const confirm = js.slice(js.indexOf('async function confirmStarting('), js.indexOf('const WATCH_GAP_MS'));
+  assert.ok(
+    confirm.indexOf('dropCoveredResults()') < confirm.indexOf('render()'),
+    'the drop must happen before the render that would otherwise draw the stale result',
+  );
+  const watch = js.slice(js.indexOf('async function watchSessions('), js.indexOf('function hideSplash('));
+  assert.ok(
+    watch.indexOf('dropCoveredResults()') < watch.indexOf('render()'),
+    'same for the 5s watch loop, which is the one that sees a desk exit',
   );
 });
