@@ -1071,6 +1071,41 @@ test('HTTP - POST /api/sessions/end on a running session: exact taskkill argv an
   }
 });
 
+test('HTTP - POST /api/sessions/end with ONLY session_name for a subfolder desk session -> 200 handoff_started, kill spawner called with its pid (review round 1, issue 3 - a mutation dropping session_name routing must fail this)', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7791);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'claude.exe';
+  const subCwd = path.join(base, 'Pull Requests', 'Whatsapp Plugin');
+  writeDeskSessionFile(regCtx, { pid: 7791, sessionId: 'sub-conv-2', cwd: subCwd });
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    // No `project` key at all - the subfolder session has no name
+    // resolveProjectPath would accept, so this is the ONLY body a real
+    // synthetic-tile STOP ever sends for it.
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_name: 'pull-requests/whatsapp-plugin' }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      result: 'handoff_started', project: 'Whatsapp Plugin', session_name: 'pull-requests/whatsapp-plugin',
+    });
+    assert.equal(killer.calls.length, 1, 'the kill spawner must have been called exactly once');
+    assert.deepEqual(killer.calls[0].args, ['/PID', '7791', '/T', '/F']);
+  } finally {
+    // Guarded: if the assertions above failed before a handoff spawned,
+    // handoffCalls is empty and an unguarded call here would mask the real
+    // assertion with a TypeError and skip server.close().
+    handoffCalls[0]?.child.handlers.exit();
+    server.close();
+  }
+});
+
 test('HTTP - POST /api/sessions/end on a running session: response, pid file, registry state, handoff spawn count', async () => {
   const regCtx = makeRegCtx();
   const killer = makeKillingSpawner(7778);
@@ -1894,4 +1929,76 @@ test('endSession - desk session: pidImageName is never called before a successfu
   const started = [r1, r2].find((r) => r.ok && r.body && r.body.result === 'handoff_started');
   handoffCalls[0].child.handlers.exit();
   await started.handoff;
+});
+
+// --- T50: END by session_name for a desk session in a project subfolder ----
+
+test('endSession - end by session_name for a subfolder desk session: registry claim survives the prune, handoff -> ended with the SUBFOLDER path (review round 1, issue 1)', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7790);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'claude.exe';
+  const subCwd = path.join(base, 'Pull Requests', 'Whatsapp Plugin');
+  writeDeskSessionFile(regCtx, { pid: 7790, sessionId: 'sub-conv-1', cwd: subCwd });
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  // Relative-to-baseDir, not the subfolder's bare basename (review round 1,
+  // issue 2) - 'whatsapp-plugin' alone could collide with a real top-level
+  // project of that name.
+  const sessionName = 'pull-requests/whatsapp-plugin';
+  const result = await endSession(ctx, { session_name: sessionName });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.body, { result: 'handoff_started', project: 'Whatsapp Plugin', session_name: sessionName });
+  assert.equal(killer.calls.length, 1);
+  assert.deepEqual(killer.calls[0].args, ['/PID', '7790', '/T', '/F']);
+
+  assert.equal(handoffCalls.length, 1);
+  const { args, options } = handoffCalls[0];
+  assert.equal(args[args.indexOf('-ProjectPath') + 1], subCwd);
+  assert.equal(args[args.indexOf('-SessionId') + 1], 'sub-conv-1');
+  assert.equal(args[args.indexOf('-ConfigDir') + 1], path.dirname(regCtx.sessionDirs[0]));
+  assert.equal(options.cwd, subCwd);
+
+  // What runStop actually does next: poll listSessions() right after the
+  // END response, before the handoff runner has exited. Pre-fix, the prune
+  // loop ran resolveProjectPath(baseDir, 'Whatsapp Plugin') on this entry -
+  // 404, not a direct child of baseDir - and silently dropped the claim, so
+  // this poll returned [] and the tile never showed "writing handoff...".
+  const duringHandoff = listSessions(ctx);
+  assert.equal(duringHandoff.length, 1, 'the claim must survive the very next poll, not be pruned');
+  assert.equal(duringHandoff[0].session_name, sessionName);
+  assert.equal(duringHandoff[0].status, 'handoff');
+  assert.equal(duringHandoff[0].path, subCwd);
+
+  fs.mkdirSync(subCwd, { recursive: true });
+  fs.writeFileSync(path.join(subCwd, 'HANDOFF.md'), 'written');
+  handoffCalls[0].child.handlers.exit();
+  const verdict = await result.handoff;
+  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
+
+  const afterHandoff = listSessions(ctx);
+  assert.equal(afterHandoff.length, 1, 'the ended record must survive too, or reportEnded() never fires');
+  assert.equal(afterHandoff[0].status, 'ended');
+  assert.equal(afterHandoff[0].handoff_ok, true);
+  assert.equal(afterHandoff[0].path, subCwd);
+});
+
+test('endSession - unknown session_name -> 404 session_not_found, never treated as already_ended', async () => {
+  const regCtx = makeRegCtx();
+  const ctx = { baseDir: base, ...regCtx };
+
+  const result = await endSession(ctx, { session_name: 'no-such-session' });
+
+  assert.deepEqual(result, { ok: false, status: 404, error: 'session_not_found' });
+});
+
+test('endSession - a body carrying neither project nor session_name -> 400 invalid_request', async () => {
+  const regCtx = makeRegCtx();
+  const ctx = { baseDir: base, ...regCtx };
+
+  const result = await endSession(ctx, undefined);
+
+  assert.deepEqual(result, { ok: false, status: 400, error: 'invalid_request' });
 });

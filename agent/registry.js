@@ -212,14 +212,18 @@ function readSessionFiles(ctx) {
 }
 
 /**
- * SessionViews for live desk-started sessions - one per project at most.
- * projects is listProjects(ctx.baseDir) output; claimedSessionNames is the
- * Set of session_name values the registry already produced a view for
- * (registry wins, disjoint sets). Never throws.
+ * SessionViews for live desk-started sessions - one per distinct cwd, so a
+ * session working in a subfolder of a project gets its OWN tile, named by
+ * that subfolder (owner, 2026-08-27 - supersedes 2ed64f5's "attribute to
+ * the parent tile" rule: a session in `Pull Requests\Whatsapp Plugin` reads
+ * as "Whatsapp Plugin", not "Pull Requests"). projects is
+ * listProjects(ctx.baseDir) output, used only as the "is this cwd under
+ * SOME listed project" gate; claimedSessionNames is the Set of session_name
+ * values the registry already produced a view for (registry wins, disjoint
+ * sets). Never throws.
  */
-// True when cwd is projectPath itself or anywhere below it. Owner decision
-// 2026-08-27: a desk session working in a subfolder of a project belongs to
-// that project's tile (name unchanged), and STOP on the tile ends it.
+// True when cwd is projectPath itself or anywhere below it - the gate for
+// "is this a project's own working tree at all", not an attribution rule.
 // Projects are flat siblings under baseDir, so a cwd can sit inside at most
 // one of them.
 function isInsideProject(projectPath, cwd) {
@@ -227,31 +231,43 @@ function isInsideProject(projectPath, cwd) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+// PowerShell/URL-safe and collision-proof against a root project's own
+// name: 'pull-requests/whatsapp-plugin', never just 'whatsapp-plugin' -
+// deriveSessionName(cwd) alone could equal a REAL top-level project's own
+// session_name, and END for that real project would then resolve to the
+// wrong session entirely (a live danger: wrong kill target, handoff written
+// into the wrong folder - not merely a cosmetic collision). Per-segment,
+// same slugging rule as deriveSessionName, joined with '/' - never the raw
+// OS separator, which is neither.
+function deriveDeskSessionName(baseDir, cwd) {
+  const rel = path.relative(path.resolve(baseDir), cwd);
+  return rel.split(path.sep).filter(Boolean)
+    .map((seg) => seg.replace(/[\s.]+/g, '-').toLowerCase())
+    .join('/');
+}
+
 export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
-  const best = new Map(); // project -> { record, sessionName }
+  const best = new Map(); // resolved cwd -> { record, sessionName }
 
   for (const record of readSessionFiles(ctx)) {
     const cwd = path.resolve(record.cwd);
-    const project = projects.find((p) => isInsideProject(p.path, cwd));
-    if (!project) continue;   // parent of a project, or outside baseDir
+    if (!projects.some((p) => isInsideProject(p.path, cwd))) continue;   // outside every listed project
 
-    const sessionName = deriveSessionName(project.path);
+    const sessionName = deriveDeskSessionName(ctx.baseDir, cwd);
     if (claimedSessionNames.has(sessionName)) continue;   // registry wins
 
-    const existing = best.get(project);
+    const existing = best.get(cwd);
     if (!existing || record.startedAtMs > existing.record.startedAtMs) {
-      best.set(project, { record, sessionName });
+      best.set(cwd, { record, sessionName });
     }
   }
 
   const views = [];
-  for (const project of projects) {   // stable order across polls
-    const kept = best.get(project);
-    if (!kept) continue;
+  for (const [cwd, kept] of best) {   // Map preserves insertion (discovery) order, stable across polls
     views.push({
       session_name: kept.sessionName,
-      project: project.name,
-      path: project.path,
+      project: path.basename(cwd),
+      path: cwd,
       status: 'running',
       started_at: new Date(kept.record.startedAtMs).toISOString(),
       pid: kept.record.pid,
@@ -264,16 +280,19 @@ export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
 }
 
 /** { sessionId, configDir } of the newest live interactive session whose
- *  cwd IS projectPath, or { sessionId: null, configDir: null } when none
- *  matches. Used by endSession to target --resume in the RIGHT profile -
- *  configDir is set whenever a record matched at all, even if that record's
- *  own sessionId failed validation, because the profile (not the id) is
- *  what --continue also needs to run in the right place. */
-export function resolveDeskSessionId(ctx, projectPath) {
-  const target = path.resolve(projectPath);
+ *  cwd IS EXACTLY targetPath (owner, 2026-08-27: a subfolder session is now
+ *  its own tile with its own STOP, not folded into an ancestor's), or
+ *  { sessionId: null, configDir: null } when none matches. Called with the
+ *  view's OWN path in both callers (a launched session's root, or a desk
+ *  session's own cwd - see endSession), never with a path a client
+ *  supplied. configDir is set whenever a record matched at all, even if
+ *  that record's own sessionId failed validation, because the profile (not
+ *  the id) is what --continue also needs to run in the right place. */
+export function resolveDeskSessionId(ctx, targetPath) {
+  const target = path.resolve(targetPath);
   let best = null;
   for (const record of readSessionFiles(ctx)) {
-    if (!isInsideProject(target, path.resolve(record.cwd))) continue;
+    if (path.resolve(record.cwd) !== target) continue;
     if (!best || record.startedAtMs > best.startedAtMs) best = record;
   }
   return best ? { sessionId: best.sessionId, configDir: best.configDir } : { sessionId: null, configDir: null };
@@ -301,6 +320,11 @@ export function claimDeskSession(ctx, { sessionName, project, projectPath, start
     started_at: startedAt,
     status: 'handoff',
     handoff_started_at: handoffStartedAt,
+    // The prune loop below cannot validate this entry the normal way -
+    // `project` is a display label (a subfolder's basename), not something
+    // resolveProjectPath(baseDir, project) would ever resolve - so it needs
+    // its own rule, keyed off this marker.
+    source: 'desk',
   });
   return writeRegistry(registryPath, sessions);
 }
@@ -318,6 +342,11 @@ export function listSessions(ctx) {
     isPidAlive: isAlive = isPidAlive,
     now = Date.now,
   } = ctx;
+
+  // Computed once, reused by the desk-entry prune check below AND by
+  // discovery at the end of this function - both need "is this cwd inside
+  // some listed project", and listProjects() is a filesystem read.
+  const projects = listProjects(baseDir);
 
   // A missing, empty or corrupt registry is treated as zero registry
   // entries, NOT as an early exit: discovery (below) must still run, or a
@@ -371,7 +400,10 @@ export function listSessions(ctx) {
       continue;
     }
 
-    const { session_name: sessionName, project, original_path: originalPath, started_at: startedAt } = entry;
+    const {
+      session_name: sessionName, project, original_path: originalPath, started_at: startedAt,
+      source: entrySource,
+    } = entry;
 
     if (
       typeof sessionName !== 'string' || sessionName === '' ||
@@ -383,18 +415,40 @@ export function listSessions(ctx) {
       continue;
     }
 
-    const r = resolveProjectPath(baseDir, project);
-    if (!r.ok) {
-      drop(sessionName);
-      continue;
-    }
-    if (r.path !== path.resolve(originalPath)) {
-      drop(sessionName);
-      continue;
-    }
-    if (deriveSessionName(r.path) !== sessionName) {
-      drop(sessionName);
-      continue;
+    // A desk claim's `project` is a display label only (a subfolder's
+    // basename) - resolveProjectPath(baseDir, project) would 404 it, since
+    // it is never a direct child of baseDir. Its honesty rests on
+    // original_path instead: it must sit inside SOME listed project, and
+    // its OWN derived name (the same rule discovery used to name it) must
+    // match session_name. A launched entry (no `source` marker) keeps the
+    // original resolveProjectPath contract unchanged.
+    let resolvedPath;
+    if (entrySource === 'desk') {
+      const resolved = path.resolve(originalPath);
+      if (!projects.some((p) => isInsideProject(p.path, resolved))) {
+        drop(sessionName);
+        continue;
+      }
+      if (deriveDeskSessionName(baseDir, resolved) !== sessionName) {
+        drop(sessionName);
+        continue;
+      }
+      resolvedPath = resolved;
+    } else {
+      const r = resolveProjectPath(baseDir, project);
+      if (!r.ok) {
+        drop(sessionName);
+        continue;
+      }
+      if (r.path !== path.resolve(originalPath)) {
+        drop(sessionName);
+        continue;
+      }
+      if (deriveSessionName(r.path) !== sessionName) {
+        drop(sessionName);
+        continue;
+      }
+      resolvedPath = r.path;
     }
 
     // handoff / ended / any other explicit status are handled here, each
@@ -420,7 +474,7 @@ export function listSessions(ctx) {
         views.push({
           session_name: sessionName,
           project,
-          path: r.path,
+          path: resolvedPath,
           status: 'handoff',
           started_at: startedAt,
           pid: null,
@@ -438,7 +492,7 @@ export function listSessions(ctx) {
         views.push({
           session_name: sessionName,
           project,
-          path: r.path,
+          path: resolvedPath,
           status: 'ended',
           started_at: startedAt,
           pid: null,
@@ -472,7 +526,7 @@ export function listSessions(ctx) {
       views.push({
         session_name: sessionName,
         project,
-        path: r.path,
+        path: resolvedPath,
         status: 'ended',
         started_at: startedAt,
         pid: null,
@@ -532,7 +586,7 @@ export function listSessions(ctx) {
     views.push({
       session_name: sessionName,
       project,
-      path: r.path,
+      path: resolvedPath,
       status,
       started_at: startedAt,
       pid: status === 'running' ? pid : null,
@@ -549,7 +603,7 @@ export function listSessions(ctx) {
   // a read of /api/sessions must not mutate the registry on account of a
   // desk session.
   const claimed = new Set(views.map((v) => v.session_name));
-  views.push(...discoverDeskSessions(ctx, listProjects(baseDir), claimed));
+  views.push(...discoverDeskSessions(ctx, projects, claimed));
   return views;
 }
 

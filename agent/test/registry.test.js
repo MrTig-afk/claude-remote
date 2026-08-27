@@ -892,15 +892,62 @@ test('discoverDeskSessions - kind !== interactive (the hidden `claude -p` handof
   );
 });
 
-test('discoverDeskSessions - cwd is a subfolder of a project -> listed under that project (owner, 2026-08-27)', () => {
+test('discoverDeskSessions - cwd is a subfolder of a project -> its OWN tile, named by the subfolder (owner, 2026-08-27, supersedes 2ed64f5)', () => {
   const ctx = makeCtx({ livePids: new Set([4245]) });
-  writeDeskFile(ctx.sessionDirs[0], {
-    pid: 4245, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests', 'sub'),
-  });
+  const subCwd = path.join(base, 'Pull Requests', 'Whatsapp Plugin');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4245, sessionId: 'abc-123', cwd: subCwd });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].project, 'Whatsapp Plugin');
+  assert.equal(views[0].path, subCwd);
+  assert.equal(views[0].session_name, 'pull-requests/whatsapp-plugin');
+  assert.equal(views[0].pid, 4245);
+  assert.equal(views[0].source, 'desk');
+});
+
+test('discoverDeskSessions - a desk session AT a project root is unchanged (tile = project name)', () => {
+  const ctx = makeCtx({ livePids: new Set([4290]) });
+  const cwd = path.join(base, 'Pull Requests');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4290, sessionId: 'abc-123', cwd });
+
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
   assert.equal(views[0].project, 'Pull Requests');
-  assert.equal(views[0].pid, 4245);
+  assert.equal(views[0].path, cwd);
+  assert.equal(views[0].session_name, 'pull-requests');
+});
+
+test('discoverDeskSessions - two desk sessions in two subfolders of one project -> two tiles', () => {
+  const ctx = makeCtx({ livePids: new Set([4295, 4296]) });
+  const subA = path.join(base, 'Pull Requests', 'Whatsapp Plugin');
+  const subB = path.join(base, 'Pull Requests', 'Other Feature');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4295, sessionId: 'a', cwd: subA });
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4296, sessionId: 'b', cwd: subB });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 2);
+  assert.deepEqual(views.map((v) => v.project).sort(), ['Other Feature', 'Whatsapp Plugin']);
+  assert.deepEqual(views.map((v) => v.path).sort(), [subB, subA].sort());
+});
+
+test('discoverDeskSessions - a subfolder session_name cannot collide with a real top-level project of the same basename (review round 1, issue 2)', () => {
+  // 'email-lint' is ALSO a real top-level project (see the base fixture at
+  // the top of this file) - a subfolder of 'Pull Requests' that happens to
+  // share that basename must still get its own, distinct session_name.
+  const ctx = makeCtx({ livePids: new Set([4298]) });
+  const subCwd = path.join(base, 'Pull Requests', 'email-lint');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4298, sessionId: 'x', cwd: subCwd });
+
+  const views = listSessions(ctx);
+  const deskView = views.find((v) => v.pid === 4298);
+  assert.ok(deskView, 'the subfolder session must still be discovered');
+  assert.notEqual(
+    deskView.session_name,
+    deriveSessionName(path.resolve(base, 'email-lint')),
+    'must not collide with the real top-level email-lint project own session_name',
+  );
+  assert.equal(deskView.session_name, 'pull-requests/email-lint');
 });
 
 test('discoverDeskSessions - a sibling folder whose name merely starts with the project name is NOT inside it', () => {
@@ -1071,7 +1118,7 @@ test('discoverDeskSessions - credential guard: only *.json is ever opened', () =
   }
 });
 
-test('resolveDeskSessionId - { sessionId, configDir } of the newest live match, subfolder counts, null when dead/dir missing', () => {
+test('resolveDeskSessionId - { sessionId, configDir } of the newest live EXACT match, null when dead/subfolder/dir missing', () => {
   const cwd = path.join(base, 'Pull Requests');
 
   {
@@ -1097,8 +1144,10 @@ test('resolveDeskSessionId - { sessionId, configDir } of the newest live match, 
   {
     const ctx = makeCtx({ livePids: new Set([4293]) });
     writeDeskFile(ctx.sessionDirs[0], { pid: 4293, sessionId: 'sub', cwd: path.join(cwd, 'sub') });
-    // A subfolder session belongs to the project (owner, 2026-08-27), so STOP resumes it.
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: 'sub', configDir: path.dirname(ctx.sessionDirs[0]) });
+    // A subfolder session is its own tile now (owner, 2026-08-27,
+    // supersedes 2ed64f5) - it must NOT be picked up as the launched
+    // session's underlying conversation.
+    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
   }
 
   {

@@ -701,7 +701,7 @@ test('runStop clears state.results before the end request goes out', () => {
   const fn = js.slice(js.indexOf('async function runStop('), js.indexOf('function newProjectNameEl('));
   assert.ok(fn.includes('state.results.delete(name);'), 'runStop must clear state.results, or an ended session\'s tile can resurrect via the results branch');
   assert.ok(
-    fn.indexOf('state.results.delete(name);') < fn.indexOf('await endSession(name)'),
+    fn.indexOf('state.results.delete(name);') < fn.indexOf('await endSession(endTargetFor(name))'),
     'state.results must be cleared before the end request is issued, mirroring onProjectTap',
   );
 });
@@ -731,11 +731,37 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v7', () => {
+test('sw.js CACHE is claude-remote-shell-v8', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v7');
+  assert.equal(match[1], 'claude-remote-shell-v8');
+});
+
+// --- a desk session in a subfolder gets its own tile -----------------
+
+test('renderProjects builds a synthetic project-shaped row for a desk session whose path matches no project', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
+  assert.doesNotMatch(fn, /s\.source !== 'desk'/, 'no source filter: a subfolder session mid-handoff is reported launched-shaped and must keep its tile');
+  assert.match(fn, /state\.projects\.some\(\(p\) => p\.path === s\.path\)/, 'must skip a desk session already matched by an existing project row');
+  assert.match(fn, /const synthetic = \{ name: s\.project, path: s\.path \};/);
+  assert.match(fn, /rows\.push\(\{ p: synthetic, rs: rowState\(synthetic\) \}\);/, 'the synthetic row must flow through the same rowState/buildTile path as a real project');
+  assert.ok(
+    fn.indexOf('const rows = state.projects.map') < fn.indexOf('const synthetic = { name: s.project, path: s.path };'),
+    'synthetic rows must be added after the real project rows',
+  );
+});
+
+test('endTargetFor sends session_name for a synthetic (non-project) tile name, project for everything else', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function endTargetFor('), js.indexOf('// Reconciled by renderProjects() too'));
+  const endTargetFor = new Function(
+    'state',
+    `${fn}\nreturn endTargetFor;`,
+  )({ projects: [{ name: 'Pull Requests' }], sessions: [{ source: 'desk', project: 'Whatsapp Plugin', session_name: 'whatsapp-plugin' }] });
+  assert.deepEqual(endTargetFor('Pull Requests'), { project: 'Pull Requests' });
+  assert.deepEqual(endTargetFor('Whatsapp Plugin'), { session_name: 'whatsapp-plugin' });
 });
 
 test('buildTile carries the desktop confirm label and still carries the plain one', () => {

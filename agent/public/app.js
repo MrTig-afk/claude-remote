@@ -131,7 +131,13 @@ function elapsed(startedAt) {
 // another.
 function sessionFor(p) {
   if (!state.sessions) return null;
-  return state.sessions.find((s) => (s.path === p.path || s.project === p.name) && s.status !== 'ended') ?? null;
+  // Path first. The name fallback is for registry entries only - a desk
+  // session in a subfolder that happens to share a root project's name must
+  // not attach itself to that project's row. Known ceiling: its STOP still
+  // resolves by display name (endTargetFor), so in that collision the
+  // subfolder session is not endable from the phone; key tiles on path if
+  // it ever happens for real.
+  return state.sessions.find((s) => (s.path === p.path || (s.project === p.name && s.source !== 'desk')) && s.status !== 'ended') ?? null;
 }
 
 /**
@@ -503,6 +509,24 @@ function renderProjects() {
 
   const rows = state.projects.map((p) => ({ p, rs: rowState(p) }));
 
+  // A desk session whose cwd is a project SUBFOLDER has no row of its own
+  // above - state.projects lists project ROOTS only - so it gets a
+  // synthetic project-shaped row here, named by the subfolder (owner,
+  // 2026-08-27: "it should tell me the name of the project"). A desk
+  // session AT a project root already matched that project's own row via
+  // sessionFor() and needs none of this; the path check below is what
+  // tells the two apart.
+  // No source check here: while a subfolder session's handoff runs, the
+  // registry reports it as a launched-shaped entry, and it must keep its
+  // tile ("writing handoff...") for that window. The path check alone is
+  // sufficient - a launched session's path is always a listed project.
+  for (const s of (state.sessions || [])) {
+    if (s.status === 'ended') continue; // its one banner is the receipt; no phantom row
+    if (state.projects.some((p) => p.path === s.path)) continue;
+    const synthetic = { name: s.project, path: s.path };
+    rows.push({ p: synthetic, rs: rowState(synthetic) });
+  }
+
   // A stale confirm re-attaching to a later session is worse than the
   // accepted "one stale history entry" ceiling: it is a live STOP confirm
   // sitting on a project the owner never asked to end. Reconciled here,
@@ -669,6 +693,17 @@ function openConfirm(name) {
   render();
 }
 
+// A synthetic desk-subfolder tile's name is the subfolder's basename, never
+// a name resolveProjectPath would accept, so it must END by session_name
+// instead (see agent/server.js, the end-session route). Any name that IS a
+// listed project - including a root-level desk session - keeps the
+// original project-name contract unchanged.
+function endTargetFor(name) {
+  if (state.projects.some((p) => p.name === name)) return { project: name };
+  const s = (state.sessions || []).find((sess) => sess.source === 'desk' && sess.project === name);
+  return { session_name: s ? s.session_name : name };
+}
+
 // Reconciled by renderProjects() too: if the session ends server-side while
 // a confirm is open, the next render clears confirmName and pops the
 // history entry itself, rather than leaving a stale confirm to re-attach to
@@ -682,7 +717,7 @@ async function runStop(name) {
   hideBanner();
   render();
 
-  const res = await endSession(name);
+  const res = await endSession(endTargetFor(name));
   state.stopping.delete(name);
 
   if (res.ok && res.data.result === 'handoff_started') {

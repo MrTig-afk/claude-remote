@@ -263,13 +263,53 @@ function watchHandoff(ctx, sessionName, projectPath, mtimeBefore, runner) {
  * Force tree-kills the session's process, then spawns a hidden handoff run
  * in the project folder. ctx.killSpawner and ctx.handoffSpawner are the two
  * injectable seams, mirroring ctx.spawner; both default to child_process.spawn.
+ *
+ * `target` is either a project name (string, the original contract - a
+ * launched session or a desk session sitting at a project ROOT) or
+ * `{ session_name }` (a desk session in a project SUBFOLDER, which has no
+ * `project` the client could legally name - resolveProjectPath would reject
+ * a nested path outright). Both funnel into endResolvedSession(), the one
+ * place that ever claims a registry entry, calls taskkill or spawns the
+ * handoff - so the security-sensitive bit exists exactly once regardless of
+ * which key the phone sent.
  */
-export async function endSession(ctx, project) {
+export async function endSession(ctx, target) {
+  if (target !== null && typeof target === 'object') {
+    return endSessionByName(ctx, target.session_name);
+  }
+
+  const project = target;
   const r = resolveProjectPath(ctx.baseDir, project);
   if (!r.ok) return r;
 
   const sessionName = deriveSessionName(r.path);
   const existing = findLiveSession(ctx, sessionName);
+  return endResolvedSession(ctx, { sessionName, projectPath: r.path, project, existing });
+}
+
+/**
+ * The session_name counterpart of the project-string path above. The view
+ * IS the trust boundary: path, pid, source, session id and config dir all
+ * come from listSessions(ctx) (server-side discovery), never from the
+ * request body. An unknown or no-longer-live session_name is 404, not
+ * `already_ended` - a subfolder session that has vanished from discovery
+ * leaves no registry entry to report an ending for, unlike a launched
+ * project.
+ */
+function endSessionByName(ctx, sessionName) {
+  if (typeof sessionName !== 'string' || sessionName === '') {
+    return { ok: false, status: 400, error: 'invalid_request' };
+  }
+  const existing = findLiveSession(ctx, sessionName);
+  if (!existing) {
+    return { ok: false, status: 404, error: 'session_not_found' };
+  }
+  return endResolvedSession(ctx, {
+    sessionName, projectPath: existing.path, project: existing.project, existing,
+  });
+}
+
+async function endResolvedSession(ctx, { sessionName, projectPath, project, existing }) {
   const isDesk = existing !== null && existing.source === 'desk';
 
   if (!existing) {
@@ -300,7 +340,7 @@ export async function endSession(ctx, project) {
   const startedIso = new Date((ctx.now || Date.now)()).toISOString();
   const claimed = isDesk
     ? claimDeskSession(ctx, {
-        sessionName, project, projectPath: r.path,
+        sessionName, project, projectPath,
         startedAt: existing.started_at, handoffStartedAt: startedIso,
       })
     : markSessionState(ctx, sessionName, null, { status: 'handoff', handoff_started_at: startedIso });
@@ -367,7 +407,7 @@ export async function endSession(ctx, project) {
   // recent conversation.
   const { sessionId, configDir } = isDesk
     ? { sessionId: existing.session_id, configDir: existing.config_dir }
-    : resolveDeskSessionId(ctx, r.path);
+    : resolveDeskSessionId(ctx, projectPath);
 
   killTree(ctx, pid, `'${sessionName}'`);
 
@@ -394,7 +434,7 @@ export async function endSession(ctx, project) {
   // Registry is already at `status: 'handoff'` from the claim above - no
   // second write needed here.
 
-  const mtimeBefore = handoffMtime(r.path);  // read BEFORE the spawn
+  const mtimeBefore = handoffMtime(projectPath);  // read BEFORE the spawn
 
   const handoffSpawn = ctx.handoffSpawner || spawn;
   const handoffArgs = [
@@ -402,7 +442,7 @@ export async function endSession(ctx, project) {
     '-NonInteractive',
     '-ExecutionPolicy', 'Bypass',
     '-File', HANDOFF_SCRIPT,
-    '-ProjectPath', r.path,
+    '-ProjectPath', projectPath,
   ];
   // Only appended when there is one - never `-SessionId ''` / `-ConfigDir ''`.
   if (typeof sessionId === 'string' && sessionId !== '') handoffArgs.push('-SessionId', sessionId);
@@ -412,13 +452,13 @@ export async function endSession(ctx, project) {
     // event. windowsHide is what keeps a console window off the owner's desk.
     stdio: 'ignore',
     windowsHide: true,
-    cwd: r.path,
+    cwd: projectPath,
   });
 
   return {
     ok: true,
     status: 200,
     body: { result: 'handoff_started', project, session_name: sessionName },
-    handoff: watchHandoff(ctx, sessionName, r.path, mtimeBefore, runner),
+    handoff: watchHandoff(ctx, sessionName, projectPath, mtimeBefore, runner),
   };
 }

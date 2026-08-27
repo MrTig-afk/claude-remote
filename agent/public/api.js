@@ -83,8 +83,11 @@ export function launchSession(projectName) {
   return post('/api/sessions', { project: projectName });
 }
 
-export function endSession(projectName) {
-  return post('/api/sessions/end', { project: projectName });
+// target is { project } for a launched session or a root-level desk session,
+// or { session_name } for a desk session in a project subfolder (it has no
+// project name the server would accept - see server.js).
+export function endSession(target) {
+  return post('/api/sessions/end', target);
 }
 
 export function dismissEnded(sessionName) {
