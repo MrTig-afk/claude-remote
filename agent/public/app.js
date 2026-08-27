@@ -306,7 +306,15 @@ function buildRow(p, rs) {
   return btn;
 }
 
+// The project name the launch banner is about, or null. Held because the
+// launch banner is the only one with no natural end: nothing but load()
+// ever hid it, so "- start requested." stayed on screen until the owner
+// manually refreshed, long after the session was live. Cleared by every
+// other banner too, so this can never hide someone else's message.
+let launchBannerFor = null;
+
 function setBanner(tone, parts) {
+  launchBannerFor = null;
   const el = document.getElementById('banner');
   el.innerHTML = '';
   el.className = 'banner' + (tone === 'error' ? ' error' : '');
@@ -323,9 +331,24 @@ function setBanner(tone, parts) {
 }
 
 function hideBanner() {
+  launchBannerFor = null;
   const el = document.getElementById('banner');
   el.hidden = true;
   el.innerHTML = '';
+}
+
+// Drops the launch banner as soon as the session it names stops being
+// `starting` - the tile says the rest better than the banner can. Kept while
+// the entry is still absent (the launch has not landed in state.sessions
+// yet) or still starting; a `failed` entry clears it here and maybeFailedBanner()
+// puts the real message up immediately after, which is why callers run this
+// FIRST.
+function clearSettledLaunchBanner() {
+  if (launchBannerFor === null) return;
+  const p = (state.projects || []).find((x) => x.name === launchBannerFor);
+  const s = p ? sessionFor(p) : null;
+  if (!s || s.status === 'starting') return;
+  hideBanner();
 }
 
 function setErrorBanner(code, status) {
@@ -407,6 +430,7 @@ async function confirmStarting(force = false) {
       if (!s.ok) return;
       state.sessions = s.data.sessions;
       render();
+      clearSettledLaunchBanner();
       maybeFailedBanner();
       if (!anyStarting()) return;
     }
@@ -458,6 +482,7 @@ async function watchSessions() {
       const s = await getSessions();
       if (!s.ok) return;
       state.sessions = s.data.sessions;
+      clearSettledLaunchBanner();
       reportEnded();
       render();
     }
@@ -650,6 +675,7 @@ async function onProjectTap(e) {
   if (res.ok && res.status === 202) {
     state.results.set(name, { kind: 'started', session: res.data });
     setBanner('info', [{ b: name }, { text: ' - start requested.' }]);
+    launchBannerFor = name;
   } else if (res.ok && res.status === 200) {
     state.results.set(name, { kind: 'reused', session: res.data });
     setBanner('info', [{ b: name }, { text: ' is already running.' }]);
@@ -657,6 +683,7 @@ async function onProjectTap(e) {
     // Any other 2xx: never assume, treat as started but say we don't know.
     state.results.set(name, { kind: 'started', session: res.data });
     setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a status this app doesn't know." }]);
+    launchBannerFor = name;
   } else {
     state.results.set(name, { kind: 'error', code: res.code });
     setErrorBanner(res.code, res.status);

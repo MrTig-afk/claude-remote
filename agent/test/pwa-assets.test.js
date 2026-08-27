@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v10', () => {
+test('sw.js CACHE is claude-remote-shell-v11', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v10');
+  assert.equal(match[1], 'claude-remote-shell-v11');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -802,4 +802,83 @@ test("rowState's running branch shows the session's busy/idle activity", () => {
   const js = read('app.js');
   const fn = js.slice(js.indexOf('function rowState('), js.indexOf('function setDot('));
   assert.match(fn, /session\.activity \|\| 'active session'/);
+});
+
+// --- the launch banner clears itself once the session settles --------------
+
+function makeClearSettled(hideBannerSpy, state, launchBannerFor) {
+  const js = read('app.js');
+  const src = js.slice(
+    js.indexOf('function clearSettledLaunchBanner('),
+    js.indexOf('function setErrorBanner('),
+  );
+  // sessionFor is stubbed to the one rule this function depends on: a project
+  // row resolves to its session, or to null when there is none yet.
+  const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path) ?? null;
+  const make = new Function(
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
+    src + '; return clearSettledLaunchBanner;',
+  );
+  return make(state, sessionFor, hideBannerSpy, launchBannerFor);
+}
+
+function spy() {
+  const calls = [];
+  const fn = () => calls.push(1);
+  fn.calls = calls;
+  return fn;
+}
+
+const PROJ = { projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }] };
+
+test('clearSettledLaunchBanner does nothing when no launch banner is up', () => {
+  const hide = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, null)();
+  assert.equal(hide.calls.length, 0);
+});
+
+test('clearSettledLaunchBanner keeps the banner while the launch has not landed in state.sessions yet', () => {
+  const hide = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [] }, 'Sherlock')();
+  assert.equal(hide.calls.length, 0, 'the 202 fires before the entry exists - hiding here would blank it instantly');
+});
+
+test('clearSettledLaunchBanner keeps the banner while the session is still starting', () => {
+  const hide = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'starting' }] }, 'Sherlock')();
+  assert.equal(hide.calls.length, 0);
+});
+
+test('clearSettledLaunchBanner drops the banner as soon as the session is running', () => {
+  const hide = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, 'Sherlock')();
+  assert.equal(hide.calls.length, 1, 'this is the bug: it used to sit there until a manual refresh');
+});
+
+test('clearSettledLaunchBanner drops the banner for a failed session too, so maybeFailedBanner can replace it', () => {
+  const hide = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'failed' }] }, 'Sherlock')();
+  assert.equal(hide.calls.length, 1);
+});
+
+test('both banner primitives release the launch handle, so no other message can be hidden by it', () => {
+  const js = read('app.js');
+  const setB = js.slice(js.indexOf('function setBanner('), js.indexOf('function hideBanner('));
+  const hideB = js.slice(js.indexOf('function hideBanner('), js.indexOf('function clearSettledLaunchBanner('));
+  assert.match(setB, /launchBannerFor = null;/);
+  assert.match(hideB, /launchBannerFor = null;/);
+});
+
+test('both poll loops clear the launch banner BEFORE the call that may set its own', () => {
+  const js = read('app.js');
+  const confirm = js.slice(js.indexOf('async function confirmStarting('), js.indexOf('const WATCH_GAP_MS'));
+  assert.ok(
+    confirm.indexOf('clearSettledLaunchBanner()') < confirm.indexOf('maybeFailedBanner()'),
+    'a failed launch must end up showing the failure, not a blank banner',
+  );
+  const watch = js.slice(js.indexOf('async function watchSessions('), js.indexOf('function hideSplash('));
+  assert.ok(
+    watch.indexOf('clearSettledLaunchBanner()') < watch.indexOf('reportEnded()'),
+    'the handoff-written line must survive the clear',
+  );
 });
