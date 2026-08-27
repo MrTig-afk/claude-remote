@@ -160,7 +160,13 @@ function rowState(p) {
     if (session.status === 'running') {
       const desk = session.source === 'desk';
       return {
-        zone: 'tile', dot: 'filled', status: 'active session',
+        // `busy` / `idle` / `waiting` is Claude Code's own word for what the session is
+        // doing right now (agent/registry.js reads it from the desk-session
+        // file). It REPLACES 'active session' rather than being appended as a
+        // fourth segment: the filled dot already says active, and a fourth
+        // segment wraps the 9px status line onto two lines on a 184px tile
+        // (app.css:159 sets no nowrap). Line reads: "busy - 12m - desktop".
+        zone: 'tile', dot: 'filled', status: session.activity || 'active session',
         idle: elapsed(session.started_at), stop: true,
         ...(desk ? { suffix: 'desktop', desk: true } : {}),
       };
@@ -171,13 +177,13 @@ function rowState(p) {
     if (session.status === 'handoff') {
       return { zone: 'tile', dot: 'accent', status: 'writing handoff...', idle: '—' };
     }
-    return { zone: 'tile', dot: 'accent', status: 'starting - not confirmed', idle: elapsed(session.started_at) };
+    return { zone: 'tile', dot: 'accent', status: 'starting...', idle: elapsed(session.started_at) };
   }
 
   const result = state.results.get(p.name);
   if (result) {
     if (result.kind === 'started') {
-      return { zone: 'tile', dot: 'accent', status: 'start requested - not confirmed', idle: elapsed(result.session.started_at) };
+      return { zone: 'tile', dot: 'accent', status: 'starting...', idle: elapsed(result.session.started_at) };
     }
     if (result.kind === 'reused') {
       return { zone: 'tile', dot: 'filled', status: 'already running', idle: elapsed(result.session.started_at) };
@@ -643,14 +649,14 @@ async function onProjectTap(e) {
 
   if (res.ok && res.status === 202) {
     state.results.set(name, { kind: 'started', session: res.data });
-    setBanner('info', [{ b: name }, { text: " - start requested. Not confirmed yet: open the Claude app's Code tab to check it appeared." }]);
+    setBanner('info', [{ b: name }, { text: ' - start requested.' }]);
   } else if (res.ok && res.status === 200) {
     state.results.set(name, { kind: 'reused', session: res.data });
-    setBanner('info', [{ b: name }, { text: " is already running. Open it in the Claude app's Code tab." }]);
+    setBanner('info', [{ b: name }, { text: ' is already running.' }]);
   } else if (res.ok) {
     // Any other 2xx: never assume, treat as started but say we don't know.
     state.results.set(name, { kind: 'started', session: res.data });
-    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a status this app doesn't know. Check the Claude app's Code tab." }]);
+    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a status this app doesn't know." }]);
   } else {
     state.results.set(name, { kind: 'error', code: res.code });
     setErrorBanner(res.code, res.status);

@@ -127,7 +127,7 @@ function writeRegistry(registryPath, sessions) {
 
 /**
  * Every live, interactive session record from ctx.sessionDirs. Returns
- * [{ pid, sessionId, cwd, startedAtMs }]. Never throws: a missing dir, an
+ * [{ pid, sessionId, cwd, startedAtMs, configDir, activity }]. Never throws: a missing dir, an
  * unreadable file, junk JSON or a missing field yields fewer records, never
  * an error. Only names ending '.json' are opened - every other file in these
  * directories is a credential.
@@ -193,6 +193,15 @@ function readSessionFiles(ctx) {
         ? data.sessionId
         : null;
 
+      // Claude Code's own word for what the session is doing right now.
+      // Its writer (string-searched in claude.exe 2.1.247) has THREE values:
+      // 'busy' while a query runs, 'idle' when nothing is running, and
+      // 'waiting' when it is blocked on a prompt or question for you
+      // (the record then also carries `waitingFor`). Anything else - a
+      // value this version has never seen, or no key at all - is undefined,
+      // and the tile then says nothing rather than guessing.
+      const activity = ['busy', 'idle', 'waiting'].includes(data.status) ? data.status : undefined;
+
       records.push({
         pid: data.pid,
         sessionId,
@@ -204,6 +213,7 @@ function readSessionFiles(ctx) {
         // session actually lived in, not whichever one is hardcoded as the
         // default.
         configDir: path.dirname(dir),
+        activity,
       });
     }
   }
@@ -274,9 +284,23 @@ export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
       source: 'desk',
       session_id: kept.record.sessionId,
       config_dir: kept.record.configDir,
+      ...(kept.record.activity ? { activity: kept.record.activity } : {}),
     });
   }
   return views;
+}
+
+/** The newest live interactive record whose cwd IS EXACTLY targetPath, or
+ *  null. Every caller passes a path the SERVER owns (a view's own `path`),
+ *  never one a client supplied. */
+function newestRecordAt(ctx, targetPath) {
+  const target = path.resolve(targetPath);
+  let best = null;
+  for (const record of readSessionFiles(ctx)) {
+    if (path.resolve(record.cwd) !== target) continue;
+    if (!best || record.startedAtMs > best.startedAtMs) best = record;
+  }
+  return best;
 }
 
 /** { sessionId, configDir } of the newest live interactive session whose
@@ -289,12 +313,7 @@ export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
  *  that record's own sessionId failed validation, because the profile (not
  *  the id) is what --continue also needs to run in the right place. */
 export function resolveDeskSessionId(ctx, targetPath) {
-  const target = path.resolve(targetPath);
-  let best = null;
-  for (const record of readSessionFiles(ctx)) {
-    if (path.resolve(record.cwd) !== target) continue;
-    if (!best || record.startedAtMs > best.startedAtMs) best = record;
-  }
+  const best = newestRecordAt(ctx, targetPath);
   return best ? { sessionId: best.sessionId, configDir: best.configDir } : { sessionId: null, configDir: null };
 }
 
@@ -582,6 +601,15 @@ export function listSessions(ctx) {
       }
     }
 
+    // A LAUNCHED session's registry pid is the cmd.exe wrapper, so activity
+    // cannot come off the pid - it is matched by cwd instead (see
+    // newestRecordAt). Only `running` asks: `starting` has no session file
+    // yet, and `handoff`/`ended` return above this point.
+    // ponytail: one extra readSessionFiles pass per running launched entry
+    // (0-2 in practice, poll every 5s). Thread the records through
+    // discoverDeskSessions too if that ever shows up in a profile.
+    const activity = status === 'running' ? newestRecordAt(ctx, resolvedPath)?.activity : undefined;
+
     survivors.push(entry);
     views.push({
       session_name: sessionName,
@@ -592,6 +620,7 @@ export function listSessions(ctx) {
       pid: status === 'running' ? pid : null,
       source: 'launched',
       session_id: null,
+      ...(activity ? { activity } : {}),
     });
   }
 

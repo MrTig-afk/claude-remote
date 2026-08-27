@@ -829,10 +829,44 @@ test('markSessionState - never appends for a session name that is absent', () =>
 
 // --- desk-started session discovery --------------------------------------
 
-/** Writes <dir>/<pid>.json in the shape Claude Code 2.1.246 writes it. */
-function writeDeskFile(dir, { pid, sessionId, cwd, startedAt = new Date().toISOString(), kind = 'interactive' }) {
+/** Writes <dir>/<pid>.json with the FULL key set Claude Code really writes.
+ *  The KEY NAMES are verbatim from a live ~/.claude-max/sessions/<pid>.json
+ *  (claude 2.1.247, 2026-08-27). The keys the reader consumes - pid, cwd,
+ *  kind, sessionId, startedAt, status - carry realistic types (`startedAt`
+ *  is epoch MILLISECONDS there, not an ISO string; callers may still pass an
+ *  ISO string, which the reader also accepts). Every other value is a
+ *  placeholder whose type was NOT checked against the real file (the real
+ *  pidDomain carries the hostname, so nothing is copied). Every ignored key
+ *  is present anyway, so a fixture can never be "cleaner" than the real
+ *  thing. */
+function writeDeskFile(dir, opts) {
+  const { pid, sessionId, cwd, startedAt = Date.now(), kind = 'interactive' } = opts;
+  // `'status' in opts` (not a destructuring default) so a caller can pass
+  // `status: undefined` and get the key dropped by JSON.stringify below,
+  // distinct from a caller who omits `status` entirely and gets 'idle' -
+  // both look identical to a destructuring default.
+  const status = 'status' in opts ? opts.status : 'idle';
   fs.mkdirSync(dir, { recursive: true });
-  const data = { pid, cwd, startedAt, kind, entrypoint: 'cli', status: 'idle', updatedAt: startedAt };
+  const data = {
+    bridgeSessionId: null,
+    cwd,
+    entrypoint: 'cli',
+    kind,
+    messagingSocketPath: null,
+    name: null,
+    nameSince: 0,
+    nameSource: null,
+    peerFeatures: [],
+    peerProtocol: 1,
+    pid,
+    pidDomain: 'windows',
+    procStart: null,
+    startedAt,
+    status,
+    statusUpdatedAt: startedAt,
+    updatedAt: startedAt,
+    version: '2.1.247',
+  };
   if (sessionId !== undefined) data.sessionId = sessionId;
   fs.writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify(data), 'utf8');
 }
@@ -1116,6 +1150,87 @@ test('discoverDeskSessions - credential guard: only *.json is ever opened', () =
   } finally {
     fs.readFileSync = realReadFileSync;
   }
+});
+
+test("desk session - status 'busy' in the session file -> view.activity 'busy'", () => {
+  const ctx = makeCtx({ livePids: new Set([4310]) });
+  const cwd = path.join(base, 'Pull Requests');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4310, sessionId: 'abc-busy', cwd, status: 'busy' });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'running');
+  assert.equal(views[0].activity, 'busy');
+});
+
+test("desk session - status 'idle' -> view.activity 'idle'", () => {
+  const ctx = makeCtx({ livePids: new Set([4311]) });
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4311, sessionId: 'abc-idle', cwd: path.join(base, 'Pull Requests'), status: 'idle',
+  });
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].activity, 'idle');
+});
+
+test("desk session - status 'waiting' (blocked on a prompt) -> view.activity 'waiting'", () => {
+  const ctx = makeCtx({ livePids: new Set([4312]) });
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4312, sessionId: 'abc-wait', cwd: path.join(base, 'Pull Requests'), status: 'waiting',
+  });
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].activity, 'waiting');
+});
+
+test('desk session - a missing or unrecognised status -> NO activity key at all, still running', () => {
+  for (const [i, status] of [undefined, 'thinking', '', 42, null].entries()) {
+    const pid = 4320 + i;
+    const ctx = makeCtx({ livePids: new Set([pid]) });
+    // `status: undefined` still writes the full shape minus that key - JSON.stringify drops it.
+    writeDeskFile(ctx.sessionDirs[0], {
+      pid, sessionId: 'abc-x', cwd: path.join(base, 'Pull Requests'), status,
+    });
+
+    const views = listSessions(ctx);
+    assert.equal(views.length, 1, `status: ${String(status)}`);
+    assert.equal(views[0].status, 'running', `status: ${String(status)}`);
+    assert.equal('activity' in views[0], false,
+      `status ${String(status)} must not produce an activity key - never synthesise one`);
+  }
+});
+
+test('LAUNCHED session - activity is matched by cwd, not by the cmd.exe wrapper pid', () => {
+  // Modelled on 'a registry entry for the project wins over a live desk file'
+  // (registry.test.js:965): 555 is the cmd.exe wrapper in the pid file, 4330
+  // is the claude child that actually writes the session file. Both alive.
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now, livePids: new Set([555, 4330]) });
+  const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString());
+  writeSessions(ctx.registryPath, [entry]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+  writeDeskFile(ctx.sessionDirs[0], {
+    pid: 4330, sessionId: 'abc-launched', cwd: path.join(base, 'Pull Requests'), status: 'busy',
+  });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1, 'the registry entry claims the name - no duplicate tile');
+  assert.equal(views[0].source, 'launched');
+  assert.equal(views[0].pid, 555);
+  assert.equal(views[0].activity, 'busy');
+});
+
+test('LAUNCHED session - no matching session file -> no activity key', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now, livePids: new Set([556]) });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 1000).toISOString())]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '556', 'ascii');
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'running');
+  assert.equal('activity' in views[0], false);
 });
 
 test('resolveDeskSessionId - { sessionId, configDir } of the newest live EXACT match, null when dead/subfolder/dir missing', () => {

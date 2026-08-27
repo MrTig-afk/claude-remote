@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v9', () => {
+test('sw.js CACHE is claude-remote-shell-v10', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v9');
+  assert.equal(match[1], 'claude-remote-shell-v10');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -789,4 +789,17 @@ test('statusLine appends an optional suffix on top of its existing behaviour', (
     statusLine({ status: 'active session', idle: '36m', suffix: 'desktop' }),
     'active session - 36m - desktop',
   );
+});
+
+test("app.js never tells the owner to open the Claude app after a launch, except the failed banner", () => {
+  const js = read('app.js');
+  assert.doesNotMatch(js, /not confirmed/);
+  assert.equal((js.match(/Claude app/g) || []).length, 1,
+    "only maybeFailedBanner may mention the Claude app (owner, T47 interview Q1)");
+});
+
+test("rowState's running branch shows the session's busy/idle activity", () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function rowState('), js.indexOf('function setDot('));
+  assert.match(fn, /session\.activity \|\| 'active session'/);
 });
