@@ -405,6 +405,10 @@ export function listSessions(ctx) {
   const survivors = [];
   const views = [];
   let droppedAny = false;
+  // Set when an entry is normalised IN PLACE rather than removed. Without it
+  // the write-back below never fires for a mutation, and the normalisation
+  // would be recomputed - and lost - on every single request.
+  let rewroteAny = false;
 
   for (const entry of entries) {
     const drop = (sessionNameForCleanup) => {
@@ -507,7 +511,24 @@ export function listSessions(ctx) {
         // Past the timeout but inside 24h: the agent restarted mid-run and
         // never got to record a verdict. Report it as an interrupted end
         // rather than leaving the entry stuck as `handoff` forever.
-        survivors.push(entry);
+        //
+        // The entry is REWRITTEN, not merely re-reported. dismissSession is a
+        // compare-and-swap on the STORED status (dropSession, fromStatus
+        // 'ended'), so an entry still saying `handoff` matched nothing and the
+        // record could never be dismissed: the PWA re-announced "the handoff
+        // was not written" on EVERY open for a full 24h (owner hit this
+        // 2026-08-27). Normalising the stored status is what lets the one
+        // banner be the last one.
+        const settled = {
+          ...entry,
+          status: 'ended',
+          ended_at: entry.handoff_started_at,
+          handoff_ok: false,
+          handoff_result: 'interrupted',
+        };
+        delete settled.handoff_started_at;
+        survivors.push(settled);
+        rewroteAny = true;
         views.push({
           session_name: sessionName,
           project,
@@ -624,7 +645,7 @@ export function listSessions(ctx) {
     });
   }
 
-  if (droppedAny) {
+  if (droppedAny || rewroteAny) {
     writeRegistry(registryPath, survivors);
   }
 

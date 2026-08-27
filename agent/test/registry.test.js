@@ -658,6 +658,49 @@ test('listSessions - handoff past HANDOFF_TIMEOUT_MS but inside 24h -> ended / i
   assert.equal(views[0].ended_at, handoffStarted);
 });
 
+test('listSessions - an interrupted handoff is REWRITTEN to ended on disk, so it can be dismissed', () => {
+  // dismissSession -> dropSession(ctx, name, 'ended') is a compare-and-swap on
+  // the STORED status. While the entry stayed `handoff` the filter matched
+  // nothing, the record was never removed, and the PWA re-announced it on
+  // every open for 24h. The owner hit exactly this on 2026-08-27.
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const handoffStarted = new Date(now - (HANDOFF_TIMEOUT_MS + 60_000)).toISOString();
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - (HANDOFF_TIMEOUT_MS + 120_000)).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: handoffStarted,
+  })]);
+
+  listSessions(ctx);
+
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 1, 'still retained - the owner has not seen it yet');
+  const e = onDisk.sessions[0];
+  assert.equal(e.status, 'ended', 'the STORED status is what dismiss compares against');
+  assert.equal(e.handoff_ok, false);
+  assert.equal(e.handoff_result, 'interrupted');
+  assert.equal(e.ended_at, handoffStarted);
+  assert.equal(e.handoff_started_at, undefined, 'the handoff key is gone: the ended branch validates a different shape');
+});
+
+test('listSessions - a LIVE handoff inside the timeout is left alone on disk', () => {
+  // The mirror of the test above: normalising early would let a dismiss race
+  // delete a handoff that is still running.
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const handoffStarted = new Date(now - 1000).toISOString();
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: handoffStarted,
+  })]);
+
+  listSessions(ctx);
+
+  const e = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions[0];
+  assert.equal(e.status, 'handoff');
+  assert.equal(e.handoff_started_at, handoffStarted);
+});
+
 test('listSessions - handoff entry past FAILED_RETENTION_MS is pruned', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });

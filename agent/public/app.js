@@ -396,6 +396,14 @@ function reportEnded() {
     reported.add(s.session_name);
     dismissEnded(s.session_name); // fire-and-forget: a lost dismiss just re-announces next open
     if (s.handoff_ok) setBanner('info', [{ text: 'Handoff written for ' }, { b: s.project }, { text: '.' }]);
+    // 'interrupted' means the AGENT lost the verdict (it was restarted while
+    // the handoff ran), NOT that the handoff failed - the file is very often
+    // there. Saying "was not written" for that case is a lie the owner caught
+    // 2026-08-27: email-lint's HANDOFF.md was on disk, written two minutes
+    // before the restart, while the banner claimed it was not.
+    else if (s.handoff_result === 'interrupted') setBanner('error', [
+      { text: '! ' }, { b: s.project }, { text: " ended, but the agent restarted before it could confirm the handoff. Check that project's HANDOFF.md." },
+    ]);
     else setBanner('error', [{ text: '! Session ended, but the handoff was not written.' }]);
   }
 }

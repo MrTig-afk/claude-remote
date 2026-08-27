@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v13', () => {
+test('sw.js CACHE is claude-remote-shell-v14', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v13');
+  assert.equal(match[1], 'claude-remote-shell-v14');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -994,4 +994,18 @@ test('dropCoveredResults runs BEFORE clearSettledLaunchBanner in both loops', ()
       `${label}: the result must be dropped before the banner reads it`,
     );
   }
+});
+
+// --- an interrupted handoff must not claim the file was never written -----
+
+test("reportEnded distinguishes 'interrupted' from a genuine handoff failure", () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function reportEnded('), js.indexOf('function failedSessions('));
+  assert.match(fn, /s\.handoff_result === 'interrupted'/,
+    'the agent losing the verdict is not the same as the handoff failing');
+  assert.match(fn, /restarted before it could confirm/);
+  assert.ok(
+    fn.indexOf("=== 'interrupted'") < fn.indexOf('the handoff was not written'),
+    'the interrupted branch must be reached before the blunt fallback',
+  );
 });
