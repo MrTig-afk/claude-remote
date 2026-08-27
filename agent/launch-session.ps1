@@ -36,6 +36,18 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     # tools keep working while inbound messages never arrive. A test asserts
     # this whole token and that the stale form is absent.
     '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',
+    # The terminal tab. `--remote-control <name>` names the REMOTE CONTROL
+    # session (the Code-tab row) and does NOT touch the window title - a
+    # PWA-launched tab read "Claude Code" until this was added, verified from
+    # the owner's screenshot 2026-08-27. --name is the one that reaches the
+    # title (its --help: "shown in the prompt box, /resume picker, and
+    # terminal title"). The FOLDER leaf, not $SessionName: the owner wants
+    # `MingleHub`, and $SessionName is the sanitized lowercase-hyphen form.
+    # The inner quotes are load-bearing - Start-Process joins ArgumentList
+    # with spaces and adds no quoting of its own, so a project like
+    # `Pull Requests` would otherwise arrive as `--name=Pull` plus a stray
+    # `Requests` that claude reads as an initial prompt.
+    "--name=`"$(Split-Path -Leaf $ProjectPath)`"",
     '--remote-control', $SessionName
 )
 

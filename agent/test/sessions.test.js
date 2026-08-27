@@ -809,6 +809,18 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
     'the pre-rename plugin name must not return',
   );
   assert.ok(script.includes('--remote-control'));
+  // --remote-control names the Code-tab row, NOT the terminal title: a
+  // PWA-launched tab read "Claude Code" until --name was added (owner's
+  // screenshot, 2026-08-27). The folder leaf, not $SessionName - the owner
+  // wants `MingleHub`, and $SessionName is the sanitized lowercase form.
+  // The inner backtick-quotes are load-bearing: Start-Process joins
+  // ArgumentList with spaces and quotes nothing itself, so a project named
+  // `Pull Requests` would arrive as `--name=Pull` plus a stray `Requests`
+  // that claude reads as an initial prompt.
+  assert.ok(
+    script.includes('"--name=`"$(Split-Path -Leaf $ProjectPath)`""'),
+    'the launch must name the session after its FOLDER, quoted for spaces',
+  );
   assert.ok(script.includes('Activate.ps1'));
   assert.ok(script.includes('Start-Process'));
   assert.ok(script.includes('-LiteralPath'));
