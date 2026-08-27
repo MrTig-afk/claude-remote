@@ -363,8 +363,20 @@ function clearSettledLaunchBanner() {
   if (launchBannerFor === null) return;
   const p = (state.projects || []).find((x) => x.name === launchBannerFor);
   const s = p ? sessionFor(p) : null;
-  if (!s || s.status === 'starting') return;
-  hideBanner();
+  if (s) {
+    if (s.status === 'starting') return; // still coming up, the banner is the only signal
+    hideBanner();
+    return;
+  }
+  // No entry at all, and that means one of two opposite things. A session
+  // EXITED AT THE DESK is dropped outright by the registry (registry.js:571,
+  // dead pid -> drop, not `failed`), so "no entry" cannot be read as "not
+  // landed yet" - doing that left the banner up forever (owner, 2026-08-27).
+  // state.results is the discriminator: dropCoveredResults() deletes it the
+  // first time an entry is seen, and it runs BEFORE this in both loops. Still
+  // holding it -> the launch has not landed. Gone -> it landed and the
+  // session has since disappeared, so there is nothing left to wait for.
+  if (!state.results.has(launchBannerFor)) hideBanner();
 }
 
 function setErrorBanner(code, status) {

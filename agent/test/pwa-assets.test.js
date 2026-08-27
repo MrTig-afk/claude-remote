@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v12', () => {
+test('sw.js CACHE is claude-remote-shell-v13', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v12');
+  assert.equal(match[1], 'claude-remote-shell-v13');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -815,6 +815,7 @@ function makeClearSettled(hideBannerSpy, state, launchBannerFor) {
   // sessionFor is stubbed to the one rule this function depends on: a project
   // row resolves to its session, or to null when there is none yet.
   const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path) ?? null;
+  if (!state.results) state.results = new Map();
   const make = new Function(
     'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
     src + '; return clearSettledLaunchBanner;',
@@ -839,7 +840,11 @@ test('clearSettledLaunchBanner does nothing when no launch banner is up', () => 
 
 test('clearSettledLaunchBanner keeps the banner while the launch has not landed in state.sessions yet', () => {
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [] }, 'Sherlock')();
+  // "not landed yet" is represented by state.results STILL holding the launch
+  // result. An empty results map with no entry means the opposite - it landed
+  // and the session is gone - which is the desk-exit test further down.
+  const state = { ...PROJ, sessions: [], results: new Map([['Sherlock', { kind: 'started' }]]) };
+  makeClearSettled(hide, state, 'Sherlock')();
   assert.equal(hide.calls.length, 0, 'the 202 fires before the entry exists - hiding here would blank it instantly');
 });
 
@@ -954,4 +959,39 @@ test('both poll loops drop covered results as soon as sessions are refreshed', (
     watch.indexOf('dropCoveredResults()') < watch.indexOf('render()'),
     'same for the 5s watch loop, which is the one that sees a desk exit',
   );
+});
+
+// --- banner: a session exited AT THE DESK is dropped, never reported -------
+
+test('the launch banner keeps waiting while the launch has not landed (result still held)', () => {
+  const hide = spy();
+  const state = { ...PROJ, sessions: [], results: new Map([['Sherlock', { kind: 'started' }]]) };
+  makeClearSettled(hide, state, 'Sherlock')();
+  assert.equal(hide.calls.length, 0, 'no entry yet AND the result is still there - the 202 has not landed');
+});
+
+test('the launch banner clears when a session that HAD landed disappears (desk exit)', () => {
+  // registry.js:571 drops the entry outright on a dead pid - it is never
+  // reported as `failed`, so "no entry" must not be read as "not landed yet".
+  // dropCoveredResults() has already removed the result by then; that absence
+  // is what tells the two cases apart.
+  const hide = spy();
+  const state = { ...PROJ, sessions: [], results: new Map() };
+  makeClearSettled(hide, state, 'Sherlock')();
+  assert.equal(hide.calls.length, 1, 'this is the bug: the banner sat on "start requested" forever');
+});
+
+test('dropCoveredResults runs BEFORE clearSettledLaunchBanner in both loops', () => {
+  // The discriminator above is only correct in that order.
+  const js = read('app.js');
+  for (const [label, from, to] of [
+    ['confirmStarting', 'async function confirmStarting(', 'const WATCH_GAP_MS'],
+    ['watchSessions', 'async function watchSessions(', 'function hideSplash('],
+  ]) {
+    const fn = js.slice(js.indexOf(from), js.indexOf(to));
+    assert.ok(
+      fn.indexOf('dropCoveredResults()') < fn.indexOf('clearSettledLaunchBanner()'),
+      `${label}: the result must be dropped before the banner reads it`,
+    );
+  }
 });
