@@ -307,10 +307,11 @@ export function resolveProjectPath(baseDir, project) {
  * file is written, so this entry covers exactly the window the pid file does
  * not - however slow the machine is, with no second timeout to tune.
  *
- * ponytail: in-process, so it does not survive an agent restart. It does not
- * need to - an agent that restarts mid-launch has lost the child anyway, and
- * by then the pid file exists and findLiveSession covers it. Deleted on both
- * 'exit' and 'error' because node guarantees only that one of them fires.
+ * Deliberately in-process, so it does not survive an agent restart. It does
+ * not need to - an agent that restarts mid-launch has lost the child anyway,
+ * and by then the pid file exists and findLiveSession covers it. Deleted on
+ * both 'exit' and 'error' because node guarantees only that one of them
+ * fires.
  */
 const inFlightLaunches = new Map();
 
