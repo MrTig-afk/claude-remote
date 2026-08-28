@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { resolveBaseDir } from './config.js';
 import { listProjects, createProject } from './projects.js';
@@ -13,6 +15,27 @@ export const HOST = '127.0.0.1';
 // (bun.exe server.ts). Verified 2026-08-25. Any Windows Firewall rule for
 // this agent's port must match whatever this is.
 export const DEFAULT_PORT = 8790;
+
+const AGENT_PACKAGE_PATH = path.resolve(fileURLToPath(new URL('./package.json', import.meta.url)));
+
+/**
+ * The agent's own version, from the package.json sitting BESIDE this file.
+ * Adjacent deliberately - no '../' - so the agent never depends on where in a
+ * repo (or a plugin install) it was dropped. Anything unreadable or
+ * unparseable degrades to 'unknown': a version string is a display value, and
+ * a broken read must not stop the agent from booting or answering.
+ */
+export function readAgentVersion(packagePath = AGENT_PACKAGE_PATH) {
+  try {
+    const version = JSON.parse(fs.readFileSync(packagePath, 'utf8')).version;
+    return typeof version === 'string' && version.trim() !== '' ? version : 'unknown';
+  } catch (err) {
+    console.warn(`claude-remote agent: could not read version from '${packagePath}': ${err.code || err.message}`);
+    return 'unknown';
+  }
+}
+
+export const AGENT_VERSION = readAgentVersion();
 
 function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
