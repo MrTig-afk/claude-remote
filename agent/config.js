@@ -119,6 +119,28 @@ export function readConfig(configPath = getConfigFilePath()) {
 }
 
 /**
+ * Whole-file config write, tmp + rename. Returns true on success, false with
+ * a warn on failure - same contract and same shape as registry.js's
+ * writeRegistry. Never throws.
+ * ponytail: read-modify-write with no lock. Single-user agent on loopback,
+ * so the window is theoretical. Upgrade path: an O_EXCL lockfile around
+ * read+write.
+ */
+export function writeConfig(configPath, config) {
+  try {
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const json = JSON.stringify(config, null, 2);
+    const tmp = `${configPath}.tmp`;
+    fs.writeFileSync(tmp, json, 'utf8');
+    fs.renameSync(tmp, configPath);
+    return true;
+  } catch (err) {
+    console.warn(`claude-remote agent: could not write config '${configPath}': ${err.code || err.message}`);
+    return false;
+  }
+}
+
+/**
  * Normalises one shared_folders array into the four-key entry shape,
  * dropping anything malformed with a warn rather than aborting the whole
  * array - this file is hand-editable, so one bad line must not cost every

@@ -39,6 +39,11 @@ export function makeAuthCtx({ now } = {}) {
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
     sessionDirs: testSessionDirs(dir),
+    // T94's PUT /api/shared writes through ctx.configPath. Omitting it here
+    // is the exact same bug class the comment below already warns about, one
+    // key later: agent/config.js's real getConfigFilePath() would take over
+    // and the suite would overwrite the owner's live config.json.
+    configPath: path.join(dir, 'config.json'),
     tokens: new Map(),
     now: now || Date.now,
   };
@@ -50,7 +55,7 @@ export function makeAuthCtx({ now } = {}) {
 // ~/.claude/plugins/data/claude-remote-claude-remote/sessions.json on every
 // run, silently, for two days. `undefined` is the dangerous value (it is what
 // triggers the config.js fallback), so a missing key throws like a wrong one.
-const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir'];
+const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir', 'configPath'];
 
 // The fifth key that falls back to the real world, and the only one that is
 // not a path: sessions.js does `const { baseDir, spawner = spawn } = ctx`, so

@@ -5,6 +5,7 @@ import { resolveBaseDir } from './config.js';
 import { listProjects, createProject } from './projects.js';
 import { listDrives } from './drives.js';
 import { listFolders } from './folders.js';
+import { putSharedFolders } from './shared.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
@@ -183,6 +184,29 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
       sendJson(res, 200, result.body);
+      return;
+    }
+
+    // PUT is never a CORS simple method - it always preflights, and this
+    // agent emits no CORS header, so the preflight fails closed. No
+    // isJsonRequest check here: that guard exists only for the two
+    // UNAUTHENTICATED auth POSTs, where a cross-origin text/plain POST is a
+    // CORS simple request that skips the preflight. POST /api/projects and
+    // POST /api/sessions do not have it either.
+    if (req.method === 'PUT' && url.pathname === '/api/shared') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { error: parsed.error });
+        return;
+      }
+      const result = await putSharedFolders(ctx, parsed.value);
+      if (!result.ok) {
+        const body = { error: result.error };
+        if (result.index !== undefined) body.index = result.index;
+        sendJson(res, result.status, body);
+        return;
+      }
+      sendJson(res, 200, { shared_folders: result.shared_folders });
       return;
     }
 

@@ -74,6 +74,7 @@ function makeRegCtx(extra = {}) {
     now: () => Date.now(),
     passcodePath: path.join(dir, 'passcode.json'),
     attemptsPath: path.join(dir, 'passcode-attempts.json'),
+    configPath: path.join(dir, 'config.json'),
     tokens: new Map(),
     ...extra,
   };
