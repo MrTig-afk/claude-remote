@@ -54,9 +54,17 @@ async function defaultPidImageName(pid) {
 }
 
 /**
- * Port of ConvertTo-SessionName (ClaudeRemote.psm1:1-16) for the
- * ONE-ARGUMENT form, which is byte-for-byte what it always was. Known,
- * accepted divergence: .NET \s includes U+0085 and JS \s includes U+FEFF.
+ * Was a port of ConvertTo-SessionName (ClaudeRemote.psm1) in its
+ * ONE-ARGUMENT form. IT NO LONGER IS, and that divergence is deliberate:
+ * slugSegment below is an allowlist, while ConvertTo-SessionName is still
+ * the original denylist. They are not the same rule any more and must not be
+ * "resynced" by loosening this side.
+ * The two delivery paths do not share a sink - this one feeds
+ * launch-session.ps1 and cmd.exe, the PowerShell one feeds a tmux session
+ * name through wsl.exe - so the fix landed only where the sink is. Whether
+ * the SSH path needs its own is an open question for that path, not a reason
+ * to weaken this one. The old note about .NET \s vs JS \s is moot here: no
+ * whitespace class is used any more.
  *
  * The TWO-ARGUMENT form has NO PowerShell counterpart - ConvertTo-SessionName
  * has no concept of a container folder, and the Pester suite does not cover
@@ -65,7 +73,7 @@ async function defaultPidImageName(pid) {
  * share a registry key with a top-level 'Vercel'. A single-segment path with
  * baseDir is unchanged. The '/' is a private separator: no single-segment
  * name can contain one, because path.basename never yields a separator and
- * the slug rule only ever introduces '-'.
+ * the slug rule (slugSegment) only ever introduces '-'.
  *
  * This MUST return the same string as deriveDeskSessionName (registry.js)
  * for the same path, or listSessions emits two views for one live session.
@@ -75,8 +83,24 @@ async function defaultPidImageName(pid) {
  * projects.js, the tests - passes a bare name or a flat path and is
  * unaffected.
  */
+// SECURITY - an ALLOWLIST, and it must stay one. Everything that is not a
+// letter or a digit collapses to a single '-', so no shell metacharacter can
+// reach a session name whatever a folder is called.
+// It was a denylist (whitespace and dots only) until this was found: a
+// session name flows into launch-session.ps1, which hands it to
+// Start-Process for `claude.cmd` - a .cmd, so Windows runs it through
+// cmd.exe. A project named `x&calc` therefore executed calc. Anyone with a
+// valid token could create one over the API, and so could a folder name on
+// disk. Widening the name validators instead would have been a denylist
+// guarding a denylist; this is the one choke point every caller goes
+// through - resolveProjectPath, the launchability check, createProject's
+// collision guard, the pid-file name and the registry key.
+// Do not "relax" this to allow a character back in. Any new character here
+// is a new character reaching cmd.exe.
+export const slugSegment = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
 export function deriveSessionName(projectPath, baseDir) {
-  const slug = (s) => s.replace(/[\s.]+/g, '-').toLowerCase();
+  const slug = slugSegment;
   if (baseDir !== undefined) {
     const rel = path.relative(path.resolve(baseDir), path.resolve(projectPath));
     // Same "is it really underneath" test isInsideProject uses (registry.js):

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getRegistryFilePath, getPidDirPath, getSessionDirPaths } from './config.js';
-import { resolveProjectPath, deriveSessionName } from './sessions.js';
+import { resolveProjectPath, deriveSessionName, slugSegment } from './sessions.js';
 import { listProjects } from './projects.js';
 
 export const STARTING_GRACE_MS = 30_000;
@@ -264,10 +264,19 @@ function isInsideProject(projectPath, cwd) {
 // into the wrong folder - not merely a cosmetic collision). Per-segment,
 // same slugging rule as deriveSessionName, joined with '/' - never the raw
 // OS separator, which is neither.
-function deriveDeskSessionName(baseDir, cwd) {
+// Exported ONLY so the invariant below can be tested against
+// deriveSessionName directly. A source-scanning test is a proxy for it and a
+// proxy missed a real divergence once.
+export function deriveDeskSessionName(baseDir, cwd) {
   const rel = path.relative(path.resolve(baseDir), cwd);
+  // slugSegment is IMPORTED, never re-implemented here. This function and
+  // deriveSessionName (sessions.js) must return the same string for the same
+  // path or listSessions emits two views for one live session - and since
+  // T72 that same string is the identity a nested session's STOP resolves
+  // on, so a divergence would end the wrong session. A second copy of the
+  // regex is how that divergence happens; there used to be one.
   return rel.split(path.sep).filter(Boolean)
-    .map((seg) => seg.replace(/[\s.]+/g, '-').toLowerCase())
+    .map(slugSegment)
     .join('/');
 }
 

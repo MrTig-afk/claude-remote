@@ -7,6 +7,7 @@ import { test, after } from 'node:test';
 import { deriveSessionName, resolveProjectPath, launchSession, endSession } from '../sessions.js';
 import {
   STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION, listSessions, pidFileNameFor,
+  deriveDeskSessionName,
 } from '../registry.js';
 import { seedPasscode, issueTestToken, authHeaders, fixtureServer, testSessionDirs } from './helper-auth.js';
 
@@ -2353,4 +2354,90 @@ test('endSession - a body carrying neither project nor session_name -> 400 inval
   const result = await endSession(ctx, undefined);
 
   assert.deepEqual(result, { ok: false, status: 400, error: 'invalid_request' });
+});
+
+// --- T74 security fix: the session-name slug is an allowlist ----------------
+// Regression tests for a real command-injection path, not hygiene tests.
+// A session name reaches launch-session.ps1, which passes it to Start-Process
+// for `claude.cmd`; a .cmd runs through cmd.exe, so a metacharacter that
+// survives the slug is executed. The old slug collapsed whitespace and dots
+// only, so a project named `x&calc` ran calc for anyone holding a token.
+
+test('deriveSessionName - no shell metacharacter survives into a session name', () => {
+  for (const ch of ['&', '^', '|', '!', '(', ')', ';', '$', '`', '"', "'", '<', '>', '%', ',', '=', '~', '{', '}', '[', ']', '+', '#', '@']) {
+    const name = deriveSessionName(`x${ch}calc`);
+    assert.ok(!name.includes(ch), `'${ch}' survived the slug: ${name}`);
+    assert.match(name, /^[a-z0-9-]*$/, `slug produced something outside [a-z0-9-]: ${name}`);
+  }
+});
+
+test('deriveSessionName - the canonical injection payload is defanged', () => {
+  assert.equal(deriveSessionName('x&calc'), 'x-calc');
+  assert.equal(deriveSessionName('a`whoami`b'), 'a-whoami-b');
+  assert.equal(deriveSessionName('a$(id)b'), 'a-id-b');
+});
+
+test('deriveSessionName - the nested form slugs each segment, so the only / is the separator', () => {
+  const nested = deriveSessionName(path.join(base, 'Pull&Requests', 'Ver|cel'), base);
+  assert.equal(nested, 'pull-requests/ver-cel');
+  assert.equal(nested.split('/').length, 2, 'a metacharacter must not add a segment');
+});
+
+// The zero-blast-radius claim, pinned rather than asserted: every real folder
+// on this host slugs to exactly what it did before the allowlist landed.
+test('deriveSessionName - every real project name is unchanged by the allowlist', () => {
+  const rows = [
+    ['claude-remote', 'claude-remote'],
+    ['claude-master', 'claude-master'],
+    ['MingleHub', 'minglehub'],
+    ['Pull Requests', 'pull-requests'],
+    ['Video Editing', 'video-editing'],
+    ['Backend Engineering', 'backend-engineering'],
+    ['Y Combinator-qm', 'y-combinator-qm'],
+    ['Reactive-Resume', 'reactive-resume'],
+    ['email-lint', 'email-lint'],
+    ['NutritionDE', 'nutritionde'],
+  ];
+  for (const [input, expected] of rows) {
+    assert.equal(deriveSessionName(input), expected, `input: ${input}`);
+  }
+});
+
+// The invariant that would actually break if registry.js kept a second copy
+// of the slug: deriveDeskSessionName and deriveSessionName must return the
+// same string for the same path. Since T72 that string is the identity a
+// nested session's STOP resolves on, so a divergence ends the WRONG session.
+// Behavioural, not a source scan - the first version of this test WAS a
+// source scan, and its regex was subtly wrong, so it passed while a
+// re-introduced duplicate slug sat in registry.js. Depth 1 and 2 only: at
+// depth 3+ the two disagree BY DESIGN, since deriveSessionName falls back to
+// the basename while deriveDeskSessionName joins every segment.
+test('deriveDeskSessionName and deriveSessionName cannot diverge', () => {
+  const cases = [
+    ['email-lint'],
+    ['Pull Requests'],
+    ['Pull Requests', 'Vercel'],
+    ['Y Combinator-qm'],
+    ['x&calc'],
+    ['Pull&Requests', 'Ver|cel'],
+    ['a`whoami`b', 'c$(id)d'],
+    ['My.Project', 'A  B'],
+  ];
+  for (const segs of cases) {
+    const full = path.join(base, ...segs);
+    assert.equal(
+      deriveDeskSessionName(base, full),
+      deriveSessionName(full, base),
+      `diverged for ${segs.join('/')}`,
+    );
+  }
+});
+
+test('slugSegment - a name of only metacharacters cannot pass the launchability check', () => {
+  // resolveProjectPath rejects a session name that is empty or starts with
+  // '-', and under the allowlist that is exactly what such a name produces.
+  for (const name of ['&&&', '!!', '$$$', '---']) {
+    const slugged = deriveSessionName(name);
+    assert.ok(slugged === '' || slugged.startsWith('-'), `'${name}' -> '${slugged}' would be accepted`);
+  }
 });
