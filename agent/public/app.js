@@ -173,13 +173,13 @@ function rowState(p) {
   // function deliberately - nothing below it (a launch in flight, a stale
   // result, a session that matched by name) may promote it to the RUNNING
   // zone. `implicit` is absent, so buildRow always draws its sub-line.
-  // A desk session opened IN the container's own root folder is invisible
-  // from here - this returns before sessionFor, and renderProjects'
-  // synthetic-row loop skips it because the container's path IS a listed
-  // project. That is the settled design (a container is not startable, so
-  // it reports no session as a row of its own); the drill-in screen's self
-  // row (buildSelfRow) reports such a session read-only when the folder is
-  // open.
+  // ACCEPTED CEILING: a desk session opened IN the container's own root
+  // folder renders nowhere in the app. This returns before sessionFor, and
+  // renderProjects' synthetic-row loop skips that path because the
+  // container's own path IS a listed project. The drill-in screen carried a
+  // dimmed row for it briefly; the owner had it removed - a container is not
+  // a project path, so a row for it was noise. Such a session is visible and
+  // endable at the desk, which is where it was started.
   if (p.container) {
     const n = (p.children || []).length;
     return { zone: 'list', folder: true, status: n === 1 ? '1 project' : n + ' projects', idle: '—' };
@@ -771,7 +771,6 @@ function renderProjects() {
   } else {
     for (const { p, rs } of list) listEl.appendChild(buildRow(p, rs));
   }
-  if (open) listEl.appendChild(buildSelfRow(open));
 
   allCount.textContent = String(state.projects.length);
   // Pinned verbatim above as the top-level rule by a pre-existing test, so
@@ -794,11 +793,10 @@ function renderFooter(rows) {
   // them - its children are. 14 projects + 5 nested = 19 for the owner's
   // folder set, where ALL PROJECTS above still reads 15 top-level rows.
   const total = state.projects.reduce((n, p) => n + (p.container ? (p.children || []).length : 1), 0);
-  // Inside a folder every STARTABLE row is a child, so the rows ARE the count
-  // - `rows` is already scoped to the open folder by renderProjects, and the
-  // dimmed self row is on screen but is not in `rows` because the folder
-  // itself cannot be started. `running` below needs no such override:
-  // it is already computed from `rows`.
+  // Inside a folder every row on screen is a child, so the rows ARE the
+  // count - `rows` is already scoped to the open folder by renderProjects.
+  // `running` below needs no such override: it is already computed from
+  // `rows`.
   const shown = state.openFolder === null ? total : rows.length;
   if (state.sessions === null && state.results.size === 0) {
     footer.textContent = `SESSION STATE UNKNOWN · ${shown} TOTAL`;
@@ -820,38 +818,6 @@ function childProject(container, child) {
   return { name: `${container.name}/${child.name}`, label: child.name, path: child.path };
 }
 
-// The container's own folder, drawn dimmed below its children. Not part of
-// `rows`: it is never counted, never becomes a tile, never focused and never
-// reconciled. It exists because the owner asked to keep the folder itself
-// visible; it is the only place a desk session in the container's own root
-// can appear at all, because rowState short-circuits a container before
-// sessionFor and the synthetic-row loop in renderProjects skips that path
-// since it IS a listed project. Ceiling: it is reported, not endable - a
-// list row carries no STOP control, so that session is ended at the desk.
-// Upgrade path: the agent already accepts { project: '<container name>' }
-// for it, so all that is missing is a control.
-function buildSelfRow(open) {
-  const el = document.createElement('div');
-  el.className = 'row self';
-  const main = document.createElement('span');
-  main.className = 'row-main';
-  const nameEl = document.createElement('span');
-  nameEl.className = 'row-name';
-  nameEl.textContent = open.name;
-  main.appendChild(nameEl);
-  const s = sessionFor({ name: open.name, path: open.path });
-  const rs = s && s.status === 'running'
-    ? { status: `the folder itself - ${s.activity || 'active session'}`,
-        idle: elapsed(s.started_at),
-        ...(s.source === 'desk' ? { suffix: 'desktop' } : {}) }
-    : { status: 'the folder itself - not a project', idle: '—' };
-  const statusEl = document.createElement('span');
-  statusEl.className = 'row-status';
-  statusEl.textContent = statusLine(rs);
-  main.appendChild(statusEl);
-  el.appendChild(main);
-  return el;
-}
 
 // open = the resolved container entry (from renderProjects), or null.
 function renderBackBar(open) {

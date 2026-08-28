@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v15', () => {
+test('sw.js CACHE is claude-remote-shell-v16', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v15');
+  assert.equal(match[1], 'claude-remote-shell-v16');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -1108,7 +1108,8 @@ test("the folder row's left-edge break comes from the missing dot, not a nudge",
   // straight through a comment that merely mentions a .folder selector and
   // into the next real rule's body, so an innocent comment made this test
   // fail on an unrelated rule's margin - twice in one night, once for
-  // .backbar and once for .row.self. Both were worked around by rewording
+  // .backbar and once for a since-deleted .row.self rule. Both were worked
+  // around at the time by rewording
   // the comment; this fixes the instrument instead.
   const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
   const folderRules = rules.match(/\.(?:row\.folder|folder)[^{]*\{[^}]*\}/g) || [];
@@ -1148,7 +1149,11 @@ test('TOTAL counts what can be started - a container\'s children, not the contai
 
 function makeChildProject() {
   const js = read('app.js');
-  const src = js.slice(js.indexOf('function childProject('), js.indexOf('function buildSelfRow('));
+  // Anchored on childProject's OWN closing brace, never on whatever
+  // function happens to follow it - the previous anchor was the next
+  // function's name and broke the moment that function was deleted.
+  const start = js.indexOf('function childProject(');
+  const src = js.slice(start, js.indexOf('\n}', start) + 2);
   return new Function(src + '; return childProject;')();
 }
 
@@ -1310,13 +1315,14 @@ test('backbar click: with no confirm open, the tap closes the folder', () => {
 function makeRenderProjectsIntegration(stubs) {
   const js = read('app.js');
   const helpers = js.slice(js.indexOf('function elapsed('), js.indexOf('function setDot('));
-  const child = js.slice(js.indexOf('function childProject('), js.indexOf('function buildSelfRow('));
+  const childStart = js.indexOf('function childProject(');
+  const child = js.slice(childStart, js.indexOf('\n}', childStart) + 2);
   const rp = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
   const src = helpers + child + rp;
   return new Function(
-    'document', 'state', 'buildTile', 'buildRow', 'buildSelfRow', 'renderBackBar',
+    'document', 'state', 'buildTile', 'buildRow', 'renderBackBar',
     src + '; return renderProjects;',
-  )(stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.buildSelfRow, stubs.renderBackBar);
+  )(stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar);
 }
 
 function makeStubEl() {
@@ -1344,20 +1350,17 @@ test('renderProjects: with a folder open, only that folder\'s children render an
   const document = { getElementById: (id) => els[id] };
   const rowsSeen = [];
   const tilesSeen = [];
-  let selfSeen = null;
   const buildRow = (p) => { rowsSeen.push(p.name); return { tag: 'ROW' }; };
   const buildTile = (p) => { tilesSeen.push(p.name); return { tag: 'TILE' }; };
-  const buildSelfRow = (open) => { selfSeen = open.name; return { tag: 'SELF' }; };
   const renderBackBar = () => {};
-  const renderProjects = makeRenderProjectsIntegration({ document, state, buildTile, buildRow, buildSelfRow, renderBackBar });
+  const renderProjects = makeRenderProjectsIntegration({ document, state, buildTile, buildRow, renderBackBar });
 
   renderProjects();
 
   assert.deepEqual(rowsSeen, [], 'the only child, Vercel, is a running session so it is a tile, not a list row');
   assert.deepEqual(tilesSeen, ['Pull Requests/Vercel'], 'the unrelated top-level Sherlock session must not reach the RUNNING zone while the folder is open');
-  assert.equal(selfSeen, 'Pull Requests', 'the container itself is reported only via buildSelfRow, never as a row of its own');
   assert.ok(!rowsSeen.includes('Sherlock') && !tilesSeen.includes('Sherlock'), 'a top-level project must never appear while a folder is open');
-  assert.ok(!rowsSeen.includes('Pull Requests'), 'the container must never appear as an ordinary row - buildSelfRow is the only place it shows');
+  assert.ok(!rowsSeen.includes('Pull Requests'), 'the container must never appear as a row inside its own screen');
 });
 
 // Given in the brief verbatim: slices onPopState (and, harmlessly,
@@ -1589,9 +1592,8 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
   const seen = [];
   const buildRow = (p) => { seen.push(p); return { tag: 'ROW' }; };
   const buildTile = (p) => { seen.push(p); return { tag: 'TILE' }; };
-  const buildSelfRow = () => ({ tag: 'SELF' });
   const renderBackBar = () => {};
-  const renderProjects = makeRenderProjectsIntegration({ document, state, buildTile, buildRow, buildSelfRow, renderBackBar });
+  const renderProjects = makeRenderProjectsIntegration({ document, state, buildTile, buildRow, renderBackBar });
 
   renderProjects();
 

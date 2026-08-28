@@ -347,16 +347,6 @@ body {
 .backbar-name { font-size: 14px; font-weight: 500; color: #eafbea; }
 .backbar-path { font-size: 10px; color: #4a5a4a; overflow-wrap: anywhere; }
 
-/* The container's own folder: listed, dimmer than its children, and inert -
-   buildSelfRow emits a div, never a button, so there is nothing to tap. No dot
-   rule here for the same reason the folder row above carries none: the
-   element is not drawn. (Deliberately not spelling out that other selector
-   here - see the .backbar comment above for why: writing it out would sweep
-   the folder-row padding/margin test straight into this rule's body.) */
-.row.self { cursor: default; }
-.row.self .row-name { color: #6b7a6b; }
-.row.self .row-status { color: #4a5a4a; }
-
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 
 /* New-project panel - opened by the + button. Same card language as .banner
