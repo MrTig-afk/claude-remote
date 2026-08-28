@@ -8,9 +8,13 @@ import { createProject } from '../projects.js';
 import { resolveProjectPath } from '../sessions.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-create-'));
+const nbase = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-nested-'));
+fs.mkdirSync(path.join(nbase, 'Pull Requests'));
+fs.mkdirSync(path.join(nbase, 'Pull Requests', 'Vercel'));
 
 after(() => {
   fs.rmSync(base, { recursive: true, force: true });
+  fs.rmSync(nbase, { recursive: true, force: true });
 });
 
 function snapshot() {
@@ -205,4 +209,20 @@ test('create/launch contract: anything created here is launchable by resolveProj
   createProject(base, 'launch-contract');
   const result = resolveProjectPath(base, 'launch-contract');
   assert.equal(result.ok, true);
+});
+
+test('a top-level "Vercel" is created while "Pull Requests/Vercel" exists (nested names carry a "/" and cannot collide)', () => {
+  const result = createProject(nbase, 'Vercel');
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.project, { name: 'Vercel' });
+  assert.equal(fs.statSync(path.join(nbase, 'Vercel')).isDirectory(), true);
+});
+
+test('"Pull.Requests" when a CONTAINER "Pull Requests" exists -> 409 name_collision (containers are compared like any other entry)', () => {
+  const before = fs.readdirSync(nbase).sort();
+  const result = createProject(nbase, 'Pull.Requests');
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'name_collision');
+  assert.equal(result.status, 409);
+  assert.deepEqual(fs.readdirSync(nbase).sort(), before);
 });

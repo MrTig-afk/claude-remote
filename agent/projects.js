@@ -46,12 +46,15 @@ export function containerChildrenOf(folderPath) {
       continue;
     }
     // ponytail: a hidden DIRECTORY is skipped here but is NOT a file, so it
-    // never sets hasNonDir - meaning a repo holding .git plus subfolders and
-    // zero top-level files guesses as a container. There is NO escape hatch
-    // for that false positive: the marker forces container status ON, never
-    // off. Upgrade path if it ever bites is a real rule (treat a folder
-    // containing .git as a project), which is wider than the rule the owner
-    // picked on 2026-08-28 and so was not added unilaterally.
+    // never sets hasNonDir - a repo holding .git plus subfolders and zero
+    // top-level files guesses as a container. Narrower in practice than it
+    // sounds: a hidden FILE takes the !isDirectory() branch above and DOES
+    // set hasNonDir, so a repo with a README, a package.json or even just a
+    // .gitignore stays an ordinary project. Only a file-free repo trips it.
+    // The marker cannot rescue one that does - it forces container status
+    // ON, never off. Upgrade path if it ever bites is a real rule (treat a
+    // folder containing .git as a project), which is wider than the rule the
+    // owner picked on 2026-08-28 and so was not added unilaterally.
     if (dirent.name.startsWith('.')) continue;
     children.push({ name: dirent.name, path: path.join(folderPath, dirent.name) });
   }
@@ -99,7 +102,6 @@ export function listProjects(baseDir) {
   projects.sort(byName);
   return projects;
 }
-
 
 // Base dir 'F:\Dev\Projects\Repos\' is 21 chars; Windows' 260-char MAX_PATH
 // still binds for tools that live inside a project (git, node, python).
@@ -188,9 +190,10 @@ export function createProject(baseDir, name) {
   if (!v.ok) return v;
 
   // C1 - confinement. Byte-identical posture to resolveProjectPath's SINGLE
-  // branch: createProject stays strictly one level - it
-  // never creates INSIDE a container, that is out of scope (T69) -
-  // while resolveProjectPath (T68) now also accepts exactly two segments.
+  // branch: createProject stays strictly one level and never creates INSIDE
+  // a container - still out of scope as of T69, which closed without adding
+  // it - while resolveProjectPath (T68) now also accepts exactly two
+  // segments.
   // Unreachable after V7/V8; this is the structural backstop that makes
   // "direct child only" true rather than argued.
   const base = path.resolve(baseDir);
@@ -201,14 +204,33 @@ export function createProject(baseDir, name) {
 
   // C2 - session-name collision. deriveSessionName maps 'Foo Bar' and
   // 'Foo.Bar' to the same 'foo-bar', and they would then share one registry
-  // entry (see deriveSessionName, sessions.js) - launching the new project would attach the
-  // owner to the OTHER project's session. Same "dropped into unrelated
-  // work" failure the existing-folder check below exists to prevent, one
-  // step later.
+  // entry (see deriveSessionName, sessions.js) - launching the new project
+  // would attach the owner to the OTHER project's session. Same "dropped
+  // into unrelated work" failure the existing-folder check below exists to
+  // prevent, one step later.
   // Entries that are the SAME physical target under NTFS's case-insensitive
   // matching (an exact or case-only-different repeat of `name`) are
   // excluded here on purpose: those hit mkdirSync's own EEXIST below and
   // report the more specific `project_exists`, not `name_collision`.
+  //
+  // T69 asked whether this must also see NESTED projects. It must not, and
+  // it structurally cannot collide with one: a nested project is keyed
+  // '<parent-slug>/<child-slug>' (deriveSessionName's two-argument form,
+  // sessions.js; deriveDeskSessionName agrees, registry.js), while anything
+  // creatable here is a single segment that can never contain '/' -
+  // path.basename yields no separator, the slug rule introduces only '-',
+  // and V7 rejects '/' and '\' outright. So a top-level 'Vercel' alongside
+  // 'Pull Requests\Vercel' is legal, not a collision. If the nested
+  // separator ever stops being '/', this paragraph dies with it -
+  // create-project.test.js pins the behaviour.
+  // deriveSessionName(entry.path) stays ONE-ARGUMENT deliberately: every
+  // entry listProjects(base) returns is exactly one level below base, where
+  // the two-argument form returns the identical string. Passing base would
+  // be a no-op that implies a nested comparison is happening.
+  // Container entries are compared like any other, also deliberately: a
+  // container's own folder name can collide ('Pull.Requests' vs a container
+  // 'Pull Requests'), and a container stops being one the moment a loose
+  // file lands in it, at which point it is launchable under that exact name.
   const sessionName = deriveSessionName(target);
   const lowerName = name.toLowerCase();
   for (const entry of listProjects(base)) {
