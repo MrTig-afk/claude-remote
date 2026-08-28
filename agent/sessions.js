@@ -315,7 +315,23 @@ export function launchSession(ctx, project) {
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', r.path,
-    '-SessionName', sessionName,
+    // The LAUNCHER ARGUMENT ONLY - the registry key keeps its '/', because
+    // recordLaunch below is still passed the untouched `sessionName`.
+    // launch-session.ps1 hands this value straight to
+    // `claude.cmd --remote-control`. Whether that CLI accepts a '/' inside a
+    // session name could not be established: node's spawn, PowerShell,
+    // Start-Process and cmd.exe all pass '/' through untouched (it is not a
+    // cmd metacharacter, and the token does not begin with one, so it is not
+    // read as a switch), but the CLI's own handling is observable only by
+    // running it, which this build was not permitted to do. The collapse is
+    // therefore PRECAUTIONARY, and it is the same one pidFileNameFor
+    // (registry.js) makes for the pid FILE name, for the same reason it is
+    // collision-free: the slug rule maps every '.' and every whitespace run
+    // to '-', so no single-segment session name can contain a '.' and
+    // 'pull-requests.vercel' is unreachable by any flat project. If a launch
+    // is ever seen working with a '/', this replace can simply go - nothing
+    // else in the agent reads the --remote-control name back.
+    '-SessionName', sessionName.replace(/\//g, '.'),
     '-PidFile', pidFilePath,
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,
