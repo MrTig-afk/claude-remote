@@ -11,6 +11,11 @@ const state = {
   reachable: null, // null = not tried yet, true, false
   stopping: new Set(), // project names with an end POST in flight - CLIENT ONLY
   confirmName: null, // the ONE project whose tile is currently the question
+  openFolder: null, // the open container's NAME, or null = the top-level list.
+  // Held by NAME, never as an object reference, so a state.projects reload
+  // cannot leave a stale folder on screen. Set by openFolderScreen(name) only;
+  // cleared by closeFolderScreen(), the popstate handler, and renderProjects
+  // when the name no longer resolves to a container.
 };
 
 // Ended records announced this open. Announcing also dismisses at the agent,
@@ -153,12 +158,13 @@ function rowState(p) {
   // function deliberately - nothing below it (a launch in flight, a stale
   // result, a session that matched by name) may promote it to the RUNNING
   // zone. `implicit` is absent, so buildRow always draws its sub-line.
-  // Known ceiling this creates: a desk session opened IN the container's own
-  // root folder now renders nowhere - this returns before sessionFor, and
-  // renderProjects' synthetic-row loop skips it because the container's path
-  // IS a listed project. That is the settled design (a container is not
-  // startable, so it reports no session), not an oversight; T72's drill-in
-  // screen decides whether the folder itself gets to show one.
+  // A desk session opened IN the container's own root folder is invisible
+  // from here - this returns before sessionFor, and renderProjects'
+  // synthetic-row loop skips it because the container's path IS a listed
+  // project. That is the settled design (a container is not startable, so
+  // it reports no session as a row of its own); the drill-in screen's self
+  // row (buildSelfRow) reports such a session read-only when the folder is
+  // open.
   if (p.container) {
     const n = (p.children || []).length;
     return { zone: 'list', folder: true, status: n === 1 ? '1 project' : n + ' projects', idle: '—' };
@@ -257,7 +263,7 @@ function buildTile(p, rs) {
   el.appendChild(buildDot(rs.dot));
   const name = document.createElement('span');
   name.className = 'tile-name';
-  name.textContent = p.name;
+  name.textContent = p.label || p.name;
   el.appendChild(name);
   const status = document.createElement('span');
   status.className = 'tile-status';
@@ -297,10 +303,10 @@ function buildRow(p, rs) {
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = rs.folder ? 'row folder' : 'row';
-  // A folder row carries data-folder, NOT data-project. onProjectTap fires on
-  // [data-project] and launches - a folder must never launch, and leaving the
-  // attribute off is the whole of that guarantee (see onProjectTap). T72 wires
-  // the drill-in to [data-folder]; until then the tap does nothing.
+  // A folder row carries data-folder, NOT data-project. onProjectTap opens
+  // the drill-in on [data-folder] and still launches only on [data-project],
+  // so a folder can never launch - leaving the attribute off is the whole of
+  // that guarantee.
   if (rs.folder) btn.dataset.folder = p.name;
   else btn.dataset.project = p.name;
   // The dot is decorative and the default status is not drawn, so the row's
@@ -319,7 +325,7 @@ function buildRow(p, rs) {
   main.className = 'row-main';
   const nameEl = document.createElement('span');
   nameEl.className = 'row-name';
-  nameEl.textContent = p.name;
+  nameEl.textContent = p.label || p.name;
   main.appendChild(nameEl);
   if (!rs.implicit) {
     const statusEl = document.createElement('span');
@@ -386,17 +392,28 @@ function hideBanner() {
 // nothing watchable the poll loop had already stopped - only a manual refresh
 // (which resets state.results) cleared it. Dropped as soon as it is covered,
 // so there is nothing left to fall back to when the session later goes away.
+// A launch result is keyed by the row's identity, which for a drill-in row
+// is the two-segment '<container>/<child>' string - and state.projects holds
+// top-level entries only, so a plain `.find` misses it. The pathless
+// stand-in still resolves it, because sessionFor's second key is the
+// registry's `project` and a nested launch records exactly that string;
+// `path: null` never matches a real session (s.path is always a string), so
+// the stand-in can only ever match by name. Without it, both bugs fixed for
+// top-level projects came straight back inside a folder: a launch banner
+// that never cleared, and a tile frozen on "starting..." after a desk exit.
 function dropCoveredResults() {
   for (const name of [...state.results.keys()]) {
-    const p = state.projects.find((x) => x.name === name);
-    if (p && sessionFor(p)) state.results.delete(name);
+    const p = state.projects.find((x) => x.name === name) ?? { name, path: null };
+    if (sessionFor(p)) state.results.delete(name);
   }
 }
 
 function clearSettledLaunchBanner() {
   if (launchBannerFor === null) return;
-  const p = (state.projects || []).find((x) => x.name === launchBannerFor);
-  const s = p ? sessionFor(p) : null;
+  // See dropCoveredResults for why the pathless stand-in is needed here too.
+  const p = (state.projects || []).find((x) => x.name === launchBannerFor)
+    ?? { name: launchBannerFor, path: null };
+  const s = sessionFor(p);
   if (s) {
     if (s.status === 'starting') return; // still coming up, the banner is the only signal
     hideBanner();
@@ -615,7 +632,26 @@ function renderProjects() {
   tilesEl.innerHTML = '';
   listEl.innerHTML = '';
 
-  const rows = state.projects.map((p) => ({ p, rs: rowState(p) }));
+  // The folder is held by NAME, so if it is gone (deleted, no longer a
+  // container, or the agent is unreachable and the list is empty) the screen
+  // falls back to the top-level list. Ceiling: its pushed history entry is
+  // deliberately NOT popped here, because renderProjects already owns one
+  // pop below (the stale-confirm reconcile) that assumes the confirm's entry
+  // is on top, and a second pop here could take the wrong one. Cost is one
+  // dead back press in the case that needs a folder to vanish mid-session;
+  // onPopState clears folderPushed when that entry is finally popped.
+  const open = state.openFolder === null
+    ? null
+    : (state.projects.find((p) => p.name === state.openFolder && p.container) ?? null);
+  if (state.openFolder !== null && !open) state.openFolder = null;
+  renderBackBar(open);
+
+  const rows = open
+    ? (open.children || []).map((c) => {
+        const p = childProject(open, c);
+        return { p, rs: rowState(p) };
+      })
+    : state.projects.map((p) => ({ p, rs: rowState(p) }));
 
   // A desk session whose cwd is a project SUBFOLDER has no row of its own
   // above - state.projects lists project ROOTS only - so it gets a
@@ -628,11 +664,18 @@ function renderProjects() {
   // registry reports it as a launched-shaped entry, and it must keep its
   // tile ("writing handoff...") for that window. The path check alone is
   // sufficient - a launched session's path is always a listed project.
-  for (const s of (state.sessions || [])) {
-    if (s.status === 'ended') continue; // its one banner is the receipt; no phantom row
-    if (state.projects.some((p) => p.path === s.path)) continue;
-    const synthetic = { name: s.project, path: s.path };
-    rows.push({ p: synthetic, rs: rowState(synthetic) });
+  // Skipped entirely inside a folder (see `open`): a desk session DEEPER
+  // than a child root (say <container>/<child>/docs) already has its own
+  // synthetic tile on the top-level list, named by its basename, and that
+  // stays unchanged - building one here too would need a path-prefix test
+  // and a second identity scheme for one rare case.
+  if (!open) {
+    for (const s of (state.sessions || [])) {
+      if (s.status === 'ended') continue; // its one banner is the receipt; no phantom row
+      if (state.projects.some((p) => p.path === s.path)) continue;
+      const synthetic = { name: s.project, path: s.path };
+      rows.push({ p: synthetic, rs: rowState(synthetic) });
+    }
   }
 
   // A stale confirm re-attaching to a later session is worse than the
@@ -668,6 +711,12 @@ function renderProjects() {
     msg.className = 'msg';
     msg.textContent = 'Cannot reach the agent.';
     listEl.appendChild(msg);
+  } else if (open && (open.children || []).length === 0) {
+    // a marked container can legitimately hold no project folders
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = 'This folder has no projects in it.';
+    listEl.appendChild(msg);
   } else if (state.projects.length === 0) {
     const msg = document.createElement('div');
     msg.className = 'msg';
@@ -676,7 +725,13 @@ function renderProjects() {
   } else {
     for (const { p, rs } of list) listEl.appendChild(buildRow(p, rs));
   }
+  if (open) listEl.appendChild(buildSelfRow(open));
+
   allCount.textContent = String(state.projects.length);
+  // Pinned verbatim above as the top-level rule by a pre-existing test, so
+  // this is an override rather than a ternary: inside a folder ALL PROJECTS
+  // counts that folder's own children instead.
+  if (open) allCount.textContent = String((open.children || []).length);
 
   if (state.focusName) {
     const target = Array.from(listEl.children).find((c) => c.dataset && c.dataset.project === state.focusName);
@@ -693,12 +748,78 @@ function renderFooter(rows) {
   // them - its children are. 14 projects + 5 nested = 19 for the owner's
   // folder set, where ALL PROJECTS above still reads 15 top-level rows.
   const total = state.projects.reduce((n, p) => n + (p.container ? (p.children || []).length : 1), 0);
+  // Inside a folder every STARTABLE row is a child, so the rows ARE the count
+  // - `rows` is already scoped to the open folder by renderProjects, and the
+  // dimmed self row is on screen but is not in `rows` because the folder
+  // itself cannot be started. `running` below needs no such override:
+  // it is already computed from `rows`.
+  const shown = state.openFolder === null ? total : rows.length;
   if (state.sessions === null && state.results.size === 0) {
-    footer.textContent = `SESSION STATE UNKNOWN · ${total} TOTAL`;
+    footer.textContent = `SESSION STATE UNKNOWN · ${shown} TOTAL`;
     return;
   }
   const running = rows.filter((r) => r.rs.dot === 'filled').length;
-  footer.textContent = `${running} ACTIVE · ${total} TOTAL`;
+  footer.textContent = `${running} ACTIVE · ${shown} TOTAL`;
+}
+
+// The two-segment identity for a container child. It, not the child's own
+// name, is what keys state.launching / state.results / state.stopping /
+// state.confirmName, what data-project carries (so onProjectTap sends it to
+// launchSession unchanged and the agent resolves the pair), and exactly the
+// `project` a nested launch records (so sessionFor's registry-name fallback
+// finds the right session) - and it can never collide with a top-level
+// folder of the same name. `label` is what the screen draws, because the
+// back bar above it already names the container.
+function childProject(container, child) {
+  return { name: `${container.name}/${child.name}`, label: child.name, path: child.path };
+}
+
+// The container's own folder, drawn dimmed below its children. Not part of
+// `rows`: it is never counted, never becomes a tile, never focused and never
+// reconciled. It exists because the owner asked to keep the folder itself
+// visible; it is the only place a desk session in the container's own root
+// can appear at all, because rowState short-circuits a container before
+// sessionFor and the synthetic-row loop in renderProjects skips that path
+// since it IS a listed project. Ceiling: it is reported, not endable - a
+// list row carries no STOP control, so that session is ended at the desk.
+// Upgrade path: the agent already accepts { project: '<container name>' }
+// for it, so all that is missing is a control.
+function buildSelfRow(open) {
+  const el = document.createElement('div');
+  el.className = 'row self';
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = open.name;
+  main.appendChild(nameEl);
+  const s = sessionFor({ name: open.name, path: open.path });
+  const rs = s && s.status === 'running'
+    ? { status: `the folder itself - ${s.activity || 'active session'}`,
+        idle: elapsed(s.started_at),
+        ...(s.source === 'desk' ? { suffix: 'desktop' } : {}) }
+    : { status: 'the folder itself - not a project', idle: '—' };
+  const statusEl = document.createElement('span');
+  statusEl.className = 'row-status';
+  statusEl.textContent = statusLine(rs);
+  main.appendChild(statusEl);
+  el.appendChild(main);
+  return el;
+}
+
+// open = the resolved container entry (from renderProjects), or null.
+function renderBackBar(open) {
+  document.getElementById('backbar').hidden = open === null;
+  // The + creates a TOP-LEVEL project only - the agent's create route is one
+  // level deep, which is what the "No \ or / - projects are created directly
+  // in Repos" copy already says - so inside a folder it has nothing true to
+  // offer.
+  document.getElementById('newproj').hidden = open !== null;
+  if (open === null) return;
+  document.getElementById('backbar-name').textContent = open.name;
+  document.getElementById('backbar-path').textContent = open.path;
+  document.getElementById('backbar').setAttribute('aria-label', `Back to all projects. Inside ${open.name}.`);
+  closeNewProjectPanel(); // a top-level create form must not sit on the folder screen
 }
 
 function render() {
@@ -735,6 +856,17 @@ async function load() {
 }
 
 async function onProjectTap(e) {
+  // A tap on a folder row while a confirm is open answers the question
+  // instead of opening the folder: the history invariant (see folderPushed)
+  // requires the confirm's entry to always be the top one, and renderProjects' stale-
+  // confirm reconcile assumes it can pop that entry safely - a folder opened
+  // underneath it would break that assumption.
+  const folder = e.target.closest('[data-folder]');
+  if (folder) {
+    if (cancelOpenConfirm()) return;
+    openFolderScreen(folder.dataset.folder);
+    return;
+  }
   const row = e.target.closest('[data-project]');
   if (!row) return;
   const name = row.dataset.project;
@@ -772,6 +904,20 @@ async function onProjectTap(e) {
   watchSessions();
 }
 
+// Same order and same reason as onTileTap's CANCEL branch: mutate and render
+// SYNCHRONOUSLY, then a guarded history.back(), so a double tap can never pop
+// the app's own entry. onTileTap keeps its own inline copy of this because a
+// pre-existing test pins that block's exact text - do not "dedupe" it into
+// this helper. Returns true when a confirm was actually open (and therefore
+// cancelled), so a caller can swallow the tap that triggered it.
+function cancelOpenConfirm() {
+  if (state.confirmName === null) return false;
+  state.confirmName = null;
+  render();
+  if (confirmPushed) { confirmPushed = false; history.back(); }
+  return true;
+}
+
 function onTileTap(e) {
   const cancel = e.target.closest('[data-stop-cancel]');
   if (cancel) {
@@ -795,6 +941,18 @@ function onTileTap(e) {
 // pop the app's own entry instead of an already-gone confirm entry.
 let confirmPushed = false;
 
+// Same shape as confirmPushed, same double-tap guard: a second tap must
+// never push a second history entry or fire a second history.back().
+// Whenever both a folder and a confirm entry exist, the confirm's is always
+// the top one - onPopState and the three sites that consume confirmPushed
+// all depend on that ordering. THE GUARD THAT MAKES IT TRUE IS NOT IN
+// openFolderScreen: it is the cancelOpenConfirm() early return at each of
+// the two chrome taps that can move between screens - the folder-row branch
+// of onProjectTap, and the back-bar listener in wireEvents. A THIRD caller
+// of openFolderScreen would have to repeat that guard or the ordering breaks
+// silently.
+let folderPushed = false;
+
 function openConfirm(name) {
   if (state.confirmName === name) return;
   const first = state.confirmName === null;
@@ -806,6 +964,50 @@ function openConfirm(name) {
   render();
 }
 
+// The { drill: name } payload is load-bearing, not decoration: it is what
+// onPopState reads to tell "the folder's entry survived this pop" (a confirm
+// on top of it just popped) from "the folder's entry was this pop" (leaving
+// the folder). No entry is pushed on a second call for the same name - same
+// double-tap guard as openConfirm.
+function openFolderScreen(name) {
+  if (state.openFolder === name) return;
+  state.openFolder = name;
+  if (!folderPushed) {
+    history.pushState({ drill: name }, '');   // Android back = LEAVE THE FOLDER
+    folderPushed = true;
+  }
+  render();
+}
+
+function closeFolderScreen() {
+  state.openFolder = null;
+  render();
+  if (folderPushed) { folderPushed = false; history.back(); }
+}
+
+// Extracted to a named function (rather than the inline arrow it replaces)
+// so the four back-gesture cases are independently testable. history.state
+// after a pop is the state of the entry the browser landed ON, which is what
+// tells the two pushed entries apart - popstate cannot tell which one popped
+// from the event alone.
+// Two accepted ceilings, neither worth code. FORWARD: back out of a folder
+// then press forward and the browser re-enters the {drill} entry, this
+// returns early, and the app sits on that entry showing the top-level list -
+// the next back press is a dead one. Standalone PWA mode offers no forward
+// affordance, which is the daily-use case. RACE: confirmPushed goes false
+// the instant a guarded history.back() is ISSUED, not when its popstate
+// lands, so a folder-row tap inside that sub-millisecond window pushes under
+// a confirm entry that is still on the stack and the traversal bounces the
+// owner back out of the folder. Same class of race the single-entry code
+// already had, and a second tap recovers.
+function onPopState() {
+  confirmPushed = false;
+  if (state.confirmName !== null) { state.confirmName = null; render(); }
+  if (history.state && history.state.drill) return; // the folder's entry survived this pop
+  folderPushed = false;
+  if (state.openFolder !== null) { state.openFolder = null; render(); }
+}
+
 // A synthetic desk-subfolder tile is named by the subfolder's BASENAME -
 // registry.js reports a desk view's `project` as path.basename(cwd) - so it
 // carries no container prefix and is a SINGLE segment, not the
@@ -815,12 +1017,19 @@ function openConfirm(name) {
 // (see agent/server.js, the end-session route). Any name that IS a listed
 // project - including a root-level desk session - keeps the original
 // project-name contract unchanged.
-// Known ceiling, unchanged here: a subfolder whose basename also happens to
-// name a top-level project takes that first branch and ends by project name,
-// which resolves to the TOP-LEVEL folder's session. Same display-name
-// collision sessionFor documents; the fix for both is to key tiles on path.
+// A '/' means a container child - the two-segment '<container>/<child>' form
+// the agent accepts. It resolves to the nested folder and derives the same
+// session name desk discovery derives for that folder, so ending by project
+// is right for a nested LAUNCHED session and a nested DESK one alike. No
+// other name in this app can contain '/': a Windows folder name cannot, and
+// a synthetic desk row is named by a basename.
+// Known ceiling, still true for synthetic rows only (the nested case above is
+// now settled): a subfolder whose basename also happens to name a top-level
+// project takes the first branch and ends by project name, which resolves to
+// the TOP-LEVEL folder's session. Same display-name collision sessionFor
+// documents; the fix for both is to key tiles on path.
 function endTargetFor(name) {
-  if (state.projects.some((p) => p.name === name)) return { project: name };
+  if (name.includes('/') || state.projects.some((p) => p.name === name)) return { project: name };
   const s = (state.sessions || []).find((sess) => sess.source === 'desk' && sess.project === name);
   return { session_name: s ? s.session_name : name };
 }
@@ -954,13 +1163,14 @@ function wireEvents() {
   document.getElementById('newproj-cancel').addEventListener('click', closeNewProjectPanel);
   document.getElementById('newproj-create').addEventListener('click', onCreateProject);
   newProjectNameEl().addEventListener('input', updateNewProjectTarget);
+  document.getElementById('backbar').addEventListener('click', () => {
+    if (cancelOpenConfirm()) return;
+    closeFolderScreen();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') load();
   });
-  window.addEventListener('popstate', () => {
-    confirmPushed = false;
-    if (state.confirmName !== null) { state.confirmName = null; render(); }
-  });
+  window.addEventListener('popstate', onPopState);
 }
 
 function registerServiceWorker() {

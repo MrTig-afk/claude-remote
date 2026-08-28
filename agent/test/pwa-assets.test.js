@@ -1104,7 +1104,15 @@ test("the folder row's left-edge break comes from the missing dot, not a nudge",
   assert.ok(dotStart !== -1, 'buildDot is what emits the element the folder row drops');
   const buildDotSrc = js.slice(dotStart, js.indexOf('\n}', dotStart) + 2);
   assert.match(buildDotSrc, /width="8"/, '8 + 12 = the 20px shift');
-  const folderRules = css.match(/\.(?:row\.folder|folder)[^{]*\{[^}]*\}/g) || [];
+  // Comments are stripped FIRST. Matched against raw source, `[^{]*` sweeps
+  // straight through a comment that merely mentions a .folder selector and
+  // into the next real rule's body, so an innocent comment made this test
+  // fail on an unrelated rule's margin - twice in one night, once for
+  // .backbar and once for .row.self. Both were worked around by rewording
+  // the comment; this fixes the instrument instead.
+  const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const folderRules = rules.match(/\.(?:row\.folder|folder)[^{]*\{[^}]*\}/g) || [];
+  assert.ok(folderRules.length > 0, 'no .folder rule matched - the test would pass vacuously');
   for (const rule of folderRules) {
     assert.ok(
       !/padding-left|margin-left|padding\s*:|margin\s*:/.test(rule),
@@ -1134,4 +1142,382 @@ test('TOTAL counts what can be started - a container\'s children, not the contai
 
   assert.match(js, /allCount\.textContent = String\(state\.projects\.length\)/,
     'ALL PROJECTS stays the top-level count - one list, one number');
+});
+
+// --- the drill-in screen ---
+
+function makeChildProject() {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function childProject('), js.indexOf('function buildSelfRow('));
+  return new Function(src + '; return childProject;')();
+}
+
+function rowMain(btn) {
+  return btn.children.find((c) => c.className === 'row-main');
+}
+
+test('childProject keys a child by the two-segment identity and labels it by its folder name', () => {
+  const childProject = makeChildProject();
+  const result = childProject({ name: 'Pull Requests' }, { name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' });
+  assert.deepEqual(result, { name: 'Pull Requests/Vercel', label: 'Vercel', path: 'F:/p/Pull Requests/Vercel' });
+  assert.notEqual(result.name, 'Vercel', 'a top-level Vercel would otherwise share every state key with it');
+});
+
+test('a drill-in row draws the child\'s own name but is keyed by the identity', () => {
+  const buildRow = makeBuildRow();
+  const childProject = makeChildProject();
+  const p = childProject({ name: 'Pull Requests' }, { name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' });
+  const btn = buildRow(p, { zone: 'list', dot: 'dim', status: 'no session', implicit: true });
+  assert.equal(btn.dataset.project, 'Pull Requests/Vercel');
+  assert.equal(rowMain(btn).children[0].textContent, 'Vercel');
+});
+
+// Minimal DOM stub matching makeBuildRow's shape, extended with classList and
+// append() (a q.append(cancel, go) call lives in the confirm branch, though
+// this test only exercises the STOP branch).
+function makeBuildTile() {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
+  const document = {
+    createElement(tag) {
+      return {
+        tag, children: [], attrs: {}, dataset: {}, className: '', textContent: '',
+        classList: { add() {} },
+        setAttribute(k, v) { this.attrs[k] = v; },
+        appendChild(c) { this.children.push(c); return c; },
+        append(...cs) { this.children.push(...cs); },
+      };
+    },
+  };
+  return new Function('document', 'state', 'buildDot', 'statusLine', src + '; return buildTile;')(
+    document,
+    { launching: new Set(), stopping: new Set(), confirmName: null },
+    () => ({ tag: 'DOT' }),
+    (rs) => rs.status,
+  );
+}
+
+test('a drill-in tile draws the label but STOPs the identity', () => {
+  const buildTile = makeBuildTile();
+  const childProject = makeChildProject();
+  const p = childProject({ name: 'Pull Requests' }, { name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' });
+  const el = buildTile(p, { dot: 'dim', status: 'no session', stop: true });
+  const nameEl = el.children.find((c) => c.className === 'tile-name');
+  assert.equal(nameEl.textContent, 'Vercel');
+  const stopBtn = el.children.find((c) => c.className === 'tile-stop');
+  assert.equal(stopBtn.dataset.stop, 'Pull Requests/Vercel');
+});
+
+test('endTargetFor ends a nested row by project, never by session name', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function endTargetFor('), js.indexOf('// Reconciled by renderProjects() too'));
+  const endTargetFor = new Function('state', `${fn}\nreturn endTargetFor;`)({
+    projects: [{ name: 'Vercel' }],
+    sessions: [{ source: 'desk', project: 'Vercel', session_name: 'vercel' }],
+  });
+  assert.deepEqual(endTargetFor('Pull Requests/Vercel'), { project: 'Pull Requests/Vercel' });
+  assert.deepEqual(endTargetFor('Vercel'), { project: 'Vercel' }, 'the two must never resolve to each other');
+});
+
+test('a nested launch result is dropped once the agent has the entry', () => {
+  const state = {
+    projects: [{ name: 'Pull Requests', container: true, children: [{ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }] }],
+    sessions: [{ project: 'Pull Requests/Vercel', path: 'F:/p/Pull Requests/Vercel', source: 'launched', status: 'starting' }],
+    results: new Map([['Pull Requests/Vercel', { kind: 'started' }]]),
+  };
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function dropCoveredResults('), js.indexOf('function clearSettledLaunchBanner('));
+  // Mirrors sessionFor's real two-key rule (path, or project name for a
+  // non-desk registry entry).
+  const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path || (s.project === p.name && s.source !== 'desk')) ?? null;
+  const dropCoveredResults = new Function('state', 'sessionFor', src + '; return dropCoveredResults;')(state, sessionFor);
+  dropCoveredResults();
+  assert.equal(state.results.size, 0, 'leaving it froze the tile on "starting..." after a desk exit, same as the top-level bug');
+});
+
+test('a nested launch banner clears once the nested session is running', () => {
+  const state = {
+    projects: [{ name: 'Pull Requests', container: true, children: [{ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }] }],
+    sessions: [{ project: 'Pull Requests/Vercel', path: 'F:/p/Pull Requests/Vercel', source: 'launched', status: 'running' }],
+  };
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function clearSettledLaunchBanner('), js.indexOf('function setErrorBanner('));
+  // Mirrors sessionFor's real two-key rule, same as the dropCoveredResults
+  // nested test above - state.projects holds top-level entries only, so a
+  // plain `.find` on the nested name misses and the pathless stand-in is
+  // what lets this resolve at all.
+  const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path || (s.project === p.name && s.source !== 'desk')) ?? null;
+  const hide = spy();
+  const clearSettledLaunchBanner = new Function(
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
+    src + '; return clearSettledLaunchBanner;',
+  )(state, sessionFor, hide, 'Pull Requests/Vercel');
+  clearSettledLaunchBanner();
+  assert.equal(hide.calls.length, 1, 'without the pathless stand-in, a nested launch banner never clears - the same bug fixed for top-level projects');
+});
+
+// The two chrome taps that could open a folder / leave a folder under a live
+// confirm must answer the question instead of acting - section 5's ordering
+// invariant depends on both of these swallowing the tap.
+
+function callOnProjectTapFolder(folderName, cancelOpenConfirmStub, openFolderScreenStub) {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('async function onProjectTap('), js.indexOf('function cancelOpenConfirm('));
+  const onProjectTap = new Function('cancelOpenConfirm', 'openFolderScreen', src + '; return onProjectTap;')(
+    cancelOpenConfirmStub, openFolderScreenStub,
+  );
+  const e = { target: { closest: (sel) => (sel === '[data-folder]' ? { dataset: { folder: folderName } } : null) } };
+  onProjectTap(e);
+}
+
+test('onProjectTap: a folder-row tap while a confirm is open only cancels it, never opens the folder', () => {
+  let opened = null;
+  callOnProjectTapFolder('Pull Requests', () => true, (name) => { opened = name; });
+  assert.equal(opened, null, 'one gesture must have exactly one effect - the tap that swallows an open confirm must not also open the folder');
+});
+
+test('onProjectTap: a folder-row tap with no confirm open opens the folder', () => {
+  let opened = null;
+  callOnProjectTapFolder('Pull Requests', () => false, (name) => { opened = name; });
+  assert.equal(opened, 'Pull Requests');
+});
+
+// The back bar's click handler is an inline arrow inside wireEvents, not a
+// named function - lifted by its own literal id/text anchor, same guard.
+function callBackBarHandler(cancelOpenConfirmStub, closeFolderScreenStub) {
+  const js = read('app.js');
+  const marker = "document.getElementById('backbar').addEventListener('click', () => {";
+  const start = js.indexOf(marker) + marker.length;
+  const end = js.indexOf('});', start);
+  const body = js.slice(start, end);
+  new Function('cancelOpenConfirm', 'closeFolderScreen', body)(cancelOpenConfirmStub, closeFolderScreenStub);
+}
+
+test('backbar click: with a confirm open, the first tap only cancels it, never leaves the folder', () => {
+  let closed = false;
+  callBackBarHandler(() => true, () => { closed = true; });
+  assert.equal(closed, false, 'one gesture must have exactly one effect - the tap that swallows an open confirm must not also close the folder');
+});
+
+test('backbar click: with no confirm open, the tap closes the folder', () => {
+  let closed = false;
+  callBackBarHandler(() => false, () => { closed = true; });
+  assert.equal(closed, true);
+});
+
+// Integration-level: renderProjects itself, with a folder open, scoped to
+// only that folder's children and sessions - not the piecewise helpers.
+function makeRenderProjectsIntegration(stubs) {
+  const js = read('app.js');
+  const helpers = js.slice(js.indexOf('function elapsed('), js.indexOf('function setDot('));
+  const child = js.slice(js.indexOf('function childProject('), js.indexOf('function buildSelfRow('));
+  const rp = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
+  const src = helpers + child + rp;
+  return new Function(
+    'document', 'state', 'buildTile', 'buildRow', 'buildSelfRow', 'renderBackBar',
+    src + '; return renderProjects;',
+  )(stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.buildSelfRow, stubs.renderBackBar);
+}
+
+function makeStubEl() {
+  return {
+    innerHTML: '', textContent: '', children: [],
+    classList: { toggle() {}, add() {} },
+    appendChild(c) { this.children.push(c); return c; },
+  };
+}
+
+test('renderProjects: with a folder open, only that folder\'s children render and only that folder\'s sessions reach the RUNNING zone', () => {
+  const state = {
+    projects: [
+      { name: 'Pull Requests', container: true, children: [{ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }] },
+      { name: 'Sherlock', path: 'F:/p/Sherlock' },
+    ],
+    openFolder: 'Pull Requests',
+    sessions: [
+      { project: 'Pull Requests/Vercel', path: 'F:/p/Pull Requests/Vercel', source: 'launched', status: 'running', activity: 'busy' },
+      { project: 'Sherlock', path: 'F:/p/Sherlock', source: 'launched', status: 'running', activity: 'busy' },
+    ],
+    launching: new Set(), stopping: new Set(), results: new Map(), confirmName: null, focusName: null,
+  };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  const document = { getElementById: (id) => els[id] };
+  const rowsSeen = [];
+  const tilesSeen = [];
+  let selfSeen = null;
+  const buildRow = (p) => { rowsSeen.push(p.name); return { tag: 'ROW' }; };
+  const buildTile = (p) => { tilesSeen.push(p.name); return { tag: 'TILE' }; };
+  const buildSelfRow = (open) => { selfSeen = open.name; return { tag: 'SELF' }; };
+  const renderBackBar = () => {};
+  const renderProjects = makeRenderProjectsIntegration({ document, state, buildTile, buildRow, buildSelfRow, renderBackBar });
+
+  renderProjects();
+
+  assert.deepEqual(rowsSeen, [], 'the only child, Vercel, is a running session so it is a tile, not a list row');
+  assert.deepEqual(tilesSeen, ['Pull Requests/Vercel'], 'the unrelated top-level Sherlock session must not reach the RUNNING zone while the folder is open');
+  assert.equal(selfSeen, 'Pull Requests', 'the container itself is reported only via buildSelfRow, never as a row of its own');
+  assert.ok(!rowsSeen.includes('Sherlock') && !tilesSeen.includes('Sherlock'), 'a top-level project must never appear while a folder is open');
+  assert.ok(!rowsSeen.includes('Pull Requests'), 'the container must never appear as an ordinary row - buildSelfRow is the only place it shows');
+});
+
+// Given in the brief verbatim: slices onPopState (and, harmlessly,
+// openFolderScreen/closeFolderScreen ahead of it - declarations only, never
+// called by these tests).
+function makePopState(state, historyStub) {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
+  return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed',
+    src + '; return onPopState;')(state, historyStub, () => {}, true, true);
+}
+
+test('back with only the drill-in open returns to the list', () => {
+  const state = { openFolder: 'Pull Requests', confirmName: null };
+  const onPopState = makePopState(state, { state: null });
+  onPopState();
+  assert.equal(state.openFolder, null);
+});
+
+test('back with the confirm open on top cancels the confirm and stays in the folder', () => {
+  const state = { openFolder: 'Pull Requests', confirmName: 'Pull Requests/Vercel' };
+  const onPopState = makePopState(state, { state: { drill: 'Pull Requests' } });
+  onPopState();
+  assert.equal(state.confirmName, null);
+  assert.equal(state.openFolder, 'Pull Requests',
+    "the confirm's entry is always above the folder's, so one gesture must have exactly one effect");
+});
+
+test('a pop the app issued itself leaves the folder alone', () => {
+  const state = { openFolder: 'Pull Requests', confirmName: null };
+  const onPopState = makePopState(state, { state: { drill: 'Pull Requests' } });
+  onPopState();
+  assert.equal(state.openFolder, 'Pull Requests');
+});
+
+function makeOpenFolderScreen(state, historyStub) {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function openFolderScreen('), js.indexOf('function closeFolderScreen('));
+  return new Function('state', 'history', 'render', 'folderPushed',
+    src + '; return openFolderScreen;')(state, historyStub, () => {}, false);
+}
+
+test('openFolderScreen pushes exactly one entry, marked with the folder name', () => {
+  const pushes = [];
+  const state = { openFolder: null };
+  const openFolderScreen = makeOpenFolderScreen(state, { pushState: (s) => pushes.push(s) });
+  openFolderScreen('A');
+  openFolderScreen('B');
+  assert.equal(pushes.length, 1);
+  assert.deepEqual(pushes[0], { drill: 'A' });
+});
+
+function makeCloseFolderScreen(state, backSpy) {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function closeFolderScreen('), js.indexOf('// Extracted to a named function'));
+  return new Function('state', 'history', 'render', 'folderPushed',
+    src + '; return closeFolderScreen;')(state, { back: backSpy }, () => {}, true);
+}
+
+test('closeFolderScreen clears the folder and a double tap fires one history.back()', () => {
+  const calls = [];
+  const state = { openFolder: 'Pull Requests' };
+  const closeFolderScreen = makeCloseFolderScreen(state, () => calls.push(1));
+  closeFolderScreen();
+  closeFolderScreen();
+  assert.equal(calls.length, 1);
+  assert.equal(state.openFolder, null);
+});
+
+function makeRenderFooter(state) {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function renderFooter('), js.indexOf('function childProject('));
+  const footerEl = { textContent: '' };
+  const document = { getElementById: (id) => { assert.equal(id, 'footer'); return footerEl; } };
+  const renderFooter = new Function('document', 'state', src + '; return renderFooter;')(document, state);
+  return { renderFooter, footerEl };
+}
+
+test('inside a folder the footer counts the rows on screen; at the top level it is unaffected', () => {
+  const inFolder = makeRenderFooter({
+    openFolder: 'Pull Requests',
+    projects: [{ name: 'Pull Requests', container: true, children: [1, 2, 3] }],
+    sessions: [],
+    results: new Map(),
+  });
+  inFolder.renderFooter([
+    { rs: { dot: 'filled' } },
+    { rs: { dot: 'dim' } },
+    { rs: { dot: 'dim' } },
+  ]);
+  assert.equal(inFolder.footerEl.textContent, '1 ACTIVE · 3 TOTAL');
+
+  const topLevel = makeRenderFooter({
+    openFolder: null,
+    projects: Array.from({ length: 5 }, (_, i) => ({ name: `p${i}` })),
+    sessions: [],
+    results: new Map(),
+  });
+  topLevel.renderFooter([{ rs: { dot: 'filled' } }]);
+  assert.equal(topLevel.footerEl.textContent, '1 ACTIVE · 5 TOTAL', 'the top-level total is the whole-list count, not the rows passed in');
+});
+
+function makeRenderBackBar() {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function renderBackBar('), js.indexOf('function render()'));
+  const els = {};
+  const document = {
+    getElementById(id) {
+      if (!els[id]) {
+        els[id] = {
+          hidden: false, textContent: '', attrs: {},
+          setAttribute(k, v) { this.attrs[k] = v; },
+        };
+      }
+      return els[id];
+    },
+  };
+  const closeCalls = [];
+  const renderBackBar = new Function('document', 'closeNewProjectPanel', src + '; return renderBackBar;')(
+    document, () => closeCalls.push(1),
+  );
+  return { renderBackBar, els, closeCalls };
+}
+
+test('renderBackBar reveals the bar and puts the + away, and vice versa', () => {
+  const open = makeRenderBackBar();
+  open.renderBackBar({ name: 'Pull Requests', path: 'F:/p/Pull Requests' });
+  assert.equal(open.els.backbar.hidden, false);
+  assert.equal(open.els.newproj.hidden, true);
+  assert.equal(open.els['backbar-name'].textContent, 'Pull Requests');
+  assert.equal(open.els['backbar-path'].textContent, 'F:/p/Pull Requests');
+  assert.ok(open.els.backbar.attrs['aria-label'], 'an aria-label must be set');
+
+  const closed = makeRenderBackBar();
+  closed.renderBackBar(null);
+  assert.equal(closed.els.backbar.hidden, true);
+  assert.equal(closed.els.newproj.hidden, false);
+});
+
+test('the bar can never appear on the passcode screen', () => {
+  const html = read('index.html');
+  const css = read('app.css');
+
+  const tag = html.match(/<button class="backbar" id="backbar"[^>]*>/);
+  assert.ok(tag, 'index.html must contain the back bar');
+  assert.match(tag[0], /\shidden[\s>]/, 'the back bar must ship hidden');
+
+  const pickerIdx = html.indexOf('<main id="picker"');
+  const gateIdx = html.indexOf('<main id="gate"');
+  const barIdx = html.indexOf('id="backbar"');
+  assert.ok(pickerIdx !== -1 && gateIdx !== -1 && pickerIdx < barIdx && barIdx < gateIdx,
+    'the back bar must live inside #picker, not #gate');
+
+  const rule = css.match(/\.backbar\s*\{[^}]*\}/);
+  assert.ok(rule, 'app.css must carry a .backbar rule');
+  assert.match(rule[0], /display:/, '.backbar sets display, which is what makes the force-hide rule load-bearing here');
+
+  const pickerBlock = html.slice(pickerIdx, gateIdx);
+  assert.ok(
+    pickerBlock.includes('id="backbar-name"') && pickerBlock.includes('id="backbar-path"'),
+    'neither the name nor the path element may sit outside #picker',
+  );
 });

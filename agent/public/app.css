@@ -296,6 +296,46 @@ body {
 .row.folder .row-status { color: #4a5a4a; }
 .folder-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
 
+/* The drill-in back bar. Named `backbar`, not `folderbar`: the folder-row
+   test in agent/test/pwa-assets.test.js scans every selector containing
+   "folder" for padding/margin - a folderbar rule would match it. Same card
+   language as .banner (bg #0f150f, 4px radius, 12px inset) so it reads as
+   chrome, never as a project row, and the whole bar is the control - a 44px
+   floor, full width, because on a phone in standalone mode it is the only
+   way back to the list. */
+.backbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% - 24px);
+  margin: 12px 12px 0;
+  padding: 10px 12px;
+  min-height: 44px;
+  background: #0f150f;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.backbar-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
+.backbar-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.backbar-name { font-size: 14px; font-weight: 500; color: #eafbea; }
+.backbar-path { font-size: 10px; color: #4a5a4a; overflow-wrap: anywhere; }
+
+/* The container's own folder: listed, dimmer than its children, and inert -
+   buildSelfRow emits a div, never a button, so there is nothing to tap. No dot
+   rule here for the same reason the folder row above carries none: the
+   element is not drawn. (Deliberately not spelling out that other selector
+   here - see the .backbar comment above for why: writing it out would sweep
+   the folder-row padding/margin test straight into this rule's body.) */
+.row.self { cursor: default; }
+.row.self .row-name { color: #6b7a6b; }
+.row.self .row-status { color: #4a5a4a; }
+
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 
 /* New-project panel - opened by the + button. Same card language as .banner
