@@ -731,11 +731,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v14', () => {
+test('sw.js CACHE is claude-remote-shell-v15', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v14');
+  assert.equal(match[1], 'claude-remote-shell-v15');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -1519,5 +1519,103 @@ test('the bar can never appear on the passcode screen', () => {
   assert.ok(
     pickerBlock.includes('id="backbar-name"') && pickerBlock.includes('id="backbar-path"'),
     'neither the name nor the path element may sit outside #picker',
+  );
+});
+
+// --- the nested tile eyebrow ---
+
+function tileParts(p) {
+  const el = makeBuildTile()(p, { dot: 'filled', status: 'busy' });
+  const find = (cls) => el.children.find((c) => c.className === cls);
+  return { eyebrow: find('tile-eyebrow'), name: find('tile-name') };
+}
+
+test('the eyebrow marks a nested session by both routes and never a top-level project', () => {
+  // Nested LAUNCHED synthetic row: the registry stores the client's raw
+  // 'container/child' string as p.name, with no p.parent.
+  const launched = tileParts({ name: 'Pull Requests/Vercel', path: 'F:/p/Pull Requests/Vercel' });
+  assert.equal(launched.eyebrow.textContent, 'Pull Requests', 'this tile used to render the whole raw two-segment string as its name');
+  assert.equal(launched.name.textContent, 'Vercel');
+
+  // Nested DESK synthetic row: a desk session reports a bare basename, so the
+  // parent can only reach the tile on the row object.
+  const desk = tileParts({ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel', parent: 'Pull Requests' });
+  assert.equal(desk.eyebrow.textContent, 'Pull Requests');
+  assert.equal(desk.name.textContent, 'Vercel');
+
+  // Drill-in row, via the real childProject().
+  const childProject = makeChildProject();
+  const child = tileParts(childProject({ name: 'Pull Requests' }, { name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }));
+  assert.equal(child.eyebrow.textContent, 'Pull Requests');
+  assert.equal(child.name.textContent, 'Vercel');
+
+  // Top-level project: a top-level tile must be unchanged - no eyebrow, no
+  // shifted name.
+  const topLevel = tileParts({ name: 'Sherlock', path: 'F:/p/Sherlock' });
+  assert.equal(topLevel.eyebrow, undefined);
+  assert.equal(topLevel.name.textContent, 'Sherlock');
+});
+
+test('parentFolderName reads the containing folder from either separator', () => {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function parentFolderName('), js.indexOf('function sessionFor('));
+  const parentFolderName = new Function(src + '; return parentFolderName;')();
+  assert.equal(parentFolderName('F:\\p\\Pull Requests\\Vercel'), 'Pull Requests');
+  assert.equal(parentFolderName('F:/p/Pull Requests/Vercel'), 'Pull Requests');
+  // It answers about the path and not the project list, which is why only
+  // the synthetic-row loop calls it - a top-level project's path also has a
+  // containing segment.
+  assert.equal(parentFolderName('F:/p/Sherlock'), 'p');
+  assert.equal(parentFolderName(null), null);
+});
+
+test('renderProjects gives a synthetic row its parent and a listed project none', () => {
+  const state = {
+    projects: [
+      { name: 'Sherlock', path: 'F:/p/Sherlock' },
+      { name: 'Pull Requests', container: true, children: [{ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }] },
+    ],
+    openFolder: null,
+    confirmName: null,
+    focusName: null,
+    sessions: [
+      { project: 'Vercel', path: 'F:/p/Pull Requests/Vercel', source: 'desk', status: 'running', activity: 'busy' },
+      { project: 'Sherlock', path: 'F:/p/Sherlock', source: 'launched', status: 'running', activity: 'busy' },
+    ],
+    launching: new Set(), stopping: new Set(), results: new Map(),
+  };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  const document = { getElementById: (id) => els[id] };
+  const seen = [];
+  const buildRow = (p) => { seen.push(p); return { tag: 'ROW' }; };
+  const buildTile = (p) => { seen.push(p); return { tag: 'TILE' }; };
+  const buildSelfRow = () => ({ tag: 'SELF' });
+  const renderBackBar = () => {};
+  const renderProjects = makeRenderProjectsIntegration({ document, state, buildTile, buildRow, buildSelfRow, renderBackBar });
+
+  renderProjects();
+
+  const vercel = seen.find((p) => p.name === 'Vercel');
+  const sherlock = seen.find((p) => p.name === 'Sherlock');
+  assert.equal(vercel.parent, 'Pull Requests', 'the parent is attached where the row is built, because that is the only place that knows the row is not a listed project');
+  assert.equal(sherlock.parent, undefined);
+});
+
+test('the eyebrow is the dimmest token, clamps to one line, and clears the corner STOP chip', () => {
+  const css = read('app.css');
+  const rule = css.match(/\.tile-eyebrow\s*\{([^}]*)\}/);
+  assert.ok(rule, 'app.css must carry a .tile-eyebrow rule');
+  assert.match(rule[0], /#4a5a4a/);
+  assert.match(rule[0], /font-size:\s*8px/);
+  assert.match(rule[0], /text-transform:\s*uppercase/);
+  assert.match(rule[0], /white-space:\s*nowrap/);
+  assert.ok(!/display:/.test(rule[1]), '.tile-eyebrow must set no display, or it could take part in the [hidden] override');
+
+  const group = css.match(/\.tiles\.single \.tile\.has-stop \.tile-name,[\s\S]*?\{[^}]*\}/);
+  assert.ok(group, 'app.css must carry the single-tile STOP-chip padding group');
+  assert.match(
+    group[0],
+    /\.tile-eyebrow/,
+    'the eyebrow is the topmost line on a single full-width tile and would otherwise sit under a 48px invisible STOP target',
   );
 });

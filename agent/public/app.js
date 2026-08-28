@@ -129,6 +129,21 @@ function elapsed(startedAt) {
   return `${days}d`;
 }
 
+// The name of the folder that CONTAINS this one, read off an absolute path -
+// 'Pull Requests' for '...\Pull Requests\Vercel'. Both separators are handled,
+// the same way baseDirGuess does it, because the agent's paths are whatever
+// the OS it runs on produces. null when there is no containing segment to
+// name. It answers about the PATH and knows nothing about the project list,
+// which is why only renderProjects' synthetic-row loop may call it: a
+// top-level project's row has a path too, and running this on it would put the
+// base folder's name over every tile in the app.
+function parentFolderName(p) {
+  if (!p) return null;
+  const sep = p.includes('\\') ? '\\' : '/';
+  const parts = p.split(sep).filter(Boolean);
+  return parts.length >= 2 ? parts[parts.length - 2] : null;
+}
+
 // Two keys deliberately: path is the strong one (both sides resolve from
 // the same baseDir), project covers an entry recorded by a different
 // client. Matching on session_name is wrong - deriveSessionName can map two
@@ -261,9 +276,30 @@ function buildTile(p, rs) {
   el.className = 'tile';
   if (state.launching.has(p.name) || state.stopping.has(p.name)) el.setAttribute('aria-busy', 'true');
   el.appendChild(buildDot(rs.dot));
+  // The eyebrow: the folder this session lives IN, above its name, so a nested
+  // session can never be mistaken for a top-level project of the same name.
+  // Two routes reach a tile with two different name shapes and both are
+  // covered here. A nested LAUNCHED session, and any drill-in row, is keyed
+  // '<container>/<child>' - the parent is the part before the last '/', and
+  // splitting it out is also what stops a nested launched tile rendering that
+  // whole raw string as its name. A nested DESK session is keyed by its bare
+  // basename (the desk discovery in agent/registry.js reports
+  // path.basename(cwd)), so its name can never carry a parent at all;
+  // renderProjects hands that one over as p.parent, derived from the path.
+  // p.parent wins where both exist - path is the strong key, same rule
+  // sessionFor states - and they agree anyway. A top-level project has
+  // neither, gets no element at all, and its tile is byte-identical to before.
+  const cut = p.name.lastIndexOf('/');
+  const parent = p.parent || (cut === -1 ? null : p.name.slice(0, cut));
+  if (parent) {
+    const eyebrow = document.createElement('span');
+    eyebrow.className = 'tile-eyebrow';
+    eyebrow.textContent = parent;   // uppercased in app.css - the DOM keeps the real folder name
+    el.appendChild(eyebrow);
+  }
   const name = document.createElement('span');
   name.className = 'tile-name';
-  name.textContent = p.label || p.name;
+  name.textContent = p.label || (cut === -1 ? p.name : p.name.slice(cut + 1));
   el.appendChild(name);
   const status = document.createElement('span');
   status.className = 'tile-status';
@@ -674,6 +710,16 @@ function renderProjects() {
       if (s.status === 'ended') continue; // its one banner is the receipt; no phantom row
       if (state.projects.some((p) => p.path === s.path)) continue;
       const synthetic = { name: s.project, path: s.path };
+      // Display only - never part of the row's identity. The name stays
+      // exactly what the agent reported, because that is what endTargetFor,
+      // dataset.stop and every state key resolve on. This is the ONLY route
+      // that gives a nested DESK session its parent, since its name is a bare
+      // basename. Accepted ceiling: if the project list failed to load while
+      // the session list did not, every session becomes a synthetic row and
+      // this names the base folder over all of them - the list beside it
+      // already says "Cannot reach the agent", and the next good load corrects
+      // it.
+      synthetic.parent = parentFolderName(s.path);
       rows.push({ p: synthetic, rs: rowState(synthetic) });
     }
   }
