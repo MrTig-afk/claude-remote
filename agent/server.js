@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
-import { resolveBaseDir } from './config.js';
+import { resolveBaseDir, readStatusFacts } from './config.js';
 import { listProjects, createProject } from './projects.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
@@ -35,6 +35,37 @@ export function readAgentVersion(packagePath = AGENT_PACKAGE_PATH) {
 }
 
 export const AGENT_VERSION = readAgentVersion();
+
+const RELEASE_NOTES_PATH = fileURLToPath(new URL('../release-notes.json', import.meta.url));
+
+/**
+ * The newest release-notes entry, or null. `../` out of agent/ is a
+ * deliberate exception to readAgentVersion's adjacent-file rule: the version
+ * is load-bearing so it must never depend on repo layout, but release notes
+ * are not - an agent dropped somewhere without a repo root simply omits the
+ * key, the same graceful path as a missing file. The file is committed by
+ * the owner at a fixed path; no request input ever reaches it, so returning
+ * entries[0] as-is (not a re-picked shape) is fine.
+ *
+ * console.warn on read failure is deliberately skipped: release-notes.json
+ * does not exist until T88, so a warn would fire on every boot of this
+ * branch.
+ */
+export function readLatestRelease(notesPath = RELEASE_NOTES_PATH) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1) return null;
+  const entry = parsed[0];
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  if (typeof entry.version !== 'string' || entry.version === '') return null;
+  if (typeof entry.date !== 'string' || entry.date === '') return null;
+  if (!Array.isArray(entry.notes) || entry.notes.length < 1) return null;
+  return entry;
+}
 
 function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
@@ -188,6 +219,15 @@ export async function handleRequest(req, res, ctx) {
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
       sendJson(res, 200, { projects: listProjects(ctx.baseDir) });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/status') {
+      const facts = readStatusFacts(ctx.configPath);
+      const body = { version: AGENT_VERSION, acknowledged: facts.acknowledged, shared_count: facts.shared_count };
+      const release = readLatestRelease(ctx.releaseNotesPath);
+      if (release) body.release = release;
+      sendJson(res, 200, body);
       return;
     }
 

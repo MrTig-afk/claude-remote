@@ -739,11 +739,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v19', () => {
+test('sw.js CACHE is claude-remote-shell-v20', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v19');
+  assert.equal(match[1], 'claude-remote-shell-v20');
 });
 
 // The shell must be answered from the cache without waiting on the network.

@@ -75,6 +75,10 @@ export function getProjects() {
   return request('/api/projects');
 }
 
+export function getStatus() {
+  return request('/api/status');
+}
+
 export function getSessions() {
   return request('/api/sessions');
 }

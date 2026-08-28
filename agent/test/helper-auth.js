@@ -38,6 +38,7 @@ export function makeAuthCtx({ now } = {}) {
     attemptsPath: path.join(dir, 'passcode-attempts.json'),
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
+    configPath: path.join(dir, 'config.json'),
     sessionDirs: testSessionDirs(dir),
     tokens: new Map(),
     now: now || Date.now,
@@ -50,6 +51,11 @@ export function makeAuthCtx({ now } = {}) {
 // ~/.claude/plugins/data/claude-remote-claude-remote/sessions.json on every
 // run, silently, for two days. `undefined` is the dangerous value (it is what
 // triggers the config.js fallback), so a missing key throws like a wrong one.
+// configPath is deliberately NOT in this list: readStatusFacts only ever
+// reads it, so a fixture that omits it cannot write the owner's real data
+// dir the way a missing registryPath/pidDir could - and 44 of the 64
+// makeAuthCtx/fixtureServer call sites in the suite build their ctx by hand
+// with no configPath at all. Adding it here would fail every one of them.
 const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir'];
 
 // The fifth key that falls back to the real world, and the only one that is
