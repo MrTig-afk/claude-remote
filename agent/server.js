@@ -228,12 +228,17 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, parsed.status, { error: parsed.error });
         return;
       }
-      // A desk session in a project subfolder has no `project` the client
-      // could legally name (resolveProjectPath rejects nested paths), so it
-      // sends session_name instead - endSession() resolves that key against
-      // its own server-side view, never a client-supplied path. `project`
-      // stays the contract for everything else (launched sessions, root
-      // desk sessions) and reaches the same validation it always has.
+      // Two keys, one contract. `project` is what the client sends for
+      // anything resolveProjectPath will accept: a top-level project and,
+      // since T68, a project exactly one level inside a container. A desk
+      // session sitting anywhere else under a project - deeper than one
+      // level, or under a folder that is not a container - has no `project`
+      // the client could legally name, so it sends session_name instead, and
+      // endSession resolves that key against its own server-side view, never
+      // a client-supplied path. Neither key bypasses validation: the
+      // `project` branch runs resolveProjectPath exactly as it always has,
+      // and the session_name branch never takes a path from the request at
+      // all.
       const { session_name: sessionName, project } = parsed.value;
       const target = typeof sessionName === 'string' && sessionName !== '' ? { session_name: sessionName } : project;
       const result = await endSession(ctx, target);

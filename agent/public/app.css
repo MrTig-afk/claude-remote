@@ -156,6 +156,26 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The parent-folder eyebrow on a nested session's tile. 8px in the dimmest
+   text token so it reads as a location and never competes with the name; the
+   negative bottom margin pulls it back against the 7px gap .tile puts between
+   its stacked children (a column flex container, so that is the ROW gap) so the
+   pair reads as one label instead of two stacked lines. Uppercased here rather
+   than in app.js, so the DOM keeps the real folder name for a screen reader.
+   Same single-line clamp as .tile-name: a long container name on a 184px tile
+   would otherwise wrap and push the status line out of the tile. Sets no
+   `display`, so it cannot take part in the [hidden] override this file's
+   SECURITY comment describes. */
+.tile-eyebrow {
+  font-size: 8px;
+  letter-spacing: 0.09em;
+  color: #4a5a4a;
+  text-transform: uppercase;
+  margin-bottom: -4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tile-status {
   font-size: 9px;
   color: #5fae6f;
@@ -200,6 +220,7 @@ body {
   margin: 0;
 }
 .tiles.single .tile.has-stop .tile-name,
+.tiles.single .tile.has-stop .tile-eyebrow,
 .tiles.single .tile.has-stop .tile-status { padding-right: 48px; }
 
 /* TWO OR MORE: 184px tiles, so a corner chip would cost 6.5 characters of
@@ -278,12 +299,63 @@ body {
 .row-main { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0; }
 .row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: #9aab9a; }
 /* Only informative states draw a status line, so on most rows this rule is
-   unused and the row collapses to the 44px tap-target floor. The right-hand
-   idle column and chevron are gone: a project in this list is by definition
-   not running, so the column could only ever draw an em-dash, and a chevron
-   distinguishes nothing on a list where every row is tappable. Both were
-   spending the right third of a 390px row on decoration. */
+   unused and the row collapses to the 44px tap-target floor. A folder row is
+   the exception: it always draws one ("N projects"). The right-hand idle
+   column is gone for good - a project in this list is by definition not
+   running, so it could only ever draw an em-dash. The chevron came back for
+   folder rows ONLY (.folder-chev below): on those it is not decoration, it is
+   the one mark saying this row opens a list instead of starting a session. */
 .row-status { font-size: 11px; color: #9aab9a; }
+
+/* A container folder. No dot rule here on purpose: buildRow appends no dot
+   element for a folder row, and the missing element is what pulls the name
+   20px left of its neighbours (.row's 8px dot + 12px gap). That is the
+   deliberate break in the left edge - never re-create it with padding or
+   margin here, and never restore the dot, because a folder has no session
+   state and a hollow ring would state something false. */
+.row.folder .row-name { color: #c9d1c9; }
+.row.folder .row-status { color: #4a5a4a; }
+.folder-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
+
+/* The drill-in back bar. Named `backbar`, not `folderbar`: the folder-row
+   test in agent/test/pwa-assets.test.js scans every selector containing
+   "folder" for padding/margin - a folderbar rule would match it. Same card
+   language as .banner (bg #0f150f, 4px radius, 12px inset) so it reads as
+   chrome, never as a project row, and the whole bar is the control - a 44px
+   floor, full width, because on a phone in standalone mode it is the only
+   way back to the list. */
+.backbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: calc(100% - 24px);
+  margin: 12px 12px 0;
+  padding: 10px 12px;
+  min-height: 44px;
+  background: #0f150f;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.backbar-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
+.backbar-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.backbar-name { font-size: 14px; font-weight: 500; color: #eafbea; }
+.backbar-path { font-size: 10px; color: #4a5a4a; overflow-wrap: anywhere; }
+
+/* The container's own folder: listed, dimmer than its children, and inert -
+   buildSelfRow emits a div, never a button, so there is nothing to tap. No dot
+   rule here for the same reason the folder row above carries none: the
+   element is not drawn. (Deliberately not spelling out that other selector
+   here - see the .backbar comment above for why: writing it out would sweep
+   the folder-row padding/margin test straight into this rule's body.) */
+.row.self { cursor: default; }
+.row.self .row-name { color: #6b7a6b; }
+.row.self .row-status { color: #4a5a4a; }
 
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 

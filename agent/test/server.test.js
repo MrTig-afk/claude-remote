@@ -11,6 +11,7 @@ const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-server-'
 fs.mkdirSync(path.join(base, 'Pull Requests'));
 fs.mkdirSync(path.join(base, 'Video Editing'));
 fs.mkdirSync(path.join(base, 'email-lint'));
+fs.mkdirSync(path.join(base, 'Pull Requests', 'Vercel'));   // makes 'Pull Requests' a container
 
 const authCtx = makeAuthCtx();
 seedPasscode(authCtx, '481902');
@@ -74,6 +75,24 @@ test('GET /api/projects/ (trailing slash) responds 404 (surface not widened)', a
 test('PUT /api/projects responds 404 (only GET and POST exist)', async () => {
   const res = await authedFetch('/api/projects', { method: 'PUT' });
   assert.equal(res.status, 404);
+});
+
+test('GET /api/projects serializes the container shape', async () => {
+  const res = await authedFetch('/api/projects');
+  const body = await res.json();
+  const entry = body.projects.find((p) => p.name === 'Pull Requests');
+  assert.equal(entry.container, true);
+  assert.deepEqual(entry.children, [{ name: 'Vercel', path: path.join(base, 'Pull Requests', 'Vercel') }]);
+});
+
+test('GET /api/projects leaves an ordinary project undecorated', async () => {
+  const res = await authedFetch('/api/projects');
+  const body = await res.json();
+  for (const name of ['email-lint', 'Video Editing']) {
+    const entry = body.projects.find((p) => p.name === name);
+    assert.equal(Object.hasOwn(entry, 'container'), false);
+    assert.equal(Object.hasOwn(entry, 'children'), false);
+  }
 });
 
 test('GET /api/projects against a missing base directory responds 200 with an empty list', async () => {

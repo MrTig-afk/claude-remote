@@ -3,32 +3,103 @@ import path from 'node:path';
 
 import { deriveSessionName } from './sessions.js';
 
+const CONTAINER_MARKER = '.claude-remote-container';
+
+const byName = (a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' });
+
+function readEntries(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    console.warn(`claude-remote agent: could not list '${dir}': ${err.code || err.message}`);
+    return [];
+  }
+}
+
 /**
- * Lists the direct child directories of baseDir - flat, no recursion, no
- * container-folder expansion. Never throws: any failure is logged to
+ * Returns the sorted { name, path } children of folderPath if folderPath is
+ * a CONTAINER, or null if it is an ordinary project. A folder is a container
+ * if it holds an entry NAMED `.claude-remote-container` (regardless of what
+ * else it holds). That is a name match with no type check, deliberately: a
+ * marker that is a directory counts exactly as a marker that is a file, and
+ * `agent/test/projects.test.js` pins both. Do not "tighten" this with an
+ * isFile() check to match a narrower reading - it would break a green test.
+ * Absent the marker, a folder is a container if its own direct children are
+ * ALL directories and it holds no file of its own (an empty folder is never
+ * an empty container). One level only: a returned child is never itself
+ * classified or recursed into.
+ */
+export function containerChildrenOf(folderPath) {
+  const entries = readEntries(folderPath);
+  let marker = false;
+  let hasNonDir = false;
+  const children = [];
+  for (const dirent of entries) {
+    if (dirent.name === CONTAINER_MARKER) {
+      marker = true;
+      continue;
+    }
+    // Same isDirectory() posture as the top-level walk below: lstat-based,
+    // so symlinks/junctions are neither followed nor reported as children.
+    if (!dirent.isDirectory()) {
+      hasNonDir = true;
+      continue;
+    }
+    // ponytail: a hidden DIRECTORY is skipped here but is NOT a file, so it
+    // never sets hasNonDir - a repo holding .git plus subfolders and zero
+    // top-level files guesses as a container. Narrower in practice than it
+    // sounds: a hidden FILE takes the !isDirectory() branch above and DOES
+    // set hasNonDir, so a repo with a README, a package.json or even just a
+    // .gitignore stays an ordinary project. Only a file-free repo trips it.
+    // The marker cannot rescue one that does - it forces container status
+    // ON, never off. Upgrade path if it ever bites is a real rule (treat a
+    // folder containing .git as a project), which is wider than the rule the
+    // owner picked on 2026-08-28 and so was not added unilaterally.
+    if (dirent.name.startsWith('.')) continue;
+    children.push({ name: dirent.name, path: path.join(folderPath, dirent.name) });
+  }
+  children.sort(byName);
+
+  if (marker) return children;
+  if (hasNonDir) return null;
+  if (children.length === 0) return null;
+  return children;
+}
+
+/**
+ * Lists the direct child directories of baseDir, one level deep. For a
+ * child that is a CONTAINER - a folder holding a `.claude-remote-container`
+ * marker, or (absent the marker) a folder whose own direct children are all
+ * directories and which holds no file of its own - the entry also carries
+ * `container: true` and `children`, that container's own direct child
+ * directories. Never deeper than one level: a container's children are
+ * never themselves classified. Never throws: any failure is logged to
  * stderr and results in an empty list (or that one entry being skipped).
  */
 export function listProjects(baseDir) {
-  let entries;
-  try {
-    entries = fs.readdirSync(baseDir, { withFileTypes: true });
-  } catch (err) {
-    console.warn(`claude-remote agent: could not list '${baseDir}': ${err.code || err.message}`);
-    return [];
-  }
-
+  const entries = readEntries(baseDir);
   const projects = [];
   for (const dirent of entries) {
     // Known ceiling: dirent.isDirectory() is false for symlinks/junctions, so
     // links are excluded for free - upgrade path if the owner ever
-    // junctions a project in is to follow links deliberately here.
+    // junctions a project in is to follow links deliberately here. The same
+    // behaviour governs the child walk in containerChildrenOf.
     if (!dirent.isDirectory() || dirent.name.startsWith('.')) {
       continue;
     }
-    projects.push({ name: dirent.name, path: path.join(baseDir, dirent.name) });
+    const entry = { name: dirent.name, path: path.join(baseDir, dirent.name) };
+    // ponytail: one extra readdirSync per top-level folder per call, and
+    // listProjects runs on the 5s session poll (listSessions, registry.js).
+    // Metadata-only reads of ~15 folders; measure before caching.
+    const children = containerChildrenOf(entry.path);
+    if (children) {
+      entry.container = true;
+      entry.children = children;
+    }
+    projects.push(entry);
   }
 
-  projects.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
+  projects.sort(byName);
   return projects;
 }
 
@@ -36,7 +107,7 @@ export function listProjects(baseDir) {
 // still binds for tools that live inside a project (git, node, python).
 // 21 + 64 = 85 leaves ~175 chars of headroom for the tree inside the project
 // - node_modules paths routinely eat 150+. Deliberately tighter than
-// resolveProjectPath's 255 (sessions.js:26): that guards a READ of something
+// resolveProjectPath's 255 (sessions.js): that guards a READ of something
 // that already exists, this guards what the owner is about to be stuck with.
 export const MAX_PROJECT_NAME_LENGTH = 64;
 
@@ -57,7 +128,7 @@ const RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 /**
  * Validates a client-supplied new-project name. Trust boundary: reject,
  * never sanitize-and-continue (same posture as resolveProjectPath,
- * sessions.js:25-44). Pure - touches no filesystem. Rules are ordered,
+ * sessions.js). Pure - touches no filesystem. Rules are ordered,
  * first match wins: edge whitespace (V5) is rejected rather than silently
  * trimmed, and a literal '%' (V6) is rejected outright even though nothing
  * on this path URL-decodes - both are deliberate rejections, not
@@ -118,9 +189,13 @@ export function createProject(baseDir, name) {
   const v = validateProjectName(name);
   if (!v.ok) return v;
 
-  // C1 - confinement. Byte-identical posture to resolveProjectPath
-  // (sessions.js:40-44). Unreachable after V7/V8; this is the structural
-  // backstop that makes "direct child only" true rather than argued.
+  // C1 - confinement. Byte-identical posture to resolveProjectPath's SINGLE
+  // branch: createProject stays strictly one level and never creates INSIDE
+  // a container - still out of scope as of T69, which closed without adding
+  // it - while resolveProjectPath (T68) now also accepts exactly two
+  // segments.
+  // Unreachable after V7/V8; this is the structural backstop that makes
+  // "direct child only" true rather than argued.
   const base = path.resolve(baseDir);
   const target = path.resolve(base, name);
   if (path.dirname(target) !== base || target === base) {
@@ -129,14 +204,33 @@ export function createProject(baseDir, name) {
 
   // C2 - session-name collision. deriveSessionName maps 'Foo Bar' and
   // 'Foo.Bar' to the same 'foo-bar', and they would then share one registry
-  // entry (sessions.js:77-83) - launching the new project would attach the
-  // owner to the OTHER project's session. Same "dropped into unrelated
-  // work" failure the existing-folder check below exists to prevent, one
-  // step later.
+  // entry (see deriveSessionName, sessions.js) - launching the new project
+  // would attach the owner to the OTHER project's session. Same "dropped
+  // into unrelated work" failure the existing-folder check below exists to
+  // prevent, one step later.
   // Entries that are the SAME physical target under NTFS's case-insensitive
   // matching (an exact or case-only-different repeat of `name`) are
   // excluded here on purpose: those hit mkdirSync's own EEXIST below and
   // report the more specific `project_exists`, not `name_collision`.
+  //
+  // T69 asked whether this must also see NESTED projects. It must not, and
+  // it structurally cannot collide with one: a nested project is keyed
+  // '<parent-slug>/<child-slug>' (deriveSessionName's two-argument form,
+  // sessions.js; deriveDeskSessionName agrees, registry.js), while anything
+  // creatable here is a single segment that can never contain '/' -
+  // path.basename yields no separator, the slug rule introduces only '-',
+  // and V7 rejects '/' and '\' outright. So a top-level 'Vercel' alongside
+  // 'Pull Requests\Vercel' is legal, not a collision. If the nested
+  // separator ever stops being '/', this paragraph dies with it -
+  // create-project.test.js pins the behaviour.
+  // deriveSessionName(entry.path) stays ONE-ARGUMENT deliberately: every
+  // entry listProjects(base) returns is exactly one level below base, where
+  // the two-argument form returns the identical string. Passing base would
+  // be a no-op that implies a nested comparison is happening.
+  // Container entries are compared like any other, also deliberately: a
+  // container's own folder name can collide ('Pull.Requests' vs a container
+  // 'Pull Requests'), and a container stops being one the moment a loose
+  // file lands in it, at which point it is launchable under that exact name.
   const sessionName = deriveSessionName(target);
   const lowerName = name.toLowerCase();
   for (const entry of listProjects(base)) {

@@ -71,6 +71,20 @@
     </header>
 
     <main id="picker" hidden>
+      <!-- The drill-in back bar. Ships hidden; renderBackBar is the only
+           thing that ever reveals it, and only by the hidden attribute -
+           never removeAttribute('hidden'). Living inside #picker means the
+           [hidden] { display: none !important; } rule at the top of app.css
+           covers it too: a late render can never paint it on the passcode
+           screen. -->
+      <button class="backbar" id="backbar" type="button" hidden>
+        <span class="backbar-chev" aria-hidden="true">&lt;</span>
+        <span class="backbar-main">
+          <span class="backbar-name" id="backbar-name"></span>
+          <span class="backbar-path" id="backbar-path"></span>
+        </span>
+      </button>
+
       <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
       <div class="newproj-panel" id="newproj-panel" hidden>

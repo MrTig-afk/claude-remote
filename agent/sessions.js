@@ -8,7 +8,9 @@ import { getPidDirPath } from './config.js';
 import {
   findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
   isPidAlive, HANDOFF_TIMEOUT_MS, claimDeskSession, resolveDeskSessionId,
+  pidFileNameFor,
 } from './registry.js';
+import { containerChildrenOf } from './projects.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
 const HANDOFF_SCRIPT = fileURLToPath(new URL('./handoff-session.ps1', import.meta.url));
@@ -52,40 +54,214 @@ async function defaultPidImageName(pid) {
 }
 
 /**
- * Byte-for-byte port of ConvertTo-SessionName (ClaudeRemote.psm1:1-16).
- * Known, accepted divergence: .NET \s includes U+0085 and JS \s includes
- * U+FEFF. Neither appears in a Windows folder name the owner created.
+ * Was a port of ConvertTo-SessionName (ClaudeRemote.psm1) in its
+ * ONE-ARGUMENT form. IT NO LONGER IS, and that divergence is deliberate:
+ * slugSegment below is an allowlist, while ConvertTo-SessionName is still
+ * the original denylist. They are not the same rule any more and must not be
+ * "resynced" by loosening this side.
+ * The two delivery paths do not share a sink - this one feeds
+ * launch-session.ps1 and cmd.exe, the PowerShell one feeds a tmux session
+ * name through wsl.exe - so the fix landed only where the sink is. Whether
+ * the SSH path needs its own is an open question for that path, not a reason
+ * to weaken this one. The old note about .NET \s vs JS \s is moot here: no
+ * whitespace class is used any more.
+ *
+ * The TWO-ARGUMENT form has NO PowerShell counterpart - ConvertTo-SessionName
+ * has no concept of a container folder, and the Pester suite does not cover
+ * this branch. Called with baseDir, a project exactly two levels below it
+ * derives '<parent-slug>/<child-slug>', so 'Pull Requests\Vercel' can never
+ * share a registry key with a top-level 'Vercel'. A single-segment path with
+ * baseDir is unchanged. The '/' is a private separator: no single-segment
+ * name can contain one, because path.basename never yields a separator and
+ * the slug rule (slugSegment) only ever introduces '-'.
+ *
+ * This MUST return the same string as deriveDeskSessionName (registry.js)
+ * for the same path, or listSessions emits two views for one live session.
+ *
+ * ponytail: the caller must opt in by passing baseDir. Three call sites do
+ * (launchSession, endSession, registry.js's prune); every other caller -
+ * projects.js, the tests - passes a bare name or a flat path and is
+ * unaffected.
  */
-export function deriveSessionName(projectPath) {
-  return path.basename(projectPath).replace(/[\s.]+/g, '-').toLowerCase();
+// SECURITY - an ALLOWLIST, and it must stay one. Everything that is not a
+// letter or a digit collapses to a single '-', so no shell metacharacter can
+// reach a session name whatever a folder is called.
+// It was a denylist (whitespace and dots only) until this was found: a
+// session name flows into launch-session.ps1, which hands it to
+// Start-Process for `claude.cmd` - a .cmd, so Windows runs it through
+// cmd.exe. A project named `x&calc` therefore executed calc. Anyone with a
+// valid token could create one over the API, and so could a folder name on
+// disk. Widening the name validators instead would have been a denylist
+// guarding a denylist; this is the one choke point every caller goes
+// through - resolveProjectPath, the launchability check, createProject's
+// collision guard, the pid-file name and the registry key.
+// Do not "relax" this to allow a character back in. Any new character here
+// is a new character reaching cmd.exe.
+export const slugSegment = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+export function deriveSessionName(projectPath, baseDir) {
+  const slug = slugSegment;
+  if (baseDir !== undefined) {
+    const rel = path.relative(path.resolve(baseDir), path.resolve(projectPath));
+    // Same "is it really underneath" test isInsideProject uses (registry.js):
+    // a path outside baseDir yields '..' segments and must NEVER be slugged.
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
+      const segs = rel.split(path.sep).filter(Boolean);
+      if (segs.length === 2) return segs.map(slug).join('/');
+    }
+  }
+  return slug(path.basename(projectPath));
 }
+
+// Used by both the single- and two-segment branches of resolveProjectPath.
+// Predicate set and order preserved verbatim from the pre-T68 whole-string
+// check: '\' '/' ':' control-chars leading-'.' absolute.
+const badSegment = (s) => /[\\/]/.test(s) || s.includes(':')
+  || /[\u0000-\u001f]/.test(s) || s.startsWith('.') || path.isAbsolute(s);
 
 /**
  * Resolves and validates a client-supplied project identifier against
  * baseDir. This is the trust boundary: reject, never sanitize-and-continue.
- * Returns { ok: true, path } or { ok: false, status, error }.
+ * Accepts either a single segment (a direct child of baseDir, unchanged
+ * behaviour) or exactly two ('<container>/<child>', never deeper - one level
+ * only, forever). Returns { ok: true, path } or { ok: false, status, error }.
  */
 export function resolveProjectPath(baseDir, project) {
+  // S1 - whole raw string, unchanged. Binds the 255 guard across BOTH
+  // segments: it runs before any split, so a second segment cannot be used
+  // to get past it.
   if (typeof project !== 'string' || project.trim() === '' || project.length > 255) {
     return { ok: false, status: 400, error: 'invalid_request' };
   }
 
-  if (
-    /[\\/]/.test(project) ||
-    project.includes(':') ||
-    /[\u0000-\u001f]/.test(project) ||
-    project.startsWith('.') ||
-    path.isAbsolute(project)
-  ) {
-    return { ok: false, status: 400, error: 'invalid_project' };
-  }
-
   const base = path.resolve(baseDir);
-  const resolved = path.resolve(base, project);
-  if (path.dirname(resolved) !== base || resolved === base) {
+
+  // S2 - split on '/' ONLY, never on '\'. '\' stays a rejected character
+  // inside every segment (badSegment) - a client sending 'Pull
+  // Requests\Vercel' is REJECTED, not normalised.
+  const segments = project.split('/');
+  if (segments.length > 2) {
     return { ok: false, status: 400, error: 'invalid_project' };
   }
 
+  if (segments.length === 1) {
+    // --- SINGLE branch - byte-identical to today ------------------------
+    if (badSegment(project)) {
+      return { ok: false, status: 400, error: 'invalid_project' };
+    }
+
+    const resolved = path.resolve(base, project);
+    if (path.dirname(resolved) !== base || resolved === base) {
+      return { ok: false, status: 400, error: 'invalid_project' };
+    }
+
+    let st;
+    try {
+      st = fs.lstatSync(resolved);
+    } catch {
+      return { ok: false, status: 404, error: 'project_not_found' };
+    }
+    if (!st.isDirectory()) {
+      return { ok: false, status: 404, error: 'project_not_found' };
+    }
+
+    const sessionName = deriveSessionName(resolved);
+    if (sessionName === '' || sessionName.startsWith('-')) {
+      return { ok: false, status: 400, error: 'invalid_project' };
+    }
+
+    return { ok: true, path: resolved };
+  }
+
+  // --- NESTED branch ------------------------------------------------------
+  const [seg1, seg2] = segments;
+
+  // S3n - per-segment, in order. Must run before S6n: S6n's
+  // containerChildrenOf console.warn's the folder path on a failed readdir,
+  // and control characters are already rejected here, so no crafted segment
+  // can inject terminal escapes into that log line.
+  for (const seg of [seg1, seg2]) {
+    if (seg === '' || seg.trim() === '') {
+      return { ok: false, status: 400, error: 'invalid_project' };
+    }
+    if (badSegment(seg)) {
+      return { ok: false, status: 400, error: 'invalid_project' };
+    }
+  }
+
+  // S5n - STRUCTURAL CONFINEMENT, two resolved-path comparisons, no string
+  // tests. Exactly one level, twice. Even if a segment smuggled a traversal
+  // past S3n, path.resolve normalises it and dirname catches it here; S3n is
+  // only defence in depth. This is the PATH-ARITHMETIC half of confinement
+  // and it is purely lexical - it never touches the filesystem, so it cannot
+  // see a reparse point. S6n-pre below is the other half.
+  const parent = path.resolve(base, seg1);
+  if (path.dirname(parent) !== base || parent === base) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+  const resolved = path.resolve(parent, seg2);
+  if (path.dirname(resolved) !== parent || resolved === parent) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+
+  // S6n-pre - THE PARENT MUST BE A REAL DIRECTORY, NOT A REPARSE POINT.
+  // Without this the nested branch follows a junction straight out of the
+  // base dir: S5n above is purely lexical, containerChildrenOf below does a
+  // readdirSync that FOLLOWS a reparse point and lists the link TARGET's
+  // children, and S7n only lstats the final component. Reproduced before
+  // this guard existed - 'Link/Secret' resolved ok with a realpath outside
+  // the base dir, while the flat branch correctly rejected 'Link'. This
+  // restores that symmetry.
+  // lstatSync, NEVER statSync: statSync follows the link and reports a
+  // directory, which is exactly the answer that lets the escape through.
+  // 400 invalid_project, not 404: 'sub/dir' (a nonexistent parent) is pinned
+  // to invalid_project in the rejection table in sessions.test.js, and a
+  // caller must not be able
+  // to tell a junction from a folder that simply is not there.
+  let pst;
+  try {
+    pst = fs.lstatSync(parent);
+  } catch {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+  if (!pst.isDirectory()) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+
+  // S6n - CONTAINER GATE: the first segment must be a genuine container.
+  // containerChildrenOf never throws and returns null for an ordinary
+  // project, an empty folder AND an unreadable one. A NONEXISTENT parent
+  // never reaches here at all - S6n-pre's lstatSync throws on it first.
+  // (This paragraph used to claim the opposite, that no separate existence
+  // check was needed. It was written before S6n-pre existed and left stale;
+  // read that way it argues the guard above is redundant, and deleting that
+  // guard reopens a real filesystem escape. Do not.)
+  // Its children are dirent.isDirectory()-filtered, so a junction or
+  // symlink child is not in the list and cannot be named. Case-insensitive
+  // membership match deliberately: Windows resolves 'Pull Requests/vercel'
+  // to the real 'Vercel' folder anyway, and the flat branch has always
+  // accepted 'email-Lint' - matching the platform keeps the two branches
+  // symmetric.
+  // ponytail: container status is RECOMPUTED from disk on every call, so it
+  // is not stable state. Drop a README.md into 'Pull Requests' and it stops
+  // being a container: every nested identifier under it stops resolving, and
+  // because registry.js's prune drops any entry whose resolveProjectPath call
+  // returns !ok, the LIVE registry entries of running nested sessions are
+  // silently dropped on the next 5s poll. Verified by reading that branch,
+  // not assumed. The cost is one readdirSync; the ceiling is this coupling.
+  // Upgrade path if it ever bites: record container-ness in the registry
+  // entry at launch and trust that for the lifetime of the session, rather
+  // than re-deriving it. Not built now - the owner has one container and
+  // does not keep loose files in it.
+  const children = containerChildrenOf(parent);
+  if (children === null || !children.some((c) => c.name.toLowerCase() === seg2.toLowerCase())) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+
+  // S7n - belt and braces: unreachable in practice because S6n already
+  // proved the child is a real directory. Kept as the second, independent
+  // symlink guard and to narrow the TOCTOU window between the readdir and
+  // the launch. lstatSync, NEVER statSync.
   let st;
   try {
     st = fs.lstatSync(resolved);
@@ -96,8 +272,11 @@ export function resolveProjectPath(baseDir, project) {
     return { ok: false, status: 404, error: 'project_not_found' };
   }
 
-  const sessionName = deriveSessionName(resolved);
-  if (sessionName === '' || sessionName.startsWith('-')) {
+  // S8n - each segment checked SEPARATELY: testing only the joined string
+  // would let a child named '-weird' through as 'pull-requests/-weird'.
+  const slug1 = seg1.replace(/[\s.]+/g, '-').toLowerCase();
+  const slug2 = seg2.replace(/[\s.]+/g, '-').toLowerCase();
+  if (slug1 === '' || slug1.startsWith('-') || slug2 === '' || slug2.startsWith('-')) {
     return { ok: false, status: 400, error: 'invalid_project' };
   }
 
@@ -115,15 +294,17 @@ export function launchSession(ctx, project) {
   const r = resolveProjectPath(baseDir, project);
   if (!r.ok) return r;
 
-  const sessionName = deriveSessionName(r.path);
+  const sessionName = deriveSessionName(r.path, baseDir);
 
   // Known ceiling: two folders can derive the same session name ('Foo Bar' and
   // 'Foo.Bar' both -> 'foo-bar'), so they share one registry entry and the
   // second tap returns the first's entry - whose project/path are not the
   // ones the client asked for. Launching both would collide on the same
   // --remote-control name in the Code tab anyway, so sharing is the honest
-  // behaviour. No folder under Repos collides today. Upgrade path if one
-  // ever does: key by resolved path and return a 409 on the name collision.
+  // behaviour. This now applies PER SEGMENT: 'Pull Requests/Vercel' and
+  // 'Pull.Requests/Vercel' collide the same way, one level down. No folder
+  // under Repos collides today. Upgrade path if one ever does: key by
+  // resolved path and return a 409 on the name collision.
   const existing = findLiveSession(ctx, sessionName);
   if (existing) {
     return { ok: true, reused: true, session: existing };
@@ -150,7 +331,7 @@ export function launchSession(ctx, project) {
     // the grace window. Better a duplicate later than a failed launch now.
   }
 
-  const pidFilePath = path.join(pidDir, `${sessionName}.pid`);
+  const pidFilePath = path.join(pidDir, pidFileNameFor(sessionName));
 
   const child = spawner('powershell.exe', [
     '-NoProfile',
@@ -158,7 +339,23 @@ export function launchSession(ctx, project) {
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', r.path,
-    '-SessionName', sessionName,
+    // The LAUNCHER ARGUMENT ONLY - the registry key keeps its '/', because
+    // recordLaunch below is still passed the untouched `sessionName`.
+    // launch-session.ps1 hands this value straight to
+    // `claude.cmd --remote-control`. Whether that CLI accepts a '/' inside a
+    // session name could not be established: node's spawn, PowerShell,
+    // Start-Process and cmd.exe all pass '/' through untouched (it is not a
+    // cmd metacharacter, and the token does not begin with one, so it is not
+    // read as a switch), but the CLI's own handling is observable only by
+    // running it, which this build was not permitted to do. The collapse is
+    // therefore PRECAUTIONARY, and it is the same one pidFileNameFor
+    // (registry.js) makes for the pid FILE name, for the same reason it is
+    // collision-free: the slug rule maps every '.' and every whitespace run
+    // to '-', so no single-segment session name can contain a '.' and
+    // 'pull-requests.vercel' is unreachable by any flat project. If a launch
+    // is ever seen working with a '/', this replace can simply go - nothing
+    // else in the agent reads the --remote-control name back.
+    '-SessionName', sessionName.replace(/\//g, '.'),
     '-PidFile', pidFilePath,
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,
@@ -265,13 +462,14 @@ function watchHandoff(ctx, sessionName, projectPath, mtimeBefore, runner) {
  * injectable seams, mirroring ctx.spawner; both default to child_process.spawn.
  *
  * `target` is either a project name (string, the original contract - a
- * launched session or a desk session sitting at a project ROOT) or
- * `{ session_name }` (a desk session in a project SUBFOLDER, which has no
- * `project` the client could legally name - resolveProjectPath would reject
- * a nested path outright). Both funnel into endResolvedSession(), the one
- * place that ever claims a registry entry, calls taskkill or spawns the
- * handoff - so the security-sensitive bit exists exactly once regardless of
- * which key the phone sent.
+ * launched session, a desk session sitting at a project ROOT, and SINCE T68
+ * also a session exactly one level inside a container, which the client CAN
+ * now legally name) or `{ session_name }` (a desk session in a subfolder the
+ * client still cannot name: one DEEPER than one level, or one under a folder
+ * that is not a container). Both funnel into endResolvedSession(), the one place that
+ * ever claims a registry entry, calls taskkill or spawns the handoff - so
+ * the security-sensitive bit exists exactly once regardless of which key
+ * the phone sent.
  */
 export async function endSession(ctx, target) {
   if (target !== null && typeof target === 'object') {
@@ -282,7 +480,7 @@ export async function endSession(ctx, target) {
   const r = resolveProjectPath(ctx.baseDir, project);
   if (!r.ok) return r;
 
-  const sessionName = deriveSessionName(r.path);
+  const sessionName = deriveSessionName(r.path, ctx.baseDir);
   const existing = findLiveSession(ctx, sessionName);
   return endResolvedSession(ctx, { sessionName, projectPath: r.path, project, existing });
 }

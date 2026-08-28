@@ -6,7 +6,8 @@ import { test, after } from 'node:test';
 
 import { deriveSessionName, resolveProjectPath, launchSession, endSession } from '../sessions.js';
 import {
-  STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION, listSessions,
+  STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION, listSessions, pidFileNameFor,
+  deriveDeskSessionName,
 } from '../registry.js';
 import { seedPasscode, issueTestToken, authHeaders, fixtureServer, testSessionDirs } from './helper-auth.js';
 
@@ -16,6 +17,14 @@ fs.mkdirSync(path.join(base, 'Video Editing'));
 fs.mkdirSync(path.join(base, 'email-lint'));
 fs.mkdirSync(path.join(base, '-weird'));
 fs.writeFileSync(path.join(base, 'notes.txt'), 'hello');
+
+// T68 fixtures - container-folder nesting. The notes.md line is
+// load-bearing, without it email-lint becomes all-directories-no-files and
+// would classify as a container itself, making 'email-lint/sub' legal.
+fs.mkdirSync(path.join(base, 'Pull Requests', 'Vercel'), { recursive: true });
+fs.mkdirSync(path.join(base, 'Vercel'));                           // the collision partner
+fs.mkdirSync(path.join(base, 'email-lint', 'sub'));                // ordinary project WITH a subfolder
+fs.writeFileSync(path.join(base, 'email-lint', 'notes.md'), 'x');  // ...the file that keeps it a project
 
 // Every makeRegCtx() call creates a temp dir; without tracking them the
 // suite leaked one per test (92 across a full run, measured 2026-08-25).
@@ -104,10 +113,10 @@ function makeKillingSpawner(trackedPid) {
 // bypassing launchSession entirely - endSession never launches anything.
 function makeRunningEntry(regCtx, project, pid) {
   const projectPath = path.resolve(base, project);
-  const sessionName = deriveSessionName(projectPath);
+  const sessionName = deriveSessionName(projectPath, base);
   recordLaunch(regCtx, { sessionName, project, projectPath });
   fs.mkdirSync(regCtx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(regCtx.pidDir, `${sessionName}.pid`), String(pid), 'ascii');
+  fs.writeFileSync(path.join(regCtx.pidDir, pidFileNameFor(sessionName)), String(pid), 'ascii');
   return { sessionName, projectPath };
 }
 
@@ -159,6 +168,333 @@ test('deriveSessionName - naming contract', () => {
   for (const [input, expected] of rows) {
     assert.equal(deriveSessionName(input), expected, `input: ${input}`);
   }
+});
+
+// --- T68: nested project naming and rejection -------------------------------
+
+test('deriveSessionName - nested name carries the parent', () => {
+  assert.equal(
+    deriveSessionName(path.join(base, 'Pull Requests', 'Vercel'), base),
+    'pull-requests/vercel',
+  );
+});
+
+test('deriveSessionName - nested and top-level of the same leaf differ', () => {
+  const nested = deriveSessionName(path.join(base, 'Pull Requests', 'Vercel'), base);
+  const topLevel = deriveSessionName(path.join(base, 'Vercel'), base);
+  assert.notEqual(nested, topLevel);
+  assert.equal(topLevel, 'vercel');
+});
+
+test('deriveSessionName - the one-argument form is opt-in and unchanged', () => {
+  assert.equal(deriveSessionName(path.join(base, 'Pull Requests', 'Vercel')), 'vercel');
+});
+
+test('deriveSessionName - depth 1 with baseDir is unchanged; depth 3 falls back to basename', () => {
+  assert.equal(deriveSessionName(path.join(base, 'email-lint'), base), 'email-lint');
+  assert.equal(
+    deriveSessionName(path.join(base, 'Pull Requests', 'Vercel', 'deep'), base),
+    'deep',
+  );
+});
+
+test('deriveSessionName - a path outside baseDir never produces a nested name', () => {
+  assert.equal(deriveSessionName('C:\\Windows\\System32', base), 'system32');
+});
+
+test('resolveProjectPath - accepts the two-segment identifier', () => {
+  const result = resolveProjectPath(base, 'Pull Requests/Vercel');
+  assert.equal(result.ok, true);
+  assert.equal(result.path, path.join(base, 'Pull Requests', 'Vercel'));
+});
+
+test('deriveSessionName - the separator is unforgeable (a "-" join cannot be mistaken for it)', () => {
+  assert.equal(deriveSessionName('Pull Requests-Vercel'), 'pull-requests-vercel');
+  assert.notEqual(deriveSessionName('Pull Requests-Vercel'), 'pull-requests/vercel');
+});
+
+test('resolveProjectPath - nested rejection table', () => {
+  const rows = [
+    ['Pull Requests/..', 'invalid_project'],
+    ['Pull Requests/../../Windows', 'invalid_project'],
+    ['Pull Requests/Vercel/deep', 'invalid_project'],
+    ['Pull Requests//Vercel', 'invalid_project'],
+    ['Pull Requests/', 'invalid_project'],
+    ['/Vercel', 'invalid_project'],
+    ['Pull Requests/.', 'invalid_project'],
+    ['Pull Requests/.hidden', 'invalid_project'],
+    ['Pull Requests/C:\\Windows', 'invalid_project'],
+    ['Pull Requests/\\\\server\\share', 'invalid_project'],
+    ['Pull Requests/sub\\dir', 'invalid_project'],
+    ['Pull Requests\\Vercel', 'invalid_project'],
+    ['Pull Requests/%2e%2e', 'invalid_project'],
+    ['Pull Requests/nope', 'invalid_project'],
+    ['email-lint/sub', 'invalid_project'],
+    ['Video Editing/anything', 'invalid_project'],
+    ['notes.txt/x', 'invalid_project'],
+    [`${'P'.repeat(200)}/${'V'.repeat(60)}`, 'invalid_request'],
+  ];
+  for (const [project, expectedError] of rows) {
+    const { spawner, calls } = makeFakeSpawner();
+    const result = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, project);
+    assert.equal(result.ok, false, `project: ${project}`);
+    assert.equal(result.error, expectedError, `project: ${project}`);
+    assert.equal(calls.length, 0, `project: ${project}`);
+  }
+});
+
+// --- T70: the routes, end to end - nested-target pins ----------------------
+// These sit here, above 'endSession - handoff exit with HANDOFF.md mtime
+// moved -> ended record written/true', because that test writes a HANDOFF.md
+// into the shared 'Pull Requests' fixture and never removes it. A FILE in
+// that folder turns it into a NON-container for every test after that point
+// (containerChildrenOf returns null once it sees a non-directory dirent - see
+// projects.js), so a later test naming 'Pull Requests/Vercel' would fail with
+// invalid_project for a reason that has nothing to do with what it asserts.
+// T68's own nested tests above sit here for the same reason. TWO tests leak
+// into that fixture, not one - 'endSession - desk session: claim/kill/handoff
+// argv gets -SessionId, discovery stops seeing it, ended banner after exit'
+// writes a HANDOFF.md there as well, twice, also without cleanup. A sweep
+// that gives only the first a `finally` moves this boundary down rather than
+// removing it; both need one before these tests can move freely. The junction
+// test below ('resolveProjectPath - a
+// junction child of a container cannot be named') used to leak a symlink into
+// the same fixture with the same effect - it no longer does, its `finally`
+// removes the link.
+
+test('launchSession - nested identifier: exact args array, and the registry key keeps its slash', () => {
+  const { spawner, calls } = makeFakeSpawner();
+  const regCtx = makeRegCtx();
+  const r = launchSession({ baseDir: base, spawner, ...regCtx }, 'Pull Requests/Vercel');
+  const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
+  assert.deepEqual(calls[0].args, [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', LAUNCH_SCRIPT,
+    '-ProjectPath', path.join(base, 'Pull Requests', 'Vercel'),
+    '-SessionName', 'pull-requests.vercel',   // collapsed for the launcher
+    '-PidFile', path.join(regCtx.pidDir, 'pull-requests.vercel.pid'),
+  ]);
+  // The registry key must NOT change - this is the pin that a future
+  // mutation of the launcher-argument collapse cannot also change the key.
+  assert.equal(r.session.session_name, 'pull-requests/vercel');
+});
+
+test('HTTP - POST /api/sessions with a nested identifier -> 202', async () => {
+  const { spawner } = makeFakeSpawner();
+  const regCtx = makeRegCtx();
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests/Vercel' }),
+    });
+    assert.equal(res.status, 202);
+    const body = await res.json();
+    assert.equal(body.session_name, 'pull-requests/vercel');
+    assert.equal(body.project, 'Pull Requests/Vercel');
+    assert.equal(body.path, path.join(base, 'Pull Requests', 'Vercel'));
+    assert.equal(body.status, 'starting');
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - GET /api/sessions renders a nested running session exactly once', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => true });
+  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Pull Requests/Vercel', 7801);
+  writeDeskSessionFile(regCtx, { pid: 9001, sessionId: 'nested-conv-1', cwd: projectPath });
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    // The desk record must be deduped by `claimed`, not emitted as a second tile.
+    assert.equal(body.sessions.length, 1);
+    const s = body.sessions[0];
+    assert.equal(s.session_name, sessionName);
+    assert.equal(s.session_name, 'pull-requests/vercel');
+    assert.equal(s.project, 'Pull Requests/Vercel');
+    assert.equal(s.path, projectPath);
+    assert.equal(s.status, 'running');
+    assert.equal(s.pid, 7801);
+    assert.equal(s.source, 'launched');
+    assert.equal(s.activity, 'idle');
+    assert.ok(Number.isFinite(Date.parse(s.started_at)));
+  } finally {
+    server.close();
+  }
+});
+
+test('HTTP - POST /api/sessions/end ends a nested LAUNCHED session by project', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7802);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'cmd.exe';
+  makeRunningEntry(regCtx, 'Pull Requests/Vercel', 7802);
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Pull Requests/Vercel' }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), {
+      result: 'handoff_started', project: 'Pull Requests/Vercel', session_name: 'pull-requests/vercel',
+    });
+    assert.deepEqual(killer.calls[0].args, ['/PID', '7802', '/T', '/F']);
+    // Proves the clear path also routes through pidFileNameFor.
+    assert.equal(fs.existsSync(path.join(regCtx.pidDir, 'pull-requests.vercel.pid')), false);
+    const args = handoffCalls[0].args;
+    assert.equal(args[args.indexOf('-ProjectPath') + 1], path.join(base, 'Pull Requests', 'Vercel'));
+  } finally {
+    handoffCalls[0]?.child.handlers.exit();
+    server.close();
+  }
+});
+
+test('endSession - a nested DESK session can now be ended by project (newly reachable since T68)', async () => {
+  const regCtx = makeRegCtx();
+  const killer = makeKillingSpawner(7803);
+  regCtx.isPidAlive = killer.isPidAlive;
+  regCtx.pidImageName = () => 'claude.exe';
+  const projectPath = path.join(base, 'Pull Requests', 'Vercel');
+  writeDeskSessionFile(regCtx, { pid: 7803, sessionId: 'nested-desk-1', cwd: projectPath });
+  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
+  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+
+  const result = await endSession(ctx, 'Pull Requests/Vercel');
+
+  // `project` is the client identifier here, not the basename - endSession's
+  // project branch forwards `target` verbatim to endResolvedSession. Assert
+  // what the code does, do not "correct" it.
+  assert.deepEqual(result.body, {
+    result: 'handoff_started', project: 'Pull Requests/Vercel', session_name: 'pull-requests/vercel',
+  });
+  assert.deepEqual(killer.calls[0].args, ['/PID', '7803', '/T', '/F']);
+  const args = handoffCalls[0].args;
+  assert.equal(args[args.indexOf('-SessionId') + 1], 'nested-desk-1');
+  assert.equal(args[args.indexOf('-ProjectPath') + 1], projectPath);
+
+  handoffCalls[0].child.handlers.exit();
+  await result.handoff;
+});
+
+test('HTTP - POST /api/sessions/dismiss drops a NESTED ended record', async () => {
+  const regCtx = makeRegCtx();
+  fs.mkdirSync(path.dirname(regCtx.registryPath), { recursive: true });
+  const now = Date.now();
+  const ended = {
+    session_name: 'pull-requests/vercel',
+    project: 'Pull Requests/Vercel',
+    original_path: path.join(base, 'Pull Requests', 'Vercel'),
+    started_at: new Date(now - 60_000).toISOString(),
+    status: 'ended',
+    ended_at: new Date(now - 1000).toISOString(),
+    handoff_ok: true,
+    handoff_result: 'written',
+  };
+  fs.writeFileSync(regCtx.registryPath, JSON.stringify({ version: REGISTRY_VERSION, sessions: [ended] }));
+  const server = fixtureServer({ baseDir: base, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    // The nested ended record must survive the prune and be listed.
+    const before = (await (await authedFetch(regCtx, `${origin}/api/sessions`)).json()).sessions;
+    assert.deepEqual(before.map((s) => [s.session_name, s.status]), [['pull-requests/vercel', 'ended']]);
+
+    const res = await authedFetch(regCtx, `${origin}/api/sessions/dismiss`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: 'pull-requests/vercel' }),
+    });
+    assert.equal(res.status, 204);
+
+    const after = (await (await authedFetch(regCtx, `${origin}/api/sessions`)).json()).sessions;
+    assert.deepEqual(after, []);
+  } finally {
+    server.close();
+  }
+});
+
+test('resolveProjectPath - a junction child of a container cannot be named', (t) => {
+  const linkPath = path.join(base, 'Pull Requests', 'linked');
+  try {
+    fs.symlinkSync(os.tmpdir(), linkPath, 'junction');
+  } catch {
+    t.skip('junction creation not permitted');
+    return;
+  }
+  // finally, because leaving this link behind turns 'Pull Requests' into a
+  // NON-container for every test after it in this file - containerChildrenOf
+  // sees a non-directory dirent and returns null - so a later nested test
+  // fails 400 for a reason that has nothing to do with what it asserts. That
+  // trap cost T70 an investigation; it is a leaked fixture, not a deliberate
+  // one. Assertions unchanged.
+  try {
+    const { spawner, calls } = makeFakeSpawner();
+    const result = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests/linked');
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'invalid_project');
+    assert.equal(calls.length, 0);
+  } finally {
+    fs.rmSync(linkPath, { recursive: true, force: true });
+  }
+});
+
+// The gap the other two junction tests left: one covers a junction CHILD of a
+// container, one a junction as a FLAT project, but nothing covered a junction as the
+// PARENT of a nested identifier - and that was a real escape. containerChildrenOf
+// does a readdirSync that follows the reparse point and lists the TARGET's
+// children, so 'Link/Secret' resolved ok with a realpath outside the base dir.
+test('resolveProjectPath - a junction PARENT cannot be traversed out of the base dir', (t) => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-outside-'));
+  fs.mkdirSync(path.join(outside, 'Secret'));
+  const linkPath = path.join(base, 'Linked Container');
+  try {
+    fs.symlinkSync(outside, linkPath, 'junction');
+  } catch {
+    fs.rmSync(outside, { recursive: true, force: true });
+    t.skip('junction creation not permitted');
+    return;
+  }
+  try {
+    const { spawner, calls } = makeFakeSpawner();
+    const result = launchSession(
+      { baseDir: base, spawner, ...makeRegCtx() },
+      'Linked Container/Secret',
+    );
+    assert.equal(result.ok, false, 'a junction parent must never resolve');
+    assert.equal(result.error, 'invalid_project');
+    assert.equal(calls.length, 0, 'nothing may be spawned');
+  } finally {
+    try { fs.rmSync(linkPath, { recursive: true, force: true }); } catch { /* junction */ }
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('resolveProjectPath - nested rejections leave sessions.json untouched', () => {
+  const regCtx = makeRegCtx();
+  const rows = ['Pull Requests/..', 'Pull Requests//Vercel', 'Pull Requests/nope', 'email-lint/sub'];
+  for (const project of rows) {
+    const { spawner } = makeFakeSpawner();
+    const result = launchSession({ baseDir: base, spawner, ...regCtx }, project);
+    assert.equal(result.ok, false, `project: ${project}`);
+  }
+  assert.equal(fs.existsSync(regCtx.registryPath), false);
+});
+
+test('pidFileNameFor - a nested session name stays a direct child of pidDir', () => {
+  assert.equal(pidFileNameFor('pull-requests/vercel'), 'pull-requests.vercel.pid');
+  assert.equal(pidFileNameFor('email-lint'), 'email-lint.pid');
 });
 
 // --- 6.4 Launch mechanics (unit level, launchSession directly) -------------
@@ -1320,10 +1656,15 @@ test('endSession - pid image is not cmd.exe (reused pid) -> already_ended, no ta
 
 test('source - defaultPidImageName\'s tasklist call hides its console window and is bounded by a timeout', () => {
   const src = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'sessions.js'), 'utf8');
-  const fn = src.slice(
-    src.indexOf('async function defaultPidImageName('),
-    src.indexOf(' * Byte-for-byte port'),   // no newline in the marker: a CRLF checkout must not widen the slice
-  );
+  // Anchored on CODE, not on the next function's comment prose. It used to
+  // end the slice at ' * Byte-for-byte port', the first line of
+  // deriveSessionName's docblock - so T68's mandated rewrite of that docblock
+  // (it had become untrue) broke this unrelated test. A test must not depend
+  // on a neighbour's wording. '\n}' is the function's own closing brace at
+  // column 0: every inner brace is indented, and it is CRLF-safe because the
+  // '}' follows the '\n' directly.
+  const start = src.indexOf('async function defaultPidImageName(');
+  const fn = src.slice(start, src.indexOf('\n}', start) + 2);
   assert.ok(fn.length > 0 && fn.length < 2000, `slice must be the one function, got ${fn.length} chars`);
   assert.ok(fn.includes("'tasklist'"), 'must still call tasklist');
   assert.ok(
@@ -2013,4 +2354,90 @@ test('endSession - a body carrying neither project nor session_name -> 400 inval
   const result = await endSession(ctx, undefined);
 
   assert.deepEqual(result, { ok: false, status: 400, error: 'invalid_request' });
+});
+
+// --- T74 security fix: the session-name slug is an allowlist ----------------
+// Regression tests for a real command-injection path, not hygiene tests.
+// A session name reaches launch-session.ps1, which passes it to Start-Process
+// for `claude.cmd`; a .cmd runs through cmd.exe, so a metacharacter that
+// survives the slug is executed. The old slug collapsed whitespace and dots
+// only, so a project named `x&calc` ran calc for anyone holding a token.
+
+test('deriveSessionName - no shell metacharacter survives into a session name', () => {
+  for (const ch of ['&', '^', '|', '!', '(', ')', ';', '$', '`', '"', "'", '<', '>', '%', ',', '=', '~', '{', '}', '[', ']', '+', '#', '@']) {
+    const name = deriveSessionName(`x${ch}calc`);
+    assert.ok(!name.includes(ch), `'${ch}' survived the slug: ${name}`);
+    assert.match(name, /^[a-z0-9-]*$/, `slug produced something outside [a-z0-9-]: ${name}`);
+  }
+});
+
+test('deriveSessionName - the canonical injection payload is defanged', () => {
+  assert.equal(deriveSessionName('x&calc'), 'x-calc');
+  assert.equal(deriveSessionName('a`whoami`b'), 'a-whoami-b');
+  assert.equal(deriveSessionName('a$(id)b'), 'a-id-b');
+});
+
+test('deriveSessionName - the nested form slugs each segment, so the only / is the separator', () => {
+  const nested = deriveSessionName(path.join(base, 'Pull&Requests', 'Ver|cel'), base);
+  assert.equal(nested, 'pull-requests/ver-cel');
+  assert.equal(nested.split('/').length, 2, 'a metacharacter must not add a segment');
+});
+
+// The zero-blast-radius claim, pinned rather than asserted: every real folder
+// on this host slugs to exactly what it did before the allowlist landed.
+test('deriveSessionName - every real project name is unchanged by the allowlist', () => {
+  const rows = [
+    ['claude-remote', 'claude-remote'],
+    ['claude-master', 'claude-master'],
+    ['MingleHub', 'minglehub'],
+    ['Pull Requests', 'pull-requests'],
+    ['Video Editing', 'video-editing'],
+    ['Backend Engineering', 'backend-engineering'],
+    ['Y Combinator-qm', 'y-combinator-qm'],
+    ['Reactive-Resume', 'reactive-resume'],
+    ['email-lint', 'email-lint'],
+    ['NutritionDE', 'nutritionde'],
+  ];
+  for (const [input, expected] of rows) {
+    assert.equal(deriveSessionName(input), expected, `input: ${input}`);
+  }
+});
+
+// The invariant that would actually break if registry.js kept a second copy
+// of the slug: deriveDeskSessionName and deriveSessionName must return the
+// same string for the same path. Since T72 that string is the identity a
+// nested session's STOP resolves on, so a divergence ends the WRONG session.
+// Behavioural, not a source scan - the first version of this test WAS a
+// source scan, and its regex was subtly wrong, so it passed while a
+// re-introduced duplicate slug sat in registry.js. Depth 1 and 2 only: at
+// depth 3+ the two disagree BY DESIGN, since deriveSessionName falls back to
+// the basename while deriveDeskSessionName joins every segment.
+test('deriveDeskSessionName and deriveSessionName cannot diverge', () => {
+  const cases = [
+    ['email-lint'],
+    ['Pull Requests'],
+    ['Pull Requests', 'Vercel'],
+    ['Y Combinator-qm'],
+    ['x&calc'],
+    ['Pull&Requests', 'Ver|cel'],
+    ['a`whoami`b', 'c$(id)d'],
+    ['My.Project', 'A  B'],
+  ];
+  for (const segs of cases) {
+    const full = path.join(base, ...segs);
+    assert.equal(
+      deriveDeskSessionName(base, full),
+      deriveSessionName(full, base),
+      `diverged for ${segs.join('/')}`,
+    );
+  }
+});
+
+test('slugSegment - a name of only metacharacters cannot pass the launchability check', () => {
+  // resolveProjectPath rejects a session name that is empty or starts with
+  // '-', and under the allowlist that is exactly what such a name produces.
+  for (const name of ['&&&', '!!', '$$$', '---']) {
+    const slugged = deriveSessionName(name);
+    assert.ok(slugged === '' || slugged.startsWith('-'), `'${name}' -> '${slugged}' would be accepted`);
+  }
 });
