@@ -1009,3 +1009,129 @@ test("reportEnded distinguishes 'interrupted' from a genuine handoff failure", (
     'the interrupted branch must be reached before the blunt fallback',
   );
 });
+
+// --- the folder row -------------------------------------------------------
+
+function makeRowState(state) {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function rowState('), js.indexOf('function setDot('));
+  return new Function('state', 'sessionFor', 'elapsed', src + '; return rowState;')(
+    state,
+    (p) => (state.sessions || []).find((s) => s.path === p.path) ?? null,
+    () => '1m',
+  );
+}
+
+// Minimal DOM stub - buildRow only ever creates elements, sets className /
+// textContent / dataset / attributes, and appends. buildDot and statusLine are
+// injected so this stays a test of buildRow and nothing else.
+function makeBuildRow() {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function buildRow('), js.indexOf('function setBanner('));
+  const document = {
+    createElement(tag) {
+      return {
+        tag, children: [], attrs: {}, dataset: {}, className: '', textContent: '',
+        setAttribute(k, v) { this.attrs[k] = v; },
+        appendChild(c) { this.children.push(c); return c; },
+      };
+    },
+  };
+  return new Function('document', 'buildDot', 'statusLine', src + '; return buildRow;')(
+    document,
+    () => ({ tag: 'DOT' }),
+    (rs) => rs.status,
+  );
+}
+
+const ROW_STATE_BASE = { projects: [], sessions: [], launching: new Set(), stopping: new Set(), results: new Map() };
+
+test('a container renders as a list row with a folder descriptor, never a tile', () => {
+  const rowState = makeRowState({ ...ROW_STATE_BASE });
+  const rs = rowState({
+    name: 'Pull Requests', path: 'F:/p/Pull Requests', container: true,
+    children: [1, 2, 3, 4, 5].map((n) => ({ name: String(n) })),
+  });
+  assert.equal(rs.zone, 'list');
+  assert.equal(rs.folder, true);
+  assert.equal(rs.status, '5 projects');
+  assert.equal(rs.dot, undefined, 'a folder has no session state, so it takes no dot');
+  assert.ok(!rs.implicit, 'a folder row always draws its sub-line');
+});
+
+test('a container stays a list row even with a launch in flight for its name', () => {
+  // Pins the branch ORDER: fails if the container check is moved below the
+  // launching check.
+  const rowState = makeRowState({ ...ROW_STATE_BASE, launching: new Set(['Pull Requests']) });
+  const rs = rowState({ name: 'Pull Requests', path: 'F:/p/Pull Requests', container: true, children: [{ name: '1' }] });
+  assert.equal(rs.zone, 'list');
+});
+
+test('a container with one child reads "1 project", not "1 projects"', () => {
+  const rowState = makeRowState({ ...ROW_STATE_BASE });
+  const rs = rowState({ name: 'Solo', path: 'F:/p/Solo', container: true, children: [{ name: 'only' }] });
+  assert.equal(rs.status, '1 project');
+});
+
+test('buildRow gives a folder row no dot and a chevron, and data-folder not data-project', () => {
+  const buildRow = makeBuildRow();
+  const btn = buildRow({ name: 'Pull Requests' }, { zone: 'list', folder: true, status: '5 projects', idle: '—' });
+  assert.equal(btn.className, 'row folder');
+  assert.equal(btn.dataset.project, undefined, 'a folder row must not carry data-project - that is what onProjectTap launches on');
+  assert.equal(btn.dataset.folder, 'Pull Requests');
+  assert.ok(!btn.children.some((c) => c.tag === 'DOT'), 'a folder row must have no dot element');
+  const last = btn.children[btn.children.length - 1];
+  assert.equal(last.className, 'folder-chev');
+  assert.equal(last.textContent, '>');
+  assert.equal(last.attrs['aria-hidden'], 'true');
+});
+
+test('an ordinary row still gets its dot and data-project', () => {
+  const buildRow = makeBuildRow();
+  const btn = buildRow({ name: 'Sherlock' }, { zone: 'list', dot: 'dim', status: 'no session', implicit: true });
+  assert.equal(btn.className, 'row');
+  assert.equal(btn.children[0].tag, 'DOT');
+  assert.equal(btn.dataset.project, 'Sherlock');
+  assert.equal(btn.dataset.folder, undefined);
+  assert.ok(!btn.children.some((c) => c.className === 'folder-chev'));
+});
+
+test("the folder row's left-edge break comes from the missing dot, not a nudge", () => {
+  const css = read('app.css');
+  assert.match(css, /\.row\s*\{[^}]*gap:\s*12px/s);
+  const js = read('app.js');
+  const dotStart = js.indexOf('function buildDot(');
+  assert.ok(dotStart !== -1, 'buildDot is what emits the element the folder row drops');
+  const buildDotSrc = js.slice(dotStart, js.indexOf('\n}', dotStart) + 2);
+  assert.match(buildDotSrc, /width="8"/, '8 + 12 = the 20px shift');
+  const folderRules = css.match(/\.(?:row\.folder|folder)[^{]*\{[^}]*\}/g) || [];
+  for (const rule of folderRules) {
+    assert.ok(
+      !/padding-left|margin-left|padding\s*:|margin\s*:/.test(rule),
+      'the offset must fall out of dropping the element, or it drifts the first time .row\'s gap changes',
+    );
+  }
+});
+
+test('the folder row uses the three tokenized colours the design names', () => {
+  const css = read('app.css');
+  assert.match(css, /\.row\.folder \.row-name\s*\{[^}]*#c9d1c9/);
+  assert.match(css, /\.row\.folder \.row-status\s*\{[^}]*#4a5a4a/);
+  assert.match(css, /\.folder-chev\s*\{[^}]*#5fae6f/);
+});
+
+test('TOTAL counts what can be started - a container\'s children, not the container', () => {
+  const js = read('app.js');
+  const body = js.match(/const total = ([^;]+);/);
+  assert.ok(body, 'renderFooter must carry the total expression');
+  const total = new Function('state', `return ${body[1]};`);
+  assert.equal(total({ projects: [
+    ...Array.from({ length: 14 }, (_, i) => ({ name: `p${i}` })),
+    { name: 'Pull Requests', container: true, children: Array.from({ length: 5 }, (_, i) => ({ name: `c${i}` })) },
+  ] }), 19);
+  assert.equal(total({ projects: Array.from({ length: 3 }, (_, i) => ({ name: `p${i}` })) }), 3);
+  assert.equal(total({ projects: [{ name: 'Pull Requests', container: true, children: Array.from({ length: 5 }, (_, i) => ({ name: `c${i}` })) }] }), 5);
+
+  assert.match(js, /allCount\.textContent = String\(state\.projects\.length\)/,
+    'ALL PROJECTS stays the top-level count - one list, one number');
+});

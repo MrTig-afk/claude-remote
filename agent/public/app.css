@@ -278,12 +278,23 @@ body {
 .row-main { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0; }
 .row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: #9aab9a; }
 /* Only informative states draw a status line, so on most rows this rule is
-   unused and the row collapses to the 44px tap-target floor. The right-hand
-   idle column and chevron are gone: a project in this list is by definition
-   not running, so the column could only ever draw an em-dash, and a chevron
-   distinguishes nothing on a list where every row is tappable. Both were
-   spending the right third of a 390px row on decoration. */
+   unused and the row collapses to the 44px tap-target floor. A folder row is
+   the exception: it always draws one ("N projects"). The right-hand idle
+   column is gone for good - a project in this list is by definition not
+   running, so it could only ever draw an em-dash. The chevron came back for
+   folder rows ONLY (.folder-chev below): on those it is not decoration, it is
+   the one mark saying this row opens a list instead of starting a session. */
 .row-status { font-size: 11px; color: #9aab9a; }
+
+/* A container folder. No dot rule here on purpose: buildRow appends no dot
+   element for a folder row, and the missing element is what pulls the name
+   20px left of its neighbours (.row's 8px dot + 12px gap). That is the
+   deliberate break in the left edge - never re-create it with padding or
+   margin here, and never restore the dot, because a folder has no session
+   state and a hollow ring would state something false. */
+.row.folder .row-name { color: #c9d1c9; }
+.row.folder .row-status { color: #4a5a4a; }
+.folder-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
 
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 

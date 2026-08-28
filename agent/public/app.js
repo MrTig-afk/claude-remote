@@ -144,9 +144,26 @@ function sessionFor(p) {
  * The one honesty rule, stated once: a filled accent dot means and only
  * means the agent proved a live pid. Everything else is a hollow ring.
  * One rule places a row: a project with a registry entry (any status) or
- * an in-flight launch is a tile; everything else is a list row.
+ * an in-flight launch is a tile; everything else is a list row - and a
+ * container short-circuits ahead of all of it, never becoming a tile.
  */
 function rowState(p) {
+  // A container is a folder, not a project: it has no session state to
+  // report, so it takes no dot and can never be a tile. First check in the
+  // function deliberately - nothing below it (a launch in flight, a stale
+  // result, a session that matched by name) may promote it to the RUNNING
+  // zone. `implicit` is absent, so buildRow always draws its sub-line.
+  // Known ceiling this creates: a desk session opened IN the container's own
+  // root folder now renders nowhere - this returns before sessionFor, and
+  // renderProjects' synthetic-row loop skips it because the container's path
+  // IS a listed project. That is the settled design (a container is not
+  // startable, so it reports no session), not an oversight; T72's drill-in
+  // screen decides whether the folder itself gets to show one.
+  if (p.container) {
+    const n = (p.children || []).length;
+    return { zone: 'list', folder: true, status: n === 1 ? '1 project' : n + ' projects', idle: '—' };
+  }
+
   if (state.launching.has(p.name)) {
     return { zone: 'tile', dot: 'accent', status: 'starting...', idle: '—' };
   }
@@ -279,15 +296,24 @@ function buildTile(p, rs) {
 function buildRow(p, rs) {
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'row';
-  btn.dataset.project = p.name;
+  btn.className = rs.folder ? 'row folder' : 'row';
+  // A folder row carries data-folder, NOT data-project. onProjectTap fires on
+  // [data-project] and launches - a folder must never launch, and leaving the
+  // attribute off is the whole of that guarantee (see onProjectTap). T72 wires
+  // the drill-in to [data-folder]; until then the tap does nothing.
+  if (rs.folder) btn.dataset.folder = p.name;
+  else btn.dataset.project = p.name;
   // The dot is decorative and the default status is not drawn, so the row's
   // state has to reach a screen reader some other way. This is that way, and
   // it says the same thing for every row whether or not the line is visible.
   btn.setAttribute('aria-label', `${p.name}, ${statusLine(rs)}`);
 
-  const dot = buildDot(rs.dot);
-  btn.appendChild(dot);
+  // No dot on a folder row. Dropping the ELEMENT (rather than hiding it) is
+  // also what shifts the name 20px left of its neighbours - .row's 8px dot
+  // plus its 12px gap - and that break in the left edge is the row's
+  // strongest signal. A hollow ring here would state a session state a folder
+  // does not have. Do not add a margin to "fix" the alignment.
+  if (!rs.folder) btn.appendChild(buildDot(rs.dot));
 
   const main = document.createElement('span');
   main.className = 'row-main';
@@ -302,6 +328,14 @@ function buildRow(p, rs) {
     main.appendChild(statusEl);
   }
   btn.appendChild(main);
+
+  if (rs.folder) {
+    const chev = document.createElement('span');
+    chev.className = 'folder-chev';
+    chev.setAttribute('aria-hidden', 'true'); // the aria-label already says it
+    chev.textContent = '>';
+    btn.appendChild(chev);
+  }
 
   return btn;
 }
@@ -655,7 +689,10 @@ function renderProjects() {
 
 function renderFooter(rows) {
   const footer = document.getElementById('footer');
-  const total = state.projects.length;
+  // TOTAL counts things that can be STARTED, so a container is not one of
+  // them - its children are. 14 projects + 5 nested = 19 for the owner's
+  // folder set, where ALL PROJECTS above still reads 15 top-level rows.
+  const total = state.projects.reduce((n, p) => n + (p.container ? (p.children || []).length : 1), 0);
   if (state.sessions === null && state.results.size === 0) {
     footer.textContent = `SESSION STATE UNKNOWN · ${total} TOTAL`;
     return;
@@ -769,11 +806,19 @@ function openConfirm(name) {
   render();
 }
 
-// A synthetic desk-subfolder tile's name is the subfolder's basename, never
-// a name resolveProjectPath would accept, so it must END by session_name
-// instead (see agent/server.js, the end-session route). Any name that IS a
-// listed project - including a root-level desk session - keeps the
-// original project-name contract unchanged.
+// A synthetic desk-subfolder tile is named by the subfolder's BASENAME -
+// registry.js reports a desk view's `project` as path.basename(cwd) - so it
+// carries no container prefix and is a SINGLE segment, not the
+// '<container>/<child>' form resolveProjectPath also accepts since T68
+// (sessions.js). Resolved as a single segment it would point at a top-level
+// folder, not the subfolder, so such a tile must END by session_name instead
+// (see agent/server.js, the end-session route). Any name that IS a listed
+// project - including a root-level desk session - keeps the original
+// project-name contract unchanged.
+// Known ceiling, unchanged here: a subfolder whose basename also happens to
+// name a top-level project takes that first branch and ends by project name,
+// which resolves to the TOP-LEVEL folder's session. Same display-name
+// collision sessionFor documents; the fix for both is to key tiles on path.
 function endTargetFor(name) {
   if (state.projects.some((p) => p.name === name)) return { project: name };
   const s = (state.sessions || []).find((sess) => sess.source === 'desk' && sess.project === name);
