@@ -41,6 +41,21 @@ export function isPidAlive(pid) {
 }
 
 /**
+ * The pid FILE name for a session name. A nested session name carries a '/'
+ * (deriveSessionName), which path.join would turn into a subdirectory that
+ * nothing creates - the pid file would never be written and the session
+ * would report `failed` while running. Collapsing it to '.' is safe and
+ * collision-free, not a sanitization of untrusted input: the slug rule maps
+ * every '.' and every whitespace run to '-', so NO single-segment session
+ * name can ever contain a '.', and 'pull-requests.vercel.pid' is therefore
+ * unreachable by any flat project. The confinement check below is unchanged
+ * and still runs on the joined result.
+ */
+export function pidFileNameFor(sessionName) {
+  return `${sessionName.replace(/\//g, '.')}.pid`;
+}
+
+/**
  * Resolves <pidDir>/<sessionName>.pid, refusing to act on it unless it is a
  * direct child of pidDir. sessionName always comes from deriveSessionName in
  * practice, so this never trips - it exists as a defensive backstop, not a
@@ -48,7 +63,7 @@ export function isPidAlive(pid) {
  */
 function pidFilePathFor(pidDir, sessionName) {
   const resolvedDir = path.resolve(pidDir);
-  const pidFilePath = path.join(resolvedDir, `${sessionName}.pid`);
+  const pidFilePath = path.join(resolvedDir, pidFileNameFor(sessionName));
   if (path.dirname(pidFilePath) !== resolvedDir) {
     return null;
   }
@@ -321,7 +336,7 @@ export function resolveDeskSessionId(ctx, targetPath) {
  * Inserts a `handoff` registry entry for a session the agent did NOT launch,
  * ONLY IF no entry with that session_name exists. Returns true iff it wrote.
  * The insert is the claim - the same "the write IS the claim" contract as
- * markSessionState (registry.js:413) - and it is what makes discovery stop
+ * markSessionState (below) - and it is what makes discovery stop
  * reporting the session the instant a STOP is accepted.
  */
 export function claimDeskSession(ctx, { sessionName, project, projectPath, startedAt, handoffStartedAt }) {
@@ -467,7 +482,7 @@ export function listSessions(ctx) {
         drop(sessionName);
         continue;
       }
-      if (deriveSessionName(r.path) !== sessionName) {
+      if (deriveSessionName(r.path, baseDir) !== sessionName) {
         drop(sessionName);
         continue;
       }

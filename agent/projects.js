@@ -29,7 +29,7 @@ function readEntries(dir) {
  * an empty container). One level only: a returned child is never itself
  * classified or recursed into.
  */
-function containerChildrenOf(folderPath) {
+export function containerChildrenOf(folderPath) {
   const entries = readEntries(folderPath);
   let marker = false;
   let hasNonDir = false;
@@ -86,7 +86,7 @@ export function listProjects(baseDir) {
     }
     const entry = { name: dirent.name, path: path.join(baseDir, dirent.name) };
     // ponytail: one extra readdirSync per top-level folder per call, and
-    // listProjects runs on the 5s session poll (registry.js:368).
+    // listProjects runs on the 5s session poll (listSessions, registry.js).
     // Metadata-only reads of ~15 folders; measure before caching.
     const children = containerChildrenOf(entry.path);
     if (children) {
@@ -105,7 +105,7 @@ export function listProjects(baseDir) {
 // still binds for tools that live inside a project (git, node, python).
 // 21 + 64 = 85 leaves ~175 chars of headroom for the tree inside the project
 // - node_modules paths routinely eat 150+. Deliberately tighter than
-// resolveProjectPath's 255 (sessions.js:26): that guards a READ of something
+// resolveProjectPath's 255 (sessions.js): that guards a READ of something
 // that already exists, this guards what the owner is about to be stuck with.
 export const MAX_PROJECT_NAME_LENGTH = 64;
 
@@ -126,7 +126,7 @@ const RESERVED_NAME_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 /**
  * Validates a client-supplied new-project name. Trust boundary: reject,
  * never sanitize-and-continue (same posture as resolveProjectPath,
- * sessions.js:25-44). Pure - touches no filesystem. Rules are ordered,
+ * sessions.js). Pure - touches no filesystem. Rules are ordered,
  * first match wins: edge whitespace (V5) is rejected rather than silently
  * trimmed, and a literal '%' (V6) is rejected outright even though nothing
  * on this path URL-decodes - both are deliberate rejections, not
@@ -187,9 +187,12 @@ export function createProject(baseDir, name) {
   const v = validateProjectName(name);
   if (!v.ok) return v;
 
-  // C1 - confinement. Byte-identical posture to resolveProjectPath
-  // (sessions.js:40-44). Unreachable after V7/V8; this is the structural
-  // backstop that makes "direct child only" true rather than argued.
+  // C1 - confinement. Byte-identical posture to resolveProjectPath's SINGLE
+  // branch: createProject stays strictly one level - it
+  // never creates INSIDE a container, that is out of scope (T69) -
+  // while resolveProjectPath (T68) now also accepts exactly two segments.
+  // Unreachable after V7/V8; this is the structural backstop that makes
+  // "direct child only" true rather than argued.
   const base = path.resolve(baseDir);
   const target = path.resolve(base, name);
   if (path.dirname(target) !== base || target === base) {
@@ -198,7 +201,7 @@ export function createProject(baseDir, name) {
 
   // C2 - session-name collision. deriveSessionName maps 'Foo Bar' and
   // 'Foo.Bar' to the same 'foo-bar', and they would then share one registry
-  // entry (sessions.js:77-83) - launching the new project would attach the
+  // entry (see deriveSessionName, sessions.js) - launching the new project would attach the
   // owner to the OTHER project's session. Same "dropped into unrelated
   // work" failure the existing-folder check below exists to prevent, one
   // step later.

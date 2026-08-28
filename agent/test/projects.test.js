@@ -196,7 +196,7 @@ test('a marker that is itself a directory still overrides the guess, and is neve
 });
 
 // containerChildrenOf reuses readEntries for the per-folder read, which
-// never throws (projects.js:13-15): a candidate folder whose OWN entries
+// never throws (readEntries, projects.js): a candidate folder whose OWN entries
 // cannot be listed must degrade to an ordinary project, not blow up
 // listProjects. icacls denies read/execute on a folder this process itself
 // owns - no elevation needed - to force that read to fail for real, rather
