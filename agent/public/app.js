@@ -2,11 +2,8 @@ import { getProjects, getSessions, launchSession, endSession, dismissEnded, crea
 import { showGate } from './lock.js';
 
 // The version baked into whatever copy of the shell the phone has cached.
-// Compared against the agent's own version to notice a stale cached shell,
-// entirely on-device - the app never asks the network what the latest
-// version is. Keep it a plain single-quoted literal: the version test reads
-// it out of this source file, because a browser module cannot be imported
-// under node.
+// Keep it a plain single-quoted literal: the version test reads it out of
+// this source file, because a browser module cannot be imported under node.
 export const SHELL_VERSION = '0.1.0';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),

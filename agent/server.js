@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import http from 'node:http';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveBaseDir } from './config.js';
@@ -16,7 +15,7 @@ export const HOST = '127.0.0.1';
 // this agent's port must match whatever this is.
 export const DEFAULT_PORT = 8790;
 
-const AGENT_PACKAGE_PATH = path.resolve(fileURLToPath(new URL('./package.json', import.meta.url)));
+const AGENT_PACKAGE_PATH = fileURLToPath(new URL('./package.json', import.meta.url));
 
 /**
  * The agent's own version, from the package.json sitting BESIDE this file.
