@@ -3,6 +3,7 @@ import http from 'node:http';
 
 import { resolveBaseDir } from './config.js';
 import { listProjects, createProject } from './projects.js';
+import { listDrives } from './drives.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
@@ -166,6 +167,11 @@ export async function handleRequest(req, res, ctx) {
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
       sendJson(res, 200, { projects: listProjects(ctx.baseDir) });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/drives') {
+      sendJson(res, 200, await listDrives(ctx));
       return;
     }
 

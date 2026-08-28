@@ -86,6 +86,12 @@ function refusePidImageName() {
     + "process's image name via tasklist on this machine. Pass an explicit pidImageName to the ctx.",
   );
 }
+function refuseDriveExec() {
+  throw new Error(
+    'helper-auth: this fixture server has no driveExec, so GET /api/drives would run a REAL '
+    + "powershell.exe Get-CimInstance on this machine. Pass an explicit driveExec to the ctx.",
+  );
+}
 
 /** createAgentServer, but it refuses a ctx that could write the owner's real data dir. */
 export function fixtureServer(ctx) {
@@ -126,6 +132,7 @@ export function fixtureServer(ctx) {
   if (typeof ctx.killSpawner !== 'function') ctx.killSpawner = refuseKill;
   if (typeof ctx.handoffSpawner !== 'function') ctx.handoffSpawner = refuseHandoff;
   if (typeof ctx.pidImageName !== 'function') ctx.pidImageName = refusePidImageName;
+  if (typeof ctx.driveExec !== 'function') ctx.driveExec = refuseDriveExec;
   return createAgentServer(ctx);
 }
 
