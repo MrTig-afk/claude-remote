@@ -52,6 +52,20 @@ function isSixDigits(v) {
   return /^[0-9]{6}$/.test(v);
 }
 
+// The same retry ladder app.js uses, and it has to live here as well as
+// there. The passcode gate is not a screen the owner passes on the way to
+// the waiting state - it is the screen a cold boot LANDS on, every single
+// time: the token is memory-only by design (see api.js), so every open of
+// the app runs showGate() before app.js ever calls load(). Until this
+// existed, opening the PWA while the PC was still booting dead-ended on
+// '! Cannot reach the agent' with a RETRY button and nothing retrying, and
+// the whole waiting state behind it was unreachable.
+const WAIT_GAPS_MS = [2000, 3000, 5000, 10000, 15000];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // app.js:load() fires two requests in parallel, so one token expiry calls
 // onAuthLost twice. Sharing the in-flight gate makes the second call a no-op
 // instead of stranding the first promise (and stacking a second set of
@@ -113,6 +127,42 @@ async function runGate() {
   }
 
   return new Promise((resolve) => {
+    let waitTries = 0;
+    let waiting = false;
+
+    // network/timeout only - the two codes that mean the agent said nothing
+    // at all, which is what a PC that has not finished booting looks like
+    // from a phone. Every other code is the agent ANSWERING, and retrying an
+    // answer forever would be a spinner that never resolves. Stops on the
+    // first success, and while the app is in the background.
+    async function waitForAgent() {
+      if (waiting) return;
+      waiting = true;
+      try {
+        while (statusUnknown && document.visibilityState === 'visible') {
+          await sleep(WAIT_GAPS_MS[Math.min(waitTries, WAIT_GAPS_MS.length - 1)]);
+          if (!statusUnknown || document.visibilityState !== 'visible') return;
+          waitTries += 1;
+          e.msg.textContent = `Waiting for the PC (${waitTries})...`;
+          // Re-entrant by design: checkStatus() calls waitForAgent() again on
+          // a failure, and `waiting` is still true, so that call is a no-op
+          // and THIS loop keeps ownership of the retrying.
+          await checkStatus();
+        }
+      } finally {
+        waiting = false;
+      }
+    }
+
+    // The loop above stops when the app goes to the background, so something
+    // has to restart it on the way back - app.js's visibilitychange handler
+    // is not wired until after the gate resolves, and without this the owner
+    // returns to a frozen 'Waiting for the PC (3)' that never moves again.
+    function onVisible() {
+      if (document.visibilityState === 'visible' && statusUnknown) waitForAgent();
+    }
+    document.addEventListener('visibilitychange', onVisible);
+
     async function checkStatus() {
       const res = await getAuthStatus();
       if (!res.ok) {
@@ -120,12 +170,21 @@ async function runGate() {
         // button becomes RETRY and re-runs this probe instead of submitting
         // to a route that may not be the right one for this unknown state.
         statusUnknown = true;
-        e.msg.textContent = messageFor(res.code, res.status);
         e.go.textContent = 'RETRY';
         e.go.disabled = false;
+        if (res.code === 'network' || res.code === 'timeout') {
+          if (waitTries === 0) e.msg.textContent = 'Waiting for the PC. This screen will unlock itself as soon as the agent answers.';
+          waitForAgent();
+          return;
+        }
+        // Not a silence - the agent refused. RETRY stays the only way on,
+        // correctly: waiting cannot fix an answer.
+        waitTries = 0;
+        e.msg.textContent = messageFor(res.code, res.status);
         return;
       }
       statusUnknown = false;
+      waitTries = 0;
       e.msg.textContent = ''; // the probe worked; drop any stale "cannot reach" line
       mode = res.data.configured ? 'lock' : 'setup';
       rateLimited = mode === 'lock' && res.data.retry_after_ms > 0;
@@ -163,6 +222,11 @@ async function runGate() {
         e.form.removeEventListener('submit', onSubmit);
         e.pin.removeEventListener('input', updateGoEnabled);
         e.confirmPin.removeEventListener('input', updateGoEnabled);
+        // Removed with the rest: showGate can run again (onAuthLost), and a
+        // listener left behind here would hold the previous run's closure
+        // over the same DOM nodes - the exact stacking `pending` exists to
+        // avoid a few lines above.
+        document.removeEventListener('visibilitychange', onVisible);
         resolve();
         return;
       }

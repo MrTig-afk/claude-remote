@@ -5,7 +5,22 @@ import { getRegistryFilePath, getPidDirPath, getSessionDirPaths } from './config
 import { resolveProjectPath, deriveSessionName, slugSegment } from './sessions.js';
 import { listProjects } from './projects.js';
 
-export const STARTING_GRACE_MS = 30_000;
+// How long a launch with no pid file yet is still called `starting` rather
+// than `failed`. It was 30s, and 30s is a desk figure: on a WARM machine the
+// launcher writes the pid file in two or three seconds. Right after a cold
+// boot it does not. Measured on this host 2026-08-28, two minutes after a
+// restart: the agent recorded the launch at 22:40:41 and the launcher's
+// cmd.exe was not created until 22:40:56 - 15s for the SECOND launcher, and
+// ~45s for the first one, which paid the cold powershell.exe + .NET load
+// while Windows was still doing its own startup work.
+// Calling that `failed` was a lie the owner acted on: the tile said "no
+// session confirmed... tap the project to try again", he tapped, and a
+// second session came up (inFlightLaunches in sessions.js is the guard that
+// now makes that tap harmless). 120s is the cold-boot measurement with
+// headroom, not a round number picked for looks. CONFIRM_GAPS_MS in
+// agent/public/app.js is anchored to this - its last gap must land PAST this
+// window or a genuine failure never gets its banner.
+export const STARTING_GRACE_MS = 120_000;
 export const REGISTRY_VERSION = 1;
 
 // A launch whose pid file never landed is kept as `failed` this long so the

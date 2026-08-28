@@ -8,7 +8,11 @@ const state = {
   sessions: null, // array, or null = unknown (fetch failed / 404)
   launching: new Set(), // project names with a POST in flight
   results: new Map(), // name -> { kind:'started'|'reused'|'error', session?, code? }
-  reachable: null, // null = not tried yet, true, false
+  // null = not tried yet, true, false, or 'waiting' - the agent did not
+  // answer AND the reason was network/timeout, which is the one failure that
+  // ends by itself when the PC finishes waking up. waitForAgent() owns it.
+  reachable: null,
+  waitTries: 0, // retries made in the current 'waiting' run, for the status line
   stopping: new Set(), // project names with an end POST in flight - CLIENT ONLY
   confirmName: null, // the ONE project whose tile is currently the question
   openFolder: null, // the open container's NAME, or null = the top-level list.
@@ -514,11 +518,17 @@ function maybeFailedBanner() {
   ]);
 }
 
-// Checks at roughly 3s, 8s and 33s after the trigger. The last is past
-// STARTING_GRACE_MS (30s), which is the whole point: it is the first moment
-// the agent can return a `failed` verdict, so without it the owner never
-// sees one. Gaps, not absolute offsets - they are awaited in sequence.
-const CONFIRM_GAPS_MS = [3000, 5000, 25000];
+// Checks at roughly 3s, 8s, 33s and 123s after the trigger. The last is past
+// STARTING_GRACE_MS, which is the whole point: it is the first moment the
+// agent can return a `failed` verdict, so without it the owner never sees
+// one. Gaps, not absolute offsets - they are awaited in sequence.
+// The 90s gap was added when STARTING_GRACE_MS went from 30s to 120s (see
+// agent/registry.js for the cold-boot measurement that moved it). Without
+// it the sequence would end at 33s, well inside the grace window, and a
+// launch that really did fail would sit as `starting` with no banner until
+// the owner pulled REFRESH - the watch loop drops a `failed` entry out of
+// anyWatchable() and stops rather than announcing it.
+const CONFIRM_GAPS_MS = [3000, 5000, 25000, 90000];
 let confirming = false;
 // Set when a launch happens while a confirm sequence is already running. The
 // running sequence's gaps are anchored to the FIRST launch, so a project
@@ -560,11 +570,12 @@ async function confirmStarting(force = false) {
     }
   } finally {
     confirming = false;
-    // Bounded at 3 x (1 + forced calls arriving mid-sequence). This call runs
+    // Bounded at CONFIRM_GAPS_MS.length x (1 + forced calls arriving
+    // mid-sequence). This call runs
     // with `confirming` already false, so it ENTERS the loop rather than
     // setting the flag again - a sequence can never re-arm itself, which is
     // what caps the chain. It does NOT rely on anyStarting() going false:
-    // an entry that never resolves still stops after its three gaps. Do not
+    // an entry that never resolves still stops after its gaps. Do not
     // rewrite this into a loop keyed on anyStarting(); that reintroduces the
     // unbounded case this shape avoids.
     if (rearm) {
@@ -616,6 +627,42 @@ async function watchSessions() {
   }
 }
 
+// Gaps between automatic retries while the agent is unreachable; the last
+// one repeats for as long as the app is open and in front. Short at first
+// because a PC that is merely finishing its boot comes back in seconds, then
+// backing off so a machine that is genuinely off is not hammered.
+const WAIT_GAPS_MS = [2000, 3000, 5000, 10000, 15000];
+let waiting = false;
+
+// A phone cannot tell "the PC is off", "the PC is still booting" and
+// "Tailscale has not connected yet" apart - they are the same silence - and
+// the last two end on their own within a minute. The app used to answer all
+// three with CANNOT REACH AGENT and a REFRESH button, which put the owner in
+// front of a dead screen with no idea whether waiting would help (owner,
+// 2026-08-28: "we need something to show when the PWA is reloading in the
+// background when the system has shut down. I was soo confused fr").
+// So it waits, visibly, and comes back by itself. Bounded the same way
+// watchSessions is - by the visibility gate and by its own stop condition,
+// not by a timer that runs while the app is in the background.
+async function waitForAgent() {
+  if (waiting) return;
+  waiting = true;
+  try {
+    while (state.reachable === 'waiting' && document.visibilityState === 'visible') {
+      await sleep(WAIT_GAPS_MS[Math.min(state.waitTries, WAIT_GAPS_MS.length - 1)]);
+      if (state.reachable !== 'waiting' || document.visibilityState !== 'visible') return;
+      state.waitTries += 1;
+      renderConn();
+      // Re-entrant by design: load() calls waitForAgent() again on a failure,
+      // and `waiting` is still true here, so that call returns immediately
+      // and THIS loop keeps ownership of the retrying.
+      await load();
+    }
+  } finally {
+    waiting = false;
+  }
+}
+
 // The splash is part of the page's initial state, so it is already covering
 // the window before this module parses. Dropping it is unconditional: it goes
 // as soon as a real screen has painted, and again if boot throws, so a
@@ -638,6 +685,14 @@ function renderConn() {
   if (state.reachable === null) {
     setDot(dot, 'dim');
     text.textContent = 'CONNECTING';
+    text.classList.remove('reachable');
+  } else if (state.reachable === 'waiting') {
+    // The accent ring, not the dim one: dim is "nothing is happening", and
+    // something IS happening - the app is retrying on its own. The counter
+    // is the proof of that to someone watching a screen that would otherwise
+    // look identical to a frozen one.
+    setDot(dot, 'accent');
+    text.textContent = state.waitTries > 0 ? `WAITING FOR PC (${state.waitTries})` : 'WAITING FOR PC';
     text.classList.remove('reachable');
   } else if (state.reachable === true) {
     setDot(dot, 'filled');
@@ -752,7 +807,12 @@ function renderProjects() {
   }
   runCount.textContent = String(tiles.length);
 
-  if (state.reachable === false) {
+  if (state.reachable === 'waiting') {
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = 'Waiting for the PC. This screen will fill in on its own as soon as the agent answers.';
+    listEl.appendChild(msg);
+  } else if (state.reachable === false) {
     const msg = document.createElement('div');
     msg.className = 'msg';
     msg.textContent = 'Cannot reach the agent.';
@@ -849,9 +909,20 @@ async function load() {
   if (p.ok) {
     state.projects = p.data.projects;
     state.reachable = true;
+    state.waitTries = 0;
+  } else if (p.code === 'network' || p.code === 'timeout') {
+    // The only two codes that mean "the agent said nothing at all", and so
+    // the only two that a PC finishing its boot produces. Everything else is
+    // the agent ANSWERING with a refusal, which waiting cannot fix - those
+    // keep the old dead-end banner, correctly.
+    state.projects = [];
+    state.reachable = 'waiting';
+    setBanner('info', [{ text: 'No answer from the PC yet - it may still be waking up, or Tailscale may not be connected. Retrying automatically.' }]);
+    waitForAgent();
   } else {
     state.projects = [];
     state.reachable = false;
+    state.waitTries = 0;
     setErrorBanner(p.code, p.status);
   }
 
@@ -862,7 +933,10 @@ async function load() {
   reportEnded();
 
   render();
-  if (state.reachable) maybeFailedBanner();
+  // `=== true` and not a truthiness test: 'waiting' is truthy, and on that
+  // path state.sessions is null anyway, so this would only ever be a no-op
+  // that reads as if it were not one.
+  if (state.reachable === true) maybeFailedBanner();
   confirmStarting();
   watchSessions();
 }

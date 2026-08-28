@@ -20,7 +20,10 @@ function existsUnderPublic(relPath) {
 
 // --- SW behaviour, via node:vm ---
 
-function loadServiceWorker() {
+// overrides lets a test replace `fetch` and the top-level caches.match, which
+// is the only way to observe what the shell handler does when the agent is
+// not answering - the case the whole cache strategy exists for.
+function loadServiceWorker(overrides = {}) {
   const source = read('sw.js');
   const listeners = {};
   const caches = new Map();
@@ -36,6 +39,8 @@ function loadServiceWorker() {
 
   const fakeCaches = {
     async open(name) {
+      // Storage blocked in a private window, or quota exhausted.
+      if (overrides.cacheOpenFails) throw new Error('QuotaExceededError');
       if (!caches.has(name)) caches.set(name, new Map());
       const store = caches.get(name);
       return {
@@ -46,10 +51,13 @@ function loadServiceWorker() {
     },
     async keys() { return [...caches.keys()]; },
     async delete() { return true; },
-    async match() { return undefined; },
+    async match(req) {
+      return overrides.cacheMatch ? overrides.cacheMatch(req) : undefined;
+    },
   };
 
-  const fakeFetch = async () => ({ ok: true, status: 200, type: 'basic', clone: () => ({}) });
+  const fakeFetch = overrides.fetch
+    || (async () => ({ ok: true, status: 200, type: 'basic', clone: () => ({}) }));
 
   const context = {
     self: fakeSelf,
@@ -731,11 +739,58 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v16', () => {
+test('sw.js CACHE is claude-remote-shell-v17', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v16');
+  assert.equal(match[1], 'claude-remote-shell-v17');
+});
+
+// The shell must be answered from the cache without waiting on the network.
+// Network-first is what made the app take tens of seconds to open while the
+// PC was still booting: each shell file waited out its own connection
+// timeout before falling back to the cache it already had.
+test('sw.js answers the shell from cache without awaiting the network', () => {
+  const source = read('sw.js');
+  assert.ok(
+    !source.includes('networkFirst'),
+    'the shell handler must not be network-first - that is the slow-open bug',
+  );
+  const fn = source.slice(
+    source.indexOf('async function staleWhileRevalidate('),
+    source.indexOf('self.addEventListener(\'fetch\''),
+  );
+  assert.ok(fn, 'sw.js must carry staleWhileRevalidate');
+  assert.ok(
+    fn.indexOf('const cached = await caches.match(req)') < fn.indexOf('await fromNetwork'),
+    'the cache lookup must be awaited BEFORE the network response, or the wait is back',
+  );
+  assert.match(fn, /\.catch\(\(\) => null\)/, 'the background revalidate must not reject unhandled');
+});
+
+// The behaviour, not the shape: a PC that is still booting does not refuse a
+// connection, it says nothing at all, so the network promise simply never
+// settles. Under network-first the app sat on exactly this until the socket
+// timed out - once per shell file, before anything could paint.
+test('sw.js serves the cached shell while the network never answers at all', async () => {
+  const cachedBody = { body: 'cached app.js' };
+  const listeners = loadServiceWorker({
+    fetch: () => new Promise(() => {}), // never settles, never rejects
+    cacheMatch: async () => cachedBody,
+  });
+
+  let responded;
+  listeners.fetch({
+    request: { url: 'http://127.0.0.1:8790/app.js', method: 'GET', mode: 'same-origin' },
+    respondWith(p) { responded = p; },
+  });
+
+  assert.ok(responded, 'the shell request must be answered by the service worker');
+  const winner = await Promise.race([
+    responded,
+    new Promise((r) => setTimeout(() => r('TIMED OUT'), 500)),
+  ]);
+  assert.equal(winner, cachedBody, 'the cached copy must win without waiting on the network');
 });
 
 // --- a desk session in a subfolder gets its own tile -----------------
@@ -1620,4 +1675,139 @@ test('the eyebrow is the dimmest token, clamps to one line, and clears the corne
     /\.tile-eyebrow/,
     'the eyebrow is the topmost line on a single full-width tile and would otherwise sit under a 48px invisible STOP target',
   );
+});
+
+// --- the PC is still waking up ----------------------------------------------
+
+// Only network/timeout may enter the waiting state. Every other failure code
+// is the agent ANSWERING with a refusal, and retrying a refusal forever is a
+// spinner that never resolves.
+test('load() waits and retries only on network/timeout, and dead-ends on every other code', () => {
+  const js = read('app.js');
+  const load = js.slice(js.indexOf('async function load()'), js.indexOf('async function onProjectTap('));
+  assert.match(load, /p\.code === 'network' \|\| p\.code === 'timeout'/);
+  assert.match(load, /state\.reachable = 'waiting'/);
+  assert.match(load, /waitForAgent\(\)/);
+  assert.ok(
+    load.indexOf("state.reachable = 'waiting'") < load.indexOf('state.reachable = false'),
+    'the waiting branch must be checked before the dead-end branch',
+  );
+  assert.match(load, /if \(state\.reachable === true\) maybeFailedBanner\(\);/,
+    "'waiting' is truthy, so this test pins the explicit comparison");
+});
+
+test('waitForAgent is a bounded, visibility-gated retry loop with no timer of its own', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function waitForAgent()'), js.indexOf('function hideSplash()'));
+  assert.ok(fn, 'app.js must carry waitForAgent');
+  assert.match(fn, /document\.visibilityState === 'visible'/, 'it must not retry while the app is in the background');
+  assert.match(fn, /await sleep\(/, 'it must reuse the one sleep helper, not add a second setTimeout');
+  assert.match(fn, /if \(waiting\) return;/, 're-entry from load() must be a no-op, or the retries multiply');
+  assert.match(fn, /await load\(\);/);
+
+  const gaps = js.match(/const WAIT_GAPS_MS = (\[[^\]]*\]);/);
+  assert.ok(gaps, 'app.js must declare WAIT_GAPS_MS');
+  const values = new Function(`return ${gaps[1]};`)();
+  assert.ok(values.length > 0);
+  assert.ok(values[0] <= 3000, 'the first retry must be quick - a PC finishing its boot comes back in seconds');
+  for (let i = 1; i < values.length; i += 1) {
+    assert.ok(values[i] >= values[i - 1], 'the gaps must back off, never shorten');
+  }
+});
+
+test('the waiting state has its own status line, its own dot and its own empty-state copy', () => {
+  const js = read('app.js');
+  const conn = js.slice(js.indexOf('function renderConn()'), js.indexOf('function renderProjects('));
+  assert.match(conn, /state\.reachable === 'waiting'/);
+  assert.match(conn, /WAITING FOR PC/);
+  assert.match(conn, /setDot\(dot, 'accent'\)/, 'a dim dot reads as "nothing is happening"; something is');
+  assert.ok(
+    !/text\.classList\.add\('reachable'\)[\s\S]*?state\.reachable === true/.test(conn),
+    'waiting must never claim the reachable class',
+  );
+
+  const rp = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
+  assert.match(rp, /Waiting for the PC\./);
+  assert.ok(
+    rp.indexOf("state.reachable === 'waiting'") < rp.indexOf('state.reachable === false'),
+    'the waiting message must win over "Cannot reach the agent."',
+  );
+});
+
+// CONFIRM_GAPS_MS is anchored to STARTING_GRACE_MS in agent/registry.js: its
+// last check must land PAST the grace window or a launch that really failed
+// never gets its banner, because a `failed` entry is not watchable and the
+// 5s loop stops without announcing it.
+test('the confirm sequence still outlasts STARTING_GRACE_MS', async () => {
+  const { STARTING_GRACE_MS } = await import('../registry.js');
+  const js = read('app.js');
+  const gaps = js.match(/const CONFIRM_GAPS_MS = (\[[^\]]*\]);/);
+  assert.ok(gaps, 'app.js must declare CONFIRM_GAPS_MS');
+  const total = new Function(`return ${gaps[1]};`)().reduce((a, b) => a + b, 0);
+  assert.ok(
+    total > STARTING_GRACE_MS,
+    `the confirm sequence ends at ${total}ms but the agent cannot say 'failed' until ${STARTING_GRACE_MS}ms`,
+  );
+});
+
+// The passcode gate is not a screen on the way to the waiting state - it is
+// the screen a cold-boot open LANDS on, every time, because the token is
+// memory-only and showGate() runs before app.js ever calls load(). A waiting
+// state that only exists behind the gate is a waiting state the owner never
+// reaches on the one morning it was written for.
+test('lock.js retries the status probe by itself, so the gate is not a dead end while the PC boots', () => {
+  const js = read('lock.js');
+  assert.match(js, /async function waitForAgent\(\)/, 'the gate must have its own retry loop');
+  assert.match(js, /res\.code === 'network' \|\| res\.code === 'timeout'/,
+    'only silence may be retried - an agent that ANSWERS a refusal must still dead-end');
+  assert.match(js, /Waiting for the PC/);
+  assert.match(js, /document\.visibilityState === 'visible'/, 'it must not retry in the background');
+  assert.match(js, /if \(waiting\) return;/, 're-entry from checkStatus must be a no-op');
+
+  const gaps = js.match(/const WAIT_GAPS_MS = (\[[^\]]*\]);/);
+  assert.ok(gaps, 'lock.js must declare WAIT_GAPS_MS');
+  const values = new Function(`return ${gaps[1]};`)();
+  assert.ok(values[0] <= 3000, 'the first retry must be quick');
+  for (let i = 1; i < values.length; i += 1) {
+    assert.ok(values[i] >= values[i - 1], 'the gaps must back off, never shorten');
+  }
+});
+
+// showGate() runs again on onAuthLost, so anything it adds to a node outside
+// the gate has to come back off - the same reason the form listeners are
+// removed on the way out.
+test('lock.js removes its visibilitychange listener when the gate resolves', () => {
+  const js = read('lock.js');
+  assert.match(js, /document\.addEventListener\('visibilitychange', onVisible\)/);
+  assert.match(js, /document\.removeEventListener\('visibilitychange', onVisible\)/);
+});
+
+// Once respondWith settles from the cache the worker may be terminated, and
+// an unheld fetch dies with it - which would make the CACHE bump in install()
+// the only way a shell file is ever refreshed.
+test('sw.js holds the background revalidation open with event.waitUntil', () => {
+  const source = read('sw.js');
+  assert.match(source, /event\.waitUntil\(fromNetwork\)/);
+  assert.match(source, /event\.respondWith\(staleWhileRevalidate\(req, event\)\)/);
+});
+
+// A cache write can reject on its own (storage blocked in a private window,
+// quota exhausted). Folding it into the response chain would turn a response
+// the network served perfectly well into the handler's 503.
+test('sw.js does not fail a good network response because the cache write failed', async () => {
+  const listeners = loadServiceWorker({
+    fetch: async () => ({ ok: true, status: 200, type: 'basic', clone: () => ({ body: 'copy' }) }),
+    cacheMatch: async () => undefined, // nothing cached, so the network answer is the only one
+    cacheOpenFails: true,
+  });
+
+  let responded;
+  listeners.fetch({
+    request: { url: 'http://127.0.0.1:8790/app.js', method: 'GET', mode: 'same-origin' },
+    respondWith(p) { responded = p; },
+    waitUntil() {},
+  });
+
+  const res = await responded;
+  assert.equal(res.status, 200, 'the served response must survive a failing cache write');
 });

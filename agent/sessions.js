@@ -4,7 +4,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { getPidDirPath } from './config.js';
+import { getPidDirPath, getRegistryFilePath } from './config.js';
 import {
   findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
   isPidAlive, HANDOFF_TIMEOUT_MS, claimDeskSession, resolveDeskSessionId,
@@ -284,6 +284,66 @@ export function resolveProjectPath(baseDir, project) {
 }
 
 /**
+ * Session names whose launch has been spawned but whose launcher has not
+ * exited yet, mapped to the SessionView recordLaunch returned for it.
+ *
+ * THIS IS THE GUARD AGAINST LAUNCHING THE SAME PROJECT TWICE. The registry
+ * alone could not do it. Between the spawn and the pid file appearing, the
+ * registry entry has no pid, so listSessions dates it: `starting` inside
+ * STARTING_GRACE_MS, `failed` after - and findLiveSession excludes `failed`,
+ * so the next tap spawned a SECOND session for the same project.
+ *
+ * That is not theoretical. On 2026-08-28, two minutes after a cold boot, the
+ * first powershell.exe of the session took 45 seconds to reach Start-Process
+ * (measured: registry written 22:40:41, its cmd.exe created 22:40:56, and the
+ * second launcher's arrived in the same second). The phone's 10s fetch
+ * timeout had long since said "cannot reach the agent", the owner tapped
+ * again past the grace window, and two live Claude sessions came up for one
+ * project - two rows in the Code tab, and only the second one in the
+ * registry, so the first could not even be stopped from the app.
+ *
+ * The launcher PROCESS is the honest liveness signal here, not a clock:
+ * launch-session.ps1 exits only after Start-Process has returned and the pid
+ * file is written, so this entry covers exactly the window the pid file does
+ * not - however slow the machine is, with no second timeout to tune.
+ *
+ * ponytail: in-process, so it does not survive an agent restart. It does not
+ * need to - an agent that restarts mid-launch has lost the child anyway, and
+ * by then the pid file exists and findLiveSession covers it. Deleted on both
+ * 'exit' and 'error' because node guarantees only that one of them fires.
+ */
+const inFlightLaunches = new Map();
+
+/**
+ * Ceiling on how long an in-flight entry may block a relaunch, whatever the
+ * child process does.
+ *
+ * Without it, a launcher that never exits blocks that project for the life of
+ * the agent, and this repo has already met one that can: launch-session.ps1's
+ * own header records Start-Process popping a modal "Pick an app" dialog on
+ * this host. With windowsHide and no one at the desk, that dialog is never
+ * dismissed, the launcher never exits, and every later tap would silently
+ * come back "already starting" and spawn nothing - a worse failure than the
+ * duplicate this guard exists to prevent, because it has no way out at all.
+ *
+ * Ten minutes: far past the ~45s a genuinely cold launcher needs (see
+ * STARTING_GRACE_MS in registry.js), far short of a working day.
+ */
+const IN_FLIGHT_CEILING_MS = 10 * 60 * 1000;
+
+/**
+ * The key into inFlightLaunches. Scoped to the REGISTRY the launch was
+ * recorded in, not to the session name alone: the map is module-level, so a
+ * bare name would be shared by every ctx in the process. Production has one
+ * registry and never notices; the test suite gives each test its own, and
+ * without this scoping one test's un-exited fake launcher would answer the
+ * next test's launch of the same project name.
+ */
+function inFlightKey(ctx, sessionName) {
+  return `${ctx.registryPath || getRegistryFilePath()} ${sessionName}`;
+}
+
+/**
  * Launches a detached Claude Code session for project, rooted at baseDir.
  * ctx.spawner is the injectable seam for tests; defaults to child_process.spawn.
  * ctx also threads the registry seams (registryPath, pidDir, isPidAlive, now)
@@ -308,6 +368,27 @@ export function launchSession(ctx, project) {
   const existing = findLiveSession(ctx, sessionName);
   if (existing) {
     return { ok: true, reused: true, session: existing };
+  }
+
+  // Checked AFTER findLiveSession, not before: once the pid file exists the
+  // registry holds the truer view (a real pid, a real status), and this map
+  // only ever answers for the gap before that.
+  //
+  // NOT `reused`. The launcher has not reached Start-Process yet, so nothing
+  // is running to reuse - saying so would put "already running" on the phone
+  // for a session that does not exist. This is the same answer the FIRST tap
+  // got: accepted, starting, ask again shortly. The client keys its polling
+  // off that 202, so a tap here also restarts the confirm sequence instead of
+  // leaving the tile frozen.
+  const key = inFlightKey(ctx, sessionName);
+  const pending = inFlightLaunches.get(key);
+  if (pending) {
+    if ((ctx.now || Date.now)() - pending.at < IN_FLIGHT_CEILING_MS) {
+      return { ok: true, reused: false, session: pending.view };
+    }
+    // Past the ceiling: the launcher is wedged, not slow. Fall through and
+    // let the owner's tap start a fresh one rather than answering forever.
+    inFlightLaunches.delete(key);
   }
 
   // MUST happen before the spawn: a stale pid file from an earlier run must
@@ -372,12 +453,27 @@ export function launchSession(ctx, project) {
     cwd: r.path,
   });
 
+  // Both events release the in-flight entry, because node promises only that
+  // ONE of them fires: a spawn that fails outright emits 'error' and may
+  // never emit 'exit', and an entry left behind by that would make the
+  // project permanently unlaunchable until the agent restarts. Folded into
+  // the existing error handler rather than registered as a second 'error'
+  // listener - the test seam's fake child keys handlers by name, so a second
+  // registration would silently replace the log line rather than add to it.
   child.on('error', (err) => {
+    inFlightLaunches.delete(key);
     console.error(`claude-remote agent: launch of '${sessionName}' failed to spawn:`, err);
   });
+  child.on('exit', () => inFlightLaunches.delete(key));
   child.unref();
 
   const view = recordLaunch(ctx, { sessionName, project, projectPath: r.path });
+
+  // After the handlers, and safe there: node emits neither event on this
+  // tick, so nothing can be released before it is recorded. `at` is read
+  // from ctx.now for the same reason every other clock in this agent is -
+  // it is the seam the tests advance.
+  inFlightLaunches.set(key, { view, at: (ctx.now || Date.now)() });
 
   return { ok: true, reused: false, session: view };
 }
