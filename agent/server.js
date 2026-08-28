@@ -47,9 +47,9 @@ const RELEASE_NOTES_PATH = fileURLToPath(new URL('../release-notes.json', import
  * the owner at a fixed path; no request input ever reaches it, so returning
  * entries[0] as-is (not a re-picked shape) is fine.
  *
- * console.warn on read failure is deliberately skipped: release-notes.json
- * does not exist until T88, so a warn would fire on every boot of this
- * branch.
+ * console.warn on read failure is deliberately skipped: an agent installed
+ * without a repo root around it has no notes file, and that is not a fault
+ * worth a line of noise on every boot.
  */
 export function readLatestRelease(notesPath = RELEASE_NOTES_PATH) {
   let parsed;

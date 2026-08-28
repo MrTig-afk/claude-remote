@@ -1,8 +1,9 @@
-// Three copies of one version string live in three files that no build step
-// keeps in step: .claude-plugin/plugin.json (truth), agent/package.json (what
-// the agent reads at boot), and agent/public/app.js's SHELL_VERSION (what the
-// cached shell carries). This file is the thing that keeps them in step -
-// adding a fourth copy anywhere means adding it here too.
+// Four copies of one version string live in files that no build step keeps in
+// step: .claude-plugin/plugin.json (truth), agent/package.json (what the
+// agent reads at boot), agent/public/app.js's SHELL_VERSION (what the cached
+// shell carries), and release-notes.json[0].version (what the newest entry
+// claims to describe). This file is the thing that keeps them in step -
+// adding a fifth copy anywhere means adding it here too.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -18,12 +19,14 @@ import { readAgentVersion, AGENT_VERSION } from '../server.js';
 const PLUGIN_MANIFEST_PATH = new URL('../../.claude-plugin/plugin.json', import.meta.url);
 const AGENT_PACKAGE_PATH = new URL('../package.json', import.meta.url);
 const APP_JS_PATH = new URL('../public/app.js', import.meta.url);
+const RELEASE_NOTES_PATH = new URL('../../release-notes.json', import.meta.url);
 
 function readJson(url) {
   return JSON.parse(fs.readFileSync(url, 'utf8'));
 }
 
 const pluginVersion = readJson(PLUGIN_MANIFEST_PATH).version;
+const releaseNotes = readJson(RELEASE_NOTES_PATH);
 
 test('agent/package.json version equals plugin.json version', () => {
   assert.equal(readJson(AGENT_PACKAGE_PATH).version, pluginVersion);
@@ -43,6 +46,53 @@ test('plugin.json version is valid semver', () => {
 test('readAgentVersion() returns the version in plugin.json', () => {
   assert.equal(readAgentVersion(), pluginVersion);
   assert.equal(AGENT_VERSION, pluginVersion);
+});
+
+test('release-notes.json parses and is a non-empty array', () => {
+  assert.ok(Array.isArray(releaseNotes));
+  assert.ok(releaseNotes.length >= 1);
+});
+
+test('every release-notes entry has a version, an ISO date, and non-empty note strings', () => {
+  releaseNotes.forEach((entry, i) => {
+    assert.ok(entry !== null && typeof entry === 'object' && !Array.isArray(entry), `entry ${i} must be an object`);
+    assert.equal(typeof entry.version, 'string', `entry ${i}.version must be a string`);
+    assert.notEqual(entry.version.trim(), '', `entry ${i}.version must not be empty`);
+    assert.match(entry.date, /^\d{4}-\d{2}-\d{2}$/, `entry ${i}.date must be YYYY-MM-DD`);
+    assert.ok(Array.isArray(entry.notes), `entry ${i}.notes must be an array`);
+    assert.ok(entry.notes.length >= 1, `entry ${i}.notes must not be empty`);
+    entry.notes.forEach((note, j) => {
+      assert.equal(typeof note, 'string', `entry ${i}.notes[${j}] must be a string`);
+      assert.notEqual(note.trim(), '', `entry ${i}.notes[${j}] must not be empty`);
+    });
+  });
+});
+
+test('release-notes.json newest entry version equals plugin.json version', () => {
+  assert.equal(releaseNotes[0].version, pluginVersion);
+});
+
+// Applied to the real file by the test below, and proved capable of failing by
+// the test after it - with a single entry the rule is trivially satisfied, so
+// the control is what keeps this honest.
+function assertNewestFirst(entries) {
+  for (let i = 0; i + 1 < entries.length; i += 1) {
+    assert.ok(entries[i + 1].date <= entries[i].date,
+      `entry ${i + 1} (${entries[i + 1].date}) is newer than entry ${i} (${entries[i].date})`);
+  }
+}
+
+test('release notes are newest first', () => {
+  assertNewestFirst(releaseNotes);
+});
+
+test('the newest-first check rejects an out-of-order list', () => {
+  assert.throws(() => assertNewestFirst([
+    { date: '2026-01-01' }, { date: '2026-08-29' }, { date: '2025-12-31' },
+  ]));
+  assert.doesNotThrow(() => assertNewestFirst([
+    { date: '2026-08-29' }, { date: '2026-08-29' }, { date: '2026-01-01' },
+  ]));
 });
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-version-'));

@@ -1,0 +1,16 @@
+[
+  {
+    "version": "0.1.0",
+    "date": "2026-08-29",
+    "notes": [
+      "Tap a project on your phone to start a Claude Code session on the PC - the same live session you get at the desk.",
+      "Tap STOP to end a session. The handoff summary is written for you automatically, and a banner tells you when it is done.",
+      "Sessions you started at the desk show up in the list too, marked \"desktop\", and can be ended from the phone.",
+      "A folder that only holds other projects shows as one row you can open, so a deep projects folder stays a short list.",
+      "One passcode, set once at the desk, guards everything. Unlocking lasts 12 hours, and repeated wrong guesses lock the app out for a while.",
+      "If the PC is still waking up, the app says so and fills itself in as soon as the agent answers, instead of hanging or failing.",
+      "A slow launch on a cold PC can no longer start the same project twice.",
+      "Add it to your home screen - the app shell loads offline, and it is reachable only over your own Tailscale network."
+    ]
+  }
+]

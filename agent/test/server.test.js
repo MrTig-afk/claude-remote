@@ -122,9 +122,12 @@ test('GET /api/projects against a missing base directory responds 200 with an em
  * raw string (written as-is, for malformed-JSON cases). Omitting
  * `releaseNotes` points ctx.releaseNotesPath at a path that does not exist,
  * rather than leaving it undefined, so the test never depends on whatever
- * release-notes.json happens to sit at the repo root.
+ * release-notes.json happens to sit at the repo root. `useRealNotes` is the
+ * single deliberate exception to that rule: it leaves ctx.releaseNotesPath
+ * undefined so readLatestRelease falls back to the real repo-root file; if
+ * both `releaseNotes` and `useRealNotes` are passed, `releaseNotes` wins.
  */
-async function startStatusServer(t, { config, releaseNotes, passcode = '481902' } = {}) {
+async function startStatusServer(t, { config, releaseNotes, useRealNotes = false, passcode = '481902' } = {}) {
   const ctx = makeAuthCtx();
 
   if (config !== undefined) {
@@ -134,7 +137,7 @@ async function startStatusServer(t, { config, releaseNotes, passcode = '481902' 
   if (releaseNotes !== undefined) {
     ctx.releaseNotesPath = path.join(ctx.dir, 'release-notes.json');
     fs.writeFileSync(ctx.releaseNotesPath, typeof releaseNotes === 'string' ? releaseNotes : JSON.stringify(releaseNotes));
-  } else {
+  } else if (!useRealNotes) {
     ctx.releaseNotesPath = path.join(ctx.dir, 'no-release-notes.json');
   }
 
@@ -331,6 +334,14 @@ test('GET /api/status: release-notes entry missing notes -> 200, no release key'
   assert.equal(res.status, 200);
   const body = await res.json();
   assert.equal(Object.hasOwn(body, 'release'), false);
+});
+
+test('GET /api/status serves the newest entry from the repo-root release-notes.json', async (t) => {
+  const { origin, token } = await startStatusServer(t, { useRealNotes: true });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const expected = JSON.parse(fs.readFileSync(new URL('../../release-notes.json', import.meta.url), 'utf8'))[0];
+  assert.deepEqual((await res.json()).release, expected);
 });
 
 // --- method / surface ---
