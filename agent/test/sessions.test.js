@@ -986,7 +986,7 @@ test('HTTP - two POSTs, no pid file ever written, ctx.now fixed -> spawn stays a
   }
 });
 
-test('HTTP - two POSTs, ctx.now advanced past STARTING_GRACE_MS -> spawns again', async () => {
+test('HTTP - two POSTs past STARTING_GRACE_MS, launcher already exited -> spawns again', async () => {
   const { spawner, calls } = makeFakeSpawner();
   let currentTime = Date.now();
   const regCtx = makeRegCtx({ now: () => currentTime });
@@ -1001,6 +1001,9 @@ test('HTTP - two POSTs, ctx.now advanced past STARTING_GRACE_MS -> spawns again'
     });
     const res1 = await req();
     assert.equal(res1.status, 202);
+    // The launcher is gone and no pid file ever appeared - a launch that
+    // really did fail. Only then may a second tap spawn anything.
+    calls[0].child.handlers.exit();
     currentTime += STARTING_GRACE_MS + 1000;
     const res2 = await req();
     assert.equal(res2.status, 202);
@@ -1015,6 +1018,106 @@ test('HTTP - two POSTs, ctx.now advanced past STARTING_GRACE_MS -> spawns again'
   } finally {
     server.close();
   }
+});
+
+// THE COLD-BOOT DUPLICATE, 2026-08-28. The launcher is still running (a cold
+// powershell.exe took ~45s to reach Start-Process), so no pid file exists and
+// listSessions has aged the entry into `failed`, which findLiveSession does
+// not count as live. Before inFlightLaunches this spawned a SECOND session
+// for the same project: two rows in the Code tab, and only the second one in
+// the registry, so the first could not be stopped from the app.
+test('HTTP - second POST past STARTING_GRACE_MS while the launcher still runs -> reuses, never spawns twice', async () => {
+  const { spawner, calls } = makeFakeSpawner();
+  let currentTime = Date.now();
+  const regCtx = makeRegCtx({ now: () => currentTime });
+  const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const req = () => authedFetch(regCtx, `${origin}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'email-lint' }),
+    });
+    const res1 = await req();
+    assert.equal(res1.status, 202);
+
+    currentTime += STARTING_GRACE_MS + 1000;
+    // The status the phone would have been shown at this point - the lie the
+    // owner acted on.
+    const aged = listSessions({ baseDir: base, ...regCtx }).find((s) => s.session_name === 'email-lint');
+    assert.equal(aged.status, 'failed');
+
+    const res2 = await req();
+    // 202, not 200: nothing is running to "reuse" - the launcher has not
+    // reached Start-Process. 200 would put "is already running" on the phone
+    // for a session that does not exist yet, and the client only re-arms its
+    // confirm sequence on a 202, so a 200 here would also freeze the tile.
+    assert.equal(res2.status, 202, 'a launch still in flight is starting, not already running');
+    assert.equal(calls.length, 1, 'exactly one process for one project');
+
+    const body = await res2.json();
+    assert.equal(body.session_name, 'email-lint');
+
+    // Once the launcher exits without a pid file, the project is launchable
+    // again - the guard must not outlive the process it is guarding.
+    calls[0].child.handlers.exit();
+    const res3 = await req();
+    assert.equal(res3.status, 202);
+    assert.equal(calls.length, 2);
+  } finally {
+    server.close();
+  }
+});
+
+test("launchSession - a launcher that fails to spawn releases the guard on 'error' alone", () => {
+  const { spawner, calls } = makeFakeSpawner();
+  let currentTime = Date.now();
+  const regCtx = makeRegCtx({ now: () => currentTime });
+  const ctx = { baseDir: base, spawner, ...regCtx };
+
+  const first = launchSession(ctx, 'email-lint');
+  assert.equal(first.reused, false);
+
+  // Past the grace window, so the registry entry is `failed` and no longer
+  // live - leaving the in-flight guard as the only thing that could block
+  // the retry, which is exactly what this test is about.
+  currentTime += STARTING_GRACE_MS + 1000;
+
+  // node guarantees only ONE of 'error'/'exit' fires. Without the release on
+  // 'error' a project whose launcher never started would stay unlaunchable
+  // for the life of the agent.
+  calls[0].child.handlers.error(new Error('spawn ENOENT'));
+
+  const second = launchSession(ctx, 'email-lint');
+  assert.equal(second.reused, false, 'a spawn that never happened must not block the retry');
+  assert.equal(calls.length, 2);
+});
+
+// launch-session.ps1 can wedge rather than exit - its own header records
+// Start-Process popping a modal "Pick an app" dialog on this host, and with
+// windowsHide and nobody at the desk that dialog is never dismissed. An
+// in-flight entry that outlived its launcher would then block the project for
+// the life of the agent: every tap answered "starting", nothing ever spawned,
+// and no way out at all. Worse than the duplicate the guard exists to stop.
+test('launchSession - a launcher that never exits stops blocking after IN_FLIGHT_CEILING_MS', () => {
+  const { spawner, calls } = makeFakeSpawner();
+  let currentTime = Date.now();
+  const regCtx = makeRegCtx({ now: () => currentTime });
+  const ctx = { baseDir: base, spawner, ...regCtx };
+
+  launchSession(ctx, 'email-lint');
+  assert.equal(calls.length, 1);
+
+  // Well past the grace window, so the registry entry is `failed` and the
+  // in-flight guard is the only thing answering. The launcher never exits.
+  currentTime += STARTING_GRACE_MS + 1000;
+  assert.equal(launchSession(ctx, 'email-lint').reused, false);
+  assert.equal(calls.length, 1, 'still guarded - a slow launcher is not a wedged one');
+
+  currentTime += 10 * 60 * 1000;
+  launchSession(ctx, 'email-lint');
+  assert.equal(calls.length, 2, 'past the ceiling the owner must be able to start it again');
 });
 
 test('HTTP - pid file written between two POSTs, pid alive -> reuse, running, pid echoed', async () => {
@@ -1063,8 +1166,13 @@ test('HTTP - pid file written between two POSTs, pid dead -> spawns again', asyn
     const res1 = await req();
     assert.equal(res1.status, 202);
 
+    // Writing the pid file is launch-session.ps1's LAST act, so the launcher
+    // exiting is part of the same event in the real world - and it is what
+    // releases the in-flight guard. Modelling only the file would test a
+    // state the machine never reaches.
     fs.mkdirSync(regCtx.pidDir, { recursive: true });
     fs.writeFileSync(path.join(regCtx.pidDir, 'email-lint.pid'), '999', 'ascii');
+    calls[0].child.handlers.exit();
 
     const res2 = await req();
     assert.equal(res2.status, 202);

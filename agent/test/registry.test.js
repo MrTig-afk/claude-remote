@@ -24,6 +24,13 @@ import {
 import { listProjects } from '../projects.js';
 import { testSessionDirs } from './helper-auth.js';
 
+// An age that is unambiguously OUTSIDE the starting-grace window, expressed
+// against the constant rather than as a literal. These tests are about the
+// side of the window an entry falls on, never about a particular number of
+// seconds - written as `60_000` they broke the day the window was widened to
+// cover a cold-boot launcher.
+const PAST_GRACE_MS = STARTING_GRACE_MS + 30_000;
+
 // One shared project fixture (read-only across tests): Pull Requests,
 // email-lint, notes.txt. Each test gets its OWN registry file + pid dir
 // under a fresh mkdtempSync directory, so tests never interfere and the
@@ -283,10 +290,10 @@ test('listSessions - no pid file, started_at 10 minutes ago -> failed', () => {
   assert.equal(views[0].session_id, null);
 });
 
-test('listSessions - no pid file, started_at 60s ago (past grace, inside retention) -> failed, and retained on disk', () => {
+test('listSessions - no pid file, well past grace but inside retention -> failed, and retained on disk', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
-  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString());
+  const entry = validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString());
   writeSessions(ctx.registryPath, [entry]);
 
   const views = listSessions(ctx);
@@ -312,7 +319,7 @@ test('listSessions - no pid file, started_at past FAILED_RETENTION_MS -> pruned'
 test('listSessions - started_at far in the future -> dropped, not pinned as starting', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
-  const entry = validEntry('Pull Requests', new Date(now + 60_000).toISOString());
+  const entry = validEntry('Pull Requests', new Date(now + PAST_GRACE_MS).toISOString());
   writeSessions(ctx.registryPath, [entry]);
 
   assert.deepEqual(listSessions(ctx), []);
@@ -339,7 +346,7 @@ test('listSessions - a failed-aged entry that DOES have a live pid file -> runni
   const now = Date.now();
   const livePids = new Set([777]);
   const ctx = makeCtx({ now: () => now, livePids });
-  const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString());
+  const entry = validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString());
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
   fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '777', 'ascii');
@@ -353,7 +360,7 @@ test('listSessions - a failed-aged entry that DOES have a live pid file -> runni
 test('findLiveSession - null for a failed-aged entry, still returns a starting one', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
-  const failedEntry = validEntry('Pull Requests', new Date(now - 60_000).toISOString());
+  const failedEntry = validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString());
   writeSessions(ctx.registryPath, [failedEntry]);
   assert.equal(findLiveSession(ctx, 'pull-requests'), null);
 

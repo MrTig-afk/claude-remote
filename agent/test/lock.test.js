@@ -28,11 +28,18 @@ function makeEl() {
   };
 }
 
-function makeDocument() {
+function makeDocument({ visibilityState = 'visible' } = {}) {
   const ids = ['picker', 'gate', 'gate-form', 'gate-label', 'gate-title',
     'gate-sub', 'gate-go', 'gate-msg', 'pin', 'field-confirm', 'pin-confirm'];
   const map = new Map(ids.map((id) => [id, makeEl()]));
+  // document itself, not just its elements: the gate's own retry loop reads
+  // visibilityState so it does not sit retrying in the background, and
+  // listens for visibilitychange so it restarts on the way back.
+  const docListeners = makeEl();
   return {
+    visibilityState,
+    addEventListener: (t, fn) => docListeners.addEventListener(t, fn),
+    removeEventListener: (t, fn) => docListeners.removeEventListener(t, fn),
     getElementById(id) {
       const el = map.get(id);
       // Fail by NAME if lock.js starts reaching for a new node, instead of a
@@ -41,6 +48,7 @@ function makeDocument() {
       return el;
     },
     el(id) { return map.get(id); }, // test-side accessor
+    docListenerCount(type) { return docListeners.listenerCount(type); },
   };
 }
 
@@ -66,7 +74,19 @@ const freshLock = () => import(`../public/lock.js?t=${++n}`);
 const realFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = realFetch;
-  delete globalThis.document; // node has no document; delete, do not set undefined
+  // Parked HIDDEN rather than deleted. The gate now runs its own retry loop
+  // when the agent is silent, and a test can end with one of its gaps still
+  // pending; a browser never takes `document` away underneath that, so a
+  // deleted one would throw from a timer belonging to a finished test and
+  // surface as an unhandledRejection in whichever test is running by then.
+  // Hidden is the state that makes the loop exit on its own next tick. Every
+  // test installs its own document first, so nothing reads this one.
+  globalThis.document = {
+    visibilityState: 'hidden',
+    addEventListener() {},
+    removeEventListener() {},
+    getElementById() { return makeEl(); },
+  };
   // T1's success path calls setToken('t') on the ONE api.js instance every
   // test in this file shares (the ?t= cache-buster only freshens lock.js) -
   // without this, later tests would silently carry an auth header.
@@ -127,9 +147,12 @@ test('a failed status probe relabels the button to RETRY and a tap re-probes ins
   await flush();
 
   assert.equal(doc.el('gate-go').textContent, 'RETRY');
+  // Silence from the agent now reads as "waiting", not as a dead end: the
+  // gate retries on its own (nothing here waits for one of those gaps), and
+  // RETRY is the manual kick on top of it, not the only way forward.
   assert.equal(
     doc.el('gate-msg').textContent,
-    '! Cannot reach the agent. Check the PC is awake and Tailscale is connected.',
+    'Waiting for the PC. This screen will unlock itself as soon as the agent answers.',
   );
 
   doc.el('pin').value = '481902';
@@ -210,4 +233,72 @@ test('while the button is a RETRY, typing fewer than six digits does not disable
   doc.el('pin').value = '5';
   doc.el('pin').fire('input');
   assert.equal(doc.el('gate-go').disabled, false);
+});
+
+// The HIGH finding this loop exists for: the gate is the screen a cold-boot
+// open LANDS on, every time (the token is memory-only, so showGate runs
+// before app.js ever calls load()). Before this, it dead-ended on
+// '! Cannot reach the agent' with a RETRY button and nothing retrying.
+test('the gate re-probes on its own while the agent is silent, with no tap at all', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  let statusCall = 0;
+  const calls = stubFetch({
+    '/api/auth/status': () => {
+      statusCall += 1;
+      if (statusCall <= 2) throw new Error('offline'); // PC still booting
+      return okStatus({ configured: true, retry_after_ms: 0 })();
+    },
+  });
+  const doc = makeDocument();
+  globalThis.document = doc;
+
+  const mod = await freshLock();
+  mod.showGate();
+  await flush();
+  assert.equal(calls.length, 1, 'the first probe is the one showGate makes');
+
+  // No submit, no tap: just the first gap elapsing.
+  t.mock.timers.tick(2000);
+  await flush();
+  assert.equal(calls.length, 2, 'the gate must re-probe by itself');
+  assert.equal(doc.el('gate-msg').textContent, 'Waiting for the PC (1)...');
+
+  t.mock.timers.tick(3000);
+  await flush();
+  assert.equal(calls.length, 3);
+  // Third probe succeeded - the gate is a real lock screen again and the
+  // waiting copy is gone.
+  assert.equal(doc.el('gate-go').textContent, 'UNLOCK');
+  assert.equal(doc.el('gate-msg').textContent, '');
+
+  // And it stops: no further probe once the agent has answered.
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(calls.length, 3, 'the loop must stop on the first success');
+});
+
+test('the gate does not retry while the app is in the background', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  const calls = stubFetch({
+    '/api/auth/status': () => { throw new Error('offline'); },
+  });
+  const doc = makeDocument({ visibilityState: 'hidden' });
+  globalThis.document = doc;
+
+  const mod = await freshLock();
+  mod.showGate();
+  await flush();
+  assert.equal(calls.length, 1);
+
+  t.mock.timers.tick(60000);
+  await flush();
+  assert.equal(calls.length, 1, 'a backgrounded app must not sit probing the network');
+
+  // Coming back to the foreground is what restarts it - app.js's own
+  // visibilitychange handler is not wired until after the gate resolves.
+  doc.visibilityState = 'visible';
+  assert.equal(doc.docListenerCount('visibilitychange'), 1,
+    'the gate must listen for the way back, or it freezes for good');
 });
