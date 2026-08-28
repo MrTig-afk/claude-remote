@@ -3,34 +3,103 @@ import path from 'node:path';
 
 import { deriveSessionName } from './sessions.js';
 
+const CONTAINER_MARKER = '.claude-remote-container';
+
+const byName = (a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' });
+
+function readEntries(dir) {
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    console.warn(`claude-remote agent: could not list '${dir}': ${err.code || err.message}`);
+    return [];
+  }
+}
+
 /**
- * Lists the direct child directories of baseDir - flat, no recursion, no
- * container-folder expansion. Never throws: any failure is logged to
+ * Returns the sorted { name, path } children of folderPath if folderPath is
+ * a CONTAINER, or null if it is an ordinary project. A folder is a container
+ * if it holds an entry NAMED `.claude-remote-container` (regardless of what
+ * else it holds). That is a name match with no type check, deliberately: a
+ * marker that is a directory counts exactly as a marker that is a file, and
+ * `agent/test/projects.test.js` pins both. Do not "tighten" this with an
+ * isFile() check to match a narrower reading - it would break a green test.
+ * Absent the marker, a folder is a container if its own direct children are
+ * ALL directories and it holds no file of its own (an empty folder is never
+ * an empty container). One level only: a returned child is never itself
+ * classified or recursed into.
+ */
+function containerChildrenOf(folderPath) {
+  const entries = readEntries(folderPath);
+  let marker = false;
+  let hasNonDir = false;
+  const children = [];
+  for (const dirent of entries) {
+    if (dirent.name === CONTAINER_MARKER) {
+      marker = true;
+      continue;
+    }
+    // Same isDirectory() posture as the top-level walk below: lstat-based,
+    // so symlinks/junctions are neither followed nor reported as children.
+    if (!dirent.isDirectory()) {
+      hasNonDir = true;
+      continue;
+    }
+    // ponytail: a hidden DIRECTORY is skipped here but is NOT a file, so it
+    // never sets hasNonDir - meaning a repo holding .git plus subfolders and
+    // zero top-level files guesses as a container. There is NO escape hatch
+    // for that false positive: the marker forces container status ON, never
+    // off. Upgrade path if it ever bites is a real rule (treat a folder
+    // containing .git as a project), which is wider than the rule the owner
+    // picked on 2026-08-28 and so was not added unilaterally.
+    if (dirent.name.startsWith('.')) continue;
+    children.push({ name: dirent.name, path: path.join(folderPath, dirent.name) });
+  }
+  children.sort(byName);
+
+  if (marker) return children;
+  if (hasNonDir) return null;
+  if (children.length === 0) return null;
+  return children;
+}
+
+/**
+ * Lists the direct child directories of baseDir, one level deep. For a
+ * child that is a CONTAINER - a folder holding a `.claude-remote-container`
+ * marker, or (absent the marker) a folder whose own direct children are all
+ * directories and which holds no file of its own - the entry also carries
+ * `container: true` and `children`, that container's own direct child
+ * directories. Never deeper than one level: a container's children are
+ * never themselves classified. Never throws: any failure is logged to
  * stderr and results in an empty list (or that one entry being skipped).
  */
 export function listProjects(baseDir) {
-  let entries;
-  try {
-    entries = fs.readdirSync(baseDir, { withFileTypes: true });
-  } catch (err) {
-    console.warn(`claude-remote agent: could not list '${baseDir}': ${err.code || err.message}`);
-    return [];
-  }
-
+  const entries = readEntries(baseDir);
   const projects = [];
   for (const dirent of entries) {
     // Known ceiling: dirent.isDirectory() is false for symlinks/junctions, so
     // links are excluded for free - upgrade path if the owner ever
-    // junctions a project in is to follow links deliberately here.
+    // junctions a project in is to follow links deliberately here. The same
+    // behaviour governs the child walk in containerChildrenOf.
     if (!dirent.isDirectory() || dirent.name.startsWith('.')) {
       continue;
     }
-    projects.push({ name: dirent.name, path: path.join(baseDir, dirent.name) });
+    const entry = { name: dirent.name, path: path.join(baseDir, dirent.name) };
+    // ponytail: one extra readdirSync per top-level folder per call, and
+    // listProjects runs on the 5s session poll (registry.js:368).
+    // Metadata-only reads of ~15 folders; measure before caching.
+    const children = containerChildrenOf(entry.path);
+    if (children) {
+      entry.container = true;
+      entry.children = children;
+    }
+    projects.push(entry);
   }
 
-  projects.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
+  projects.sort(byName);
   return projects;
 }
+
 
 // Base dir 'F:\Dev\Projects\Repos\' is 21 chars; Windows' 260-char MAX_PATH
 // still binds for tools that live inside a project (git, node, python).
