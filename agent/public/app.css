@@ -92,21 +92,37 @@ body {
 }
 .home:disabled { cursor: default; }
 
-/* Same type and colour as .ver beside it - a word, not a pictogram; this app
-   ships no icon but the mark and the status dot. 18px line-height plus 13px
-   top and bottom is the 44px floor - measured, not assumed - and it is
-   pulled back the same way .home is. */
+/* Every icon in the app, drawn from the #i-* sprite. Copied from the
+   userflow artifact's own .ico rule so a shipped icon carries the artifact's
+   stroke weight and joins rather than a lookalike's. currentColor is the
+   point: this rule draws the glyph, the row decides its colour. */
+.ico {
+  flex: 0 0 auto;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The gear, per Lane 6 of the userflow artifact. This shipped once as the
+   word SETTINGS at #4a5a4a - the same colour as .ver beside it - and the
+   owner could not find it on his phone. #9aab9a is what the artifact paints
+   header actions (--muted). Do not dim it back to match .ver: a control and
+   a version label are not the same kind of thing.
+   Tap target measured at 390px, not assumed: 18px glyph + 13px top and
+   bottom = 44 tall, + 26px left = 44 wide. The left padding is all of the
+   width - it reaches back into the dead space beside .ver, so the glyph
+   still sits hard against the right edge while the target is square. */
 .settings-open {
-  font-size: 10px;
   line-height: 18px;
-  /* .hdr-top is align-items: baseline, so a 10px label in a 44px padded
-     box sits its baseline 1px lower and grows the header row to 23px.
-     Measured, not assumed. Centring keeps the row at 22px with the tap
-     target still exactly 44. */
+  display: flex;
+  /* .hdr-top is align-items: baseline, so an 18px glyph in a 44px padded
+     box sits its baseline below the wordmark's and grows the header row.
+     Centring keeps the row at 22px with the tap target still exactly 44. */
   align-self: center;
-  letter-spacing: 0.08em;
-  color: #4a5a4a;
-  padding: 13px 0 13px 14px;
+  color: #9aab9a;
+  padding: 13px 0 13px 26px;
   margin-block: -13px;
   background: none;
   border: 0;

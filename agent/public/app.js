@@ -2300,9 +2300,28 @@ function registerServiceWorker() {
   // .catch(() => {}) is load-bearing: over plain HTTP on a Tailscale IP the
   // origin is not a secure context, registration throws, and the app must
   // carry on working with no cache at all.
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
-  }
+  if (!('serviceWorker' in navigator)) return;
+
+  // A shipped change used to take TWO launches to appear: the page painted
+  // from the old cache while the new worker installed behind it, so the
+  // owner opened the app, saw yesterday's build, and reasonably concluded
+  // nothing had shipped. sw.js calls skipWaiting() and clients.claim(), so a
+  // new worker takes over THIS page a moment after it loads - controllerchange
+  // is that moment. Reloading there collapses the two launches into one.
+  //
+  // `refreshing` guards the reload loop, and the initial-controller check is
+  // the other half of it: on the very first visit there is no controller, and
+  // claim() fires controllerchange for that too. Reloading THEN would be a
+  // reload on every first run, for no new content at all.
+  let refreshing = false;
+  const hadController = navigator.serviceWorker.controller !== null;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (refreshing || !hadController) return;
+    refreshing = true;
+    location.reload();
+  });
+
+  navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
 }
 
 // Escape hatch with no devtools: browse to <host>:8790 with ?reset-cache=1

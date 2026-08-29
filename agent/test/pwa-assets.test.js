@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
+import { readServiceWorker } from '../static.js';
 import * as folders from '../public/folders-ui.js';
 import * as copy from '../public/copy.js';
 
@@ -773,11 +774,58 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v26', () => {
+// --- the cache key is derived, never hand-bumped ----------------------------
+// These replace a test that pinned a literal `-v27` and asserted the same
+// number in its own name. That test could only ever fail when someone had
+// ALREADY remembered to bump the constant - which is precisely the moment it
+// was not needed. It never once caught the failure it existed for: a shell
+// change shipped with the key untouched, which is what put a stale app on the
+// owner's phone twice.
+
+test('sw.js carries the hash PLACEHOLDER, never a literal version', () => {
+  // RED WHEN: someone reintroduces a hand-maintained version. That is the
+  // whole regression - the mechanism below only works on a placeholder.
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v26');
+  assert.equal(match[1], 'claude-remote-shell-__SHELL_HASH__');
+});
+
+test('the agent stamps a real hash into sw.js on the way out', () => {
+  const stamped = readServiceWorker().toString('utf8');
+  const key = stamped.match(/const CACHE = '([^']+)'/)[1];
+  assert.match(key, /^claude-remote-shell-[0-9a-f]{16}$/,
+    'the placeholder must be replaced by a 16-hex digest before it is served');
+  assert.ok(!stamped.includes('__SHELL_HASH__'), 'no placeholder may survive to a client');
+});
+
+test('the stamped hash CHANGES when a shell file changes, and is stable otherwise', () => {
+  // RED WHEN: the hash is memoised, or stops covering a file people actually
+  // edit. This is the one assertion that proves the phone gets new code.
+  const key = () => readServiceWorker().toString('utf8').match(/const CACHE = '([^']+)'/)[1];
+  const target = path.join(PUBLIC_DIR, 'app.css');
+  const original = fs.readFileSync(target);
+  const before = key();
+  try {
+    fs.appendFileSync(target, '/* cache-key probe */');
+    assert.notEqual(key(), before, 'editing app.css must change the cache key');
+  } finally {
+    fs.writeFileSync(target, original);
+  }
+  assert.equal(key(), before, 'restoring the file must restore the key - the hash is content, not a clock');
+});
+
+test("static.js's SHELL_FILES and sw.js's PRECACHE name the same files", () => {
+  // RED WHEN: a file is added to one list and not the other, which would let
+  // a precached file change without moving the key - a stale asset that
+  // nothing would ever evict.
+  const src = fs.readFileSync(path.join(AGENT_DIR, 'static.js'), 'utf8');
+  const shell = [...src.match(/const SHELL_FILES = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const precache = [...read('sw.js').match(/const PRECACHE = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)]
+    .map((m) => m[1])
+    .filter((f) => f !== '/')        // the navigation alias for /index.html
+    .map((f) => f.replace(/^\//, ''));
+  assert.deepEqual(shell.slice().sort(), precache.slice().sort());
 });
 
 // The shell must be answered from the cache without waiting on the network.

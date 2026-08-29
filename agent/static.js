@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,45 @@ const FILE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/; // final segment: name + one ext
 const BAD_CHARS = /[%\\:]|\/\//; // percent, backslash, colon, double-slash
 const CONTROL_CHARS = /[\x00-\x1f]/;
 
+// The shell files the service worker precaches, and sw.js's own bytes, are
+// what the cache key is derived from. Kept in step with PRECACHE in sw.js by
+// a test, not by hope.
+const SHELL_FILES = [
+  'index.html', 'app.css', 'app.js', 'api.js', 'lock.js', 'copy.js', 'folders-ui.js',
+  'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
+];
+
+// Recomputed per request rather than cached in a module variable, because
+// every other file here is read from disk per request too - that is what lets
+// an edit reach the phone without restarting the agent, and a memoised hash
+// would be the one thing that did not move. Eleven small files on a local
+// disk; the read is not worth optimising away, and a stale hash is exactly
+// the bug this function exists to kill.
+function shellHash() {
+  const h = crypto.createHash('sha256');
+  for (const rel of SHELL_FILES) {
+    h.update(rel);
+    try {
+      h.update(fs.readFileSync(path.resolve(PUBLIC_DIR, ...rel.split('/'))));
+    } catch {
+      // A missing shell file is itself a state worth busting the cache for,
+      // and it must not throw on the way to serving sw.js.
+      h.update('MISSING');
+    }
+  }
+  return h.digest('hex').slice(0, 16);
+}
+
+/**
+ * sw.js is the one asset served with a substitution: its CACHE placeholder
+ * becomes a hash of the actual shell. Returned as a Buffer so Content-Length
+ * is the real byte count - the placeholder and the hash are different lengths,
+ * so st.size would be wrong and the response would truncate.
+ */
+export function readServiceWorker() {
+  const src = fs.readFileSync(path.resolve(PUBLIC_DIR, 'sw.js'), 'utf8');
+  return Buffer.from(src.replace('__SHELL_HASH__', shellHash()), 'utf8');
+}
 /**
  * Serves a single static asset from agent/public/ if pathname resolves to
  * one, writing the response directly. Returns true only once a real file has
@@ -75,6 +115,24 @@ export function serveStatic(res, pathname) {
   // allowlisted extension) - left as-is, not worth a directory read to
   // enforce case.
   if (!st.isFile()) return false;
+
+  // sw.js is stamped on the way out; everything else streams untouched.
+  if (segs.length === 1 && segs[0] === 'sw.js') {
+    let body;
+    try {
+      body = readServiceWorker();
+    } catch {
+      return false;
+    }
+    res.writeHead(200, {
+      'Content-Type': type,
+      'Content-Length': body.length,
+      'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    res.end(body);
+    return true;
+  }
 
   res.writeHead(200, {
     'Content-Type': type,

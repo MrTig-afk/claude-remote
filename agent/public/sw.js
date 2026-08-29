@@ -3,7 +3,21 @@
 // HTTP on a Tailscale IP the origin is not a secure context and
 // registration throws there - the app must keep working with no cache.
 
-const CACHE = 'claude-remote-shell-v26'; // bump on any shell change
+// The cache key is STAMPED BY THE AGENT, not maintained by hand: static.js
+// replaces the placeholder below with a sha256 of every file in PRECACHE
+// before this script is ever sent. Any shell edit changes the hash, which
+// changes these bytes, which is what makes the browser install a new worker.
+//
+// It used to be a hand-bumped `-v27`, and the discipline failed exactly the
+// way hand-maintained constants do: the owner opened the app after a shipped
+// change and got the old one, twice. A number a human has to remember to
+// increment is not a cache-busting mechanism, it is a cache-busting ritual.
+// Do not put a literal version back here.
+//
+// The placeholder is a valid key on its own, so opening this file straight
+// off disk (a test, a `file://` load) still parses - it simply never varies,
+// which is correct for a context that has no agent to stamp it.
+const CACHE = 'claude-remote-shell-__SHELL_HASH__';
 const PRECACHE = [
   '/', '/index.html', '/app.css', '/app.js', '/api.js', '/lock.js', '/copy.js', '/folders-ui.js',
   '/manifest.webmanifest', '/icons/icon.svg',
