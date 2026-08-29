@@ -586,3 +586,79 @@ test('S17 - the inert-row muting rule outranks .row.folder, or it does nothing a
   // only a browser can, which is why a colour claim gets measured at review.
   assert.match(match[0] + css.slice(css.indexOf(match[0]) + match[0].length, css.indexOf(match[0]) + match[0].length + 40), /var\(--dim\)/);
 });
+
+// --- S18 - the back control returns to Settings, not to the project list ----
+// Owner-reported, live on his phone: "Going from contents in settings to back
+// should go back the settings page NOT the fucking homepage".
+//
+// The whole suite was GREEN with this bug, because every existing test called
+// closeSettingsSub or onPopState in isolation. The defect only exists in the
+// hand-off BETWEEN them, so the test has to run the real sequence: open a
+// sub-screen, tap back, then let the queued popstate land.
+
+function loadSubNav() {
+  const js = read('app.js');
+  const start = js.indexOf('let settingsSub = null;');
+  const end = js.indexOf('function renderSettingsSub(');
+  const navSrc = js.slice(start, end);
+  const popSrc = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
+
+  const shown = [];
+  const queued = [];                 // history.back() is queued, never synchronous
+  const state = { screen: 'settings', openFolder: null, confirmName: null };
+  const history = {
+    pushState: () => { queued.push('push'); },
+    back: () => { queued.push('back'); },
+    go: () => { queued.push('go'); },
+  };
+  const showScreen = (name) => { state.screen = name; shown.push(name); };
+
+  const fn = new Function(
+    'state', 'history', 'showScreen', 'renderSettings', 'renderSettingsSub',
+    'SETTINGS_SUBS', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed',
+    `${navSrc}
+${popSrc}
+return { openSettingsSub, closeSettingsSub, onPopState };`,
+  );
+  const api = fn(
+    state, history, showScreen, () => {}, () => {},
+    new Set(['see', 'agent', 'reset', 'about']), () => {}, false, false, true,
+  );
+  return { ...api, state, shown, queued };
+}
+
+test('S18 - back from a settings sub-screen lands on the settings root, not the project list', () => {
+  // RED WHEN: closeSettingsSub clears settingsSub before issuing back(). The
+  // pop then misses the sub branch, matches the root branch (state.screen is
+  // 'settings' by then) and closes Settings entirely - which is the bug the
+  // owner hit.
+  const nav = loadSubNav();
+
+  nav.openSettingsSub('about');
+  assert.equal(nav.state.screen, 'about');
+
+  nav.closeSettingsSub();
+  nav.onPopState();               // the traversal the tap asked for, landing
+
+  assert.equal(nav.state.screen, 'settings', 'back must land on the settings root');
+  assert.ok(!nav.shown.includes('list'), 'back must never route through the project list');
+});
+
+test('S18b - the Android back gesture from a sub-screen behaves identically', () => {
+  // Same destination by a different route: no closeSettingsSub call at all,
+  // just the browser popping the entry.
+  const nav = loadSubNav();
+  nav.openSettingsSub('see');
+  nav.onPopState();
+  assert.equal(nav.state.screen, 'settings');
+});
+
+test('S18c - a double tap on back pops exactly one entry', () => {
+  // RED WHEN: subPushed is not cleared, and the second tap eats the settings
+  // entry underneath - dropping two screens on one gesture.
+  const nav = loadSubNav();
+  nav.openSettingsSub('reset');
+  nav.closeSettingsSub();
+  nav.closeSettingsSub();
+  assert.equal(nav.queued.filter((q) => q === 'back').length, 1);
+});

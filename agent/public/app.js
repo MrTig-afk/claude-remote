@@ -1305,8 +1305,9 @@ function goHome() {
   // control in the sub-screen's own header is for. Both entries come off in
   // one traversal.
   if (settingsSub !== null) {
-    const depth = 1 + (settingsPushed ? 1 : 0);
+    const depth = (subPushed ? 1 : 0) + (settingsPushed ? 1 : 0);
     settingsSub = null;
+    subPushed = false;
     settingsPushed = false;
     showScreen('list');
     render();
@@ -1357,7 +1358,8 @@ function onPopState() {
   // which is a screen the app thinks it is on and isn't.
   if (settingsSub !== null && SETTINGS_SUBS.has(state.screen)) {
     settingsSub = null;
-    showScreen('settings');
+    subPushed = false;
+    showScreen('settings', 'back');
     renderSettings();
     return;
   }
@@ -2101,6 +2103,10 @@ function closeSettings() {
 // on beside it.
 // ---------------------------------------------------------------------------
 let settingsSub = null;
+// True exactly while a sub-screen's history entry is on the stack and this
+// session pushed it - the same shape as settingsPushed/confirmPushed/
+// folderPushed, and the double-tap guard for closeSettingsSub.
+let subPushed = false;
 
 /** Pure, so the wording can be tested without a DOM. */
 function agentStateLine(reachable) {
@@ -2115,17 +2121,27 @@ function openSettingsSub(key) {
   showScreen(key, 'deeper');
   renderSettingsSub(key);
   history.pushState({ screen: key }, '');
+  subPushed = true;
 }
 
 // Mutate and render synchronously, then a guarded history.back() - the same
 // double-tap discipline as closeSettings and closeFolderScreen, so two fast
 // taps cannot pop the settings entry underneath and strand the app on the
 // project list with settingsPushed still true.
+// Unlike closeSettings, this does NOT mutate before the back(): it issues the
+// traversal and lets onPopState's sub branch do the screen change.
+//
+// Clearing settingsSub here first is what shipped, and it sent the back
+// control to the PROJECT LIST instead of the settings root. The sequence:
+// settingsSub goes null and showScreen sets state.screen to 'settings', then
+// the queued pop lands, finds settingsSub === null so the sub branch does not
+// match, falls into the ROOT branch - whose condition state.screen ===
+// 'settings' is now true - and that branch closes Settings altogether.
+// Both flags must still be set when the pop arrives, which is why the only
+// thing that happens before back() is the double-tap guard.
 function closeSettingsSub() {
-  if (settingsSub === null) return;
-  settingsSub = null;
-  showScreen('settings', 'back');
-  renderSettings();
+  if (settingsSub === null || !subPushed) return;
+  subPushed = false;   // second tap finds nothing to pop, so it cannot eat the settings entry
   history.back();
 }
 
@@ -2188,9 +2204,10 @@ function lockNow() {
   // Counted BEFORE the flags are cleared. Written the other way round first,
   // where the ternary read the value it had just nulled and the traversal was
   // always one entry short.
-  const depth = (settingsSub !== null ? 1 : 0) + (settingsPushed ? 1 : 0);
+  const depth = (subPushed ? 1 : 0) + (settingsPushed ? 1 : 0);
   setToken(null);
   settingsSub = null;
+  subPushed = false;
   settingsPushed = false;
   // Every settings entry comes off in one traversal, the same discipline
   // goHome uses, so the back gesture after locking cannot walk back into a
