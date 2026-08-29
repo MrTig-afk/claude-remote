@@ -1,6 +1,18 @@
+// readAgentVersion and readNewestRelease both read a file off disk at module
+// load. Dropped once while resolving the M11 merge, which made every version
+// read return 'unknown' with a `fs is not defined` warning - the agent still
+// booted and still answered, which is exactly why only a test caught it.
+import fs from 'node:fs';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 
-import { resolveSharedFolders, isAcknowledged, acknowledge } from './config.js';
+// resolveBaseDir is deliberately NOT imported any more: M9 replaced the single
+// default_base_folder with the shared_folders set, and resolveSharedFolders is
+// the only reader of record. It still exists in config.js for the silent
+// migration path.
+import {
+  resolveSharedFolders, isAcknowledged, acknowledge, readStatusFacts,
+} from './config.js';
 import { listProjects, createProject, rootsFrom } from './projects.js';
 import { listDrives } from './drives.js';
 import { listFolders } from './folders.js';
@@ -15,6 +27,58 @@ export const HOST = '127.0.0.1';
 // (bun.exe server.ts). Verified 2026-08-25. Any Windows Firewall rule for
 // this agent's port must match whatever this is.
 export const DEFAULT_PORT = 8790;
+
+const AGENT_PACKAGE_PATH = fileURLToPath(new URL('./package.json', import.meta.url));
+
+/**
+ * The agent's own version, from the package.json sitting BESIDE this file.
+ * Adjacent deliberately - no '../' - so the agent never depends on where in a
+ * repo (or a plugin install) it was dropped. Anything unreadable or
+ * unparseable degrades to 'unknown': a version string is a display value, and
+ * a broken read must not stop the agent from booting or answering.
+ */
+export function readAgentVersion(packagePath = AGENT_PACKAGE_PATH) {
+  try {
+    const version = JSON.parse(fs.readFileSync(packagePath, 'utf8')).version;
+    return typeof version === 'string' && version.trim() !== '' ? version : 'unknown';
+  } catch (err) {
+    console.warn(`claude-remote agent: could not read version from '${packagePath}': ${err.code || err.message}`);
+    return 'unknown';
+  }
+}
+
+export const AGENT_VERSION = readAgentVersion();
+
+const RELEASE_NOTES_PATH = fileURLToPath(new URL('../release-notes.json', import.meta.url));
+
+/**
+ * The newest release-notes entry, or null. `../` out of agent/ is a
+ * deliberate exception to readAgentVersion's adjacent-file rule: the version
+ * is load-bearing so it must never depend on repo layout, but release notes
+ * are not - an agent dropped somewhere without a repo root simply omits the
+ * key, the same graceful path as a missing file. The file is committed by
+ * the owner at a fixed path; no request input ever reaches it, so returning
+ * entries[0] as-is (not a re-picked shape) is fine.
+ *
+ * console.warn on read failure is deliberately skipped: an agent installed
+ * without a repo root around it has no notes file, and that is not a fault
+ * worth a line of noise on every boot.
+ */
+export function readLatestRelease(notesPath = RELEASE_NOTES_PATH) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || parsed.length < 1) return null;
+  const entry = parsed[0];
+  if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  if (typeof entry.version !== 'string' || entry.version === '') return null;
+  if (typeof entry.date !== 'string' || entry.date === '') return null;
+  if (!Array.isArray(entry.notes) || entry.notes.length < 1) return null;
+  return entry;
+}
 
 function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
@@ -240,6 +304,15 @@ export async function handleRequest(req, res, ctx) {
       // hand-edited instead of written through this route - unchanged ceiling.
       ctx.sharedFolders = result.shared_folders;
       sendJson(res, 200, { shared_folders: result.shared_folders });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/status') {
+      const facts = readStatusFacts(ctx.configPath);
+      const body = { version: AGENT_VERSION, acknowledged: facts.acknowledged, shared_count: facts.shared_count };
+      const release = readLatestRelease(ctx.releaseNotesPath);
+      if (release) body.release = release;
+      sendJson(res, 200, body);
       return;
     }
 

@@ -4,8 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, after } from 'node:test';
 
-import { HOST, DEFAULT_PORT } from '../server.js';
-import { makeAuthCtx, cleanupAuthCtx, seedPasscode, issueTestToken, makeAuthedFetch, fixtureServer } from './helper-auth.js';
+import { HOST, DEFAULT_PORT, AGENT_VERSION } from '../server.js';
+import { makeAuthCtx, cleanupAuthCtx, seedPasscode, issueTestToken, makeAuthedFetch, authHeaders, fixtureServer } from './helper-auth.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-server-'));
 fs.mkdirSync(path.join(base, 'Pull Requests'));
@@ -107,4 +107,279 @@ test('GET /api/projects against a missing base directory responds 200 with an em
   } finally {
     missingBaseServer.close();
   }
+});
+
+// ============================================================
+// GET /api/status - own local server per test (module server above is
+// shared, so a test writing a config into authCtx.dir would leak into its
+// neighbours).
+// ============================================================
+
+/**
+ * A fresh authCtx pointed at its own config/release-notes files, so each
+ * test's write cannot leak into another test sharing the module-scope
+ * server. `config`/`releaseNotes` may be a plain object (stringified) or a
+ * raw string (written as-is, for malformed-JSON cases). Omitting
+ * `releaseNotes` points ctx.releaseNotesPath at a path that does not exist,
+ * rather than leaving it undefined, so the test never depends on whatever
+ * release-notes.json happens to sit at the repo root. `useRealNotes` is the
+ * single deliberate exception to that rule: it leaves ctx.releaseNotesPath
+ * undefined so readLatestRelease falls back to the real repo-root file; if
+ * both `releaseNotes` and `useRealNotes` are passed, `releaseNotes` wins.
+ */
+async function startStatusServer(t, { config, releaseNotes, useRealNotes = false, passcode = '481902' } = {}) {
+  const ctx = makeAuthCtx();
+
+  if (config !== undefined) {
+    fs.writeFileSync(ctx.configPath, typeof config === 'string' ? config : JSON.stringify(config));
+  }
+
+  if (releaseNotes !== undefined) {
+    ctx.releaseNotesPath = path.join(ctx.dir, 'release-notes.json');
+    fs.writeFileSync(ctx.releaseNotesPath, typeof releaseNotes === 'string' ? releaseNotes : JSON.stringify(releaseNotes));
+  } else if (!useRealNotes) {
+    ctx.releaseNotesPath = path.join(ctx.dir, 'no-release-notes.json');
+  }
+
+  if (passcode !== null) seedPasscode(ctx, passcode);
+  const token = passcode !== null ? issueTestToken(ctx) : undefined;
+
+  let server;
+  t.after(() => {
+    server?.close();
+    cleanupAuthCtx(ctx);
+  });
+  server = fixtureServer({ baseDir: ctx.dir, ...ctx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  return { origin: `http://127.0.0.1:${port}`, token, ctx };
+}
+
+// --- Placement / auth - the security pins ---
+
+test('GET /api/status: no passcode configured, no token -> 403 setup_required, exact body', async (t) => {
+  const { origin } = await startStatusServer(t, { passcode: null });
+  const res = await fetch(`${origin}/api/status`);
+  assert.equal(res.status, 403);
+  assert.deepEqual(await res.json(), { error: 'setup_required' });
+});
+
+test('GET /api/status: passcode configured, no token -> 401 unauthorized, exact body', async (t) => {
+  const { origin } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`);
+  assert.equal(res.status, 401);
+  assert.deepEqual(await res.json(), { error: 'unauthorized' });
+});
+
+test('GET /api/status: passcode configured, garbage token -> 401 (behind authorize, not just isConfigured)', async (t) => {
+  const { origin } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders('garbage-token') });
+  assert.equal(res.status, 401);
+});
+
+test('GET /api/auth/status on a fully configured agent never gains a version field', async (t) => {
+  const { origin } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/auth/status`);
+  assert.deepEqual(await res.json(), { configured: true, retry_after_ms: 0 });
+});
+
+// --- Happy path ---
+
+test('GET /api/status: authenticated -> 200 with the exact JSON content-type', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/json; charset=utf-8');
+});
+
+test('GET /api/status: body.version is AGENT_VERSION, a non-empty string', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.version, AGENT_VERSION);
+  assert.equal(typeof body.version, 'string');
+  assert.notEqual(body.version, '');
+});
+
+// --- acknowledged ---
+
+test('GET /api/status: no config file at all -> acknowledged false', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.acknowledged, false);
+});
+
+test('GET /api/status: config {} -> acknowledged false', async (t) => {
+  const { origin, token } = await startStatusServer(t, { config: {} });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.acknowledged, false);
+});
+
+test('GET /api/status: config with a non-empty acknowledged_at -> acknowledged true', async (t) => {
+  const { origin, token } = await startStatusServer(t, { config: { acknowledged_at: '2026-08-29T13:04:11.882Z' } });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.acknowledged, true);
+});
+
+test('GET /api/status: config with acknowledged_at "" -> acknowledged false', async (t) => {
+  const { origin, token } = await startStatusServer(t, { config: { acknowledged_at: '' } });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.acknowledged, false);
+});
+
+// --- shared_count ---
+
+test('GET /api/status: no config file -> shared_count 0', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.shared_count, 0);
+});
+
+test('GET /api/status: default_base_folder only -> shared_count 1', async (t) => {
+  const { origin, token } = await startStatusServer(t, { config: { default_base_folder: 'F:\\Dev\\Projects\\Repos' } });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.shared_count, 1);
+});
+
+test('GET /api/status: shared_folders with two entries -> shared_count 2', async (t) => {
+  // Entries must be well-formed to count. This test used to pass ['a', 'b'] -
+  // two bare strings - because the first shared_count was a naive
+  // `.length` on whatever was in the array. It now goes through M9's
+  // resolveSharedFolders, so the fixture has to be a real config.
+  const { origin, token } = await startStatusServer(t, {
+    config: {
+      shared_folders: [
+        { path: 'F:\\Dev\\Projects\\Repos', mode: 'container' },
+        { path: 'D:\\Work', mode: 'single' },
+      ],
+    },
+  });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.shared_count, 2);
+});
+
+test('GET /api/status: malformed shared_folders entries are NOT counted', async (t) => {
+  // RED WHEN: shared_count goes back to counting raw array length. Two bare
+  // strings and a relative path are not three shared folders - the picker
+  // could never produce them, and reporting 3 would tell the phone it has
+  // access it does not have. One good entry among them still counts 1, which
+  // is normaliseSharedFolders' drop-the-bad-line-not-the-file rule showing
+  // through to the status route.
+  const { origin, token } = await startStatusServer(t, {
+    config: { shared_folders: ['a', 'b', { path: 'not-absolute' }, { path: 'F:\\Dev\\Projects\\Repos' }] },
+  });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.shared_count, 1);
+});
+
+test('GET /api/status: empty shared_folders beside a default_base_folder -> shared_count 0 (shared_folders wins)', async (t) => {
+  const { origin, token } = await startStatusServer(t, { config: { shared_folders: [], default_base_folder: 'F:\\x' } });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  const body = await res.json();
+  assert.equal(body.shared_count, 0);
+});
+
+// --- never throws ---
+
+test('GET /api/status: malformed config JSON -> 200, not 500, zero facts', async (t) => {
+  const { origin, token } = await startStatusServer(t, { config: '{ not valid json' });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.acknowledged, false);
+  assert.equal(body.shared_count, 0);
+});
+
+test('GET /api/status: ctx.configPath pointing at a directory -> 200, zero facts', async (t) => {
+  const ctx = makeAuthCtx();
+  fs.mkdirSync(ctx.configPath);
+  ctx.releaseNotesPath = path.join(ctx.dir, 'no-release-notes.json');
+  seedPasscode(ctx, '481902');
+  const token = issueTestToken(ctx);
+  let server;
+  t.after(() => {
+    server?.close();
+    cleanupAuthCtx(ctx);
+  });
+  server = fixtureServer({ baseDir: ctx.dir, ...ctx });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const res = await fetch(`http://127.0.0.1:${port}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.acknowledged, false);
+  assert.equal(body.shared_count, 0);
+});
+
+// --- release ---
+
+test('GET /api/status: missing release-notes file -> 200, no release key', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(Object.hasOwn(body, 'release'), false);
+});
+
+test('GET /api/status: malformed release-notes JSON -> 200, no release key', async (t) => {
+  const { origin, token } = await startStatusServer(t, { releaseNotes: '{ not valid json' });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(Object.hasOwn(body, 'release'), false);
+});
+
+test('GET /api/status: empty-array release-notes -> 200, no release key', async (t) => {
+  const { origin, token } = await startStatusServer(t, { releaseNotes: '[]' });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(Object.hasOwn(body, 'release'), false);
+});
+
+test('GET /api/status: well-formed release-notes -> body.release deepEqual the newest entry', async (t) => {
+  const entry = { version: '9.9.9', date: '2026-01-01', notes: ['x'] };
+  const { origin, token } = await startStatusServer(t, { releaseNotes: [entry] });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.release, entry);
+});
+
+test('GET /api/status: release-notes entry missing notes -> 200, no release key', async (t) => {
+  const { origin, token } = await startStatusServer(t, { releaseNotes: [{ version: '9.9.9' }] });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(Object.hasOwn(body, 'release'), false);
+});
+
+test('GET /api/status serves the newest entry from the repo-root release-notes.json', async (t) => {
+  const { origin, token } = await startStatusServer(t, { useRealNotes: true });
+  const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
+  assert.equal(res.status, 200);
+  const expected = JSON.parse(fs.readFileSync(new URL('../../release-notes.json', import.meta.url), 'utf8'))[0];
+  assert.deepEqual((await res.json()).release, expected);
+});
+
+// --- method / surface ---
+
+test('PUT /api/status responds 404', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status`, { method: 'PUT', headers: authHeaders(token) });
+  assert.equal(res.status, 404);
+});
+
+test('GET /api/status/ (trailing slash) responds 404', async (t) => {
+  const { origin, token } = await startStatusServer(t);
+  const res = await fetch(`${origin}/api/status/`, { headers: authHeaders(token) });
+  assert.equal(res.status, 404);
 });

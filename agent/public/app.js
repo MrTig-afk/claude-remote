@@ -11,6 +11,11 @@ import {
   listZoneState, missingRoots, withoutRoot, sharedToTicks, sharedRowState,
 } from './folders-ui.js';
 
+// The version baked into whatever copy of the shell the phone has cached.
+// Keep it a plain single-quoted literal: the version test reads it out of
+// this source file, because a browser module cannot be imported under node.
+export const SHELL_VERSION = '0.1.0';
+
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
 const state = {

@@ -83,7 +83,7 @@ test('unconfigured: every /api path -> 403 setup_required, exact body (no route 
   const ctxState = await startServer(t);
   // The nonexistent path is in the list deliberately: an unconfigured agent
   // answering 404 there would turn the 403 into a route oracle.
-  for (const p of ['/api/projects', '/api/sessions', '/api/whatever-nonexistent']) {
+  for (const p of ['/api/projects', '/api/sessions', '/api/status', '/api/whatever-nonexistent']) {
     const res = await fetch(`${ctxState.origin}${p}`);
     assert.equal(res.status, 403, p);
     assert.deepEqual(await res.json(), { error: 'setup_required' }, p);

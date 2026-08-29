@@ -234,6 +234,34 @@ export function isAcknowledged(configPath = getConfigFilePath()) {
 }
 
 /**
+ * The two facts /api/status needs at boot: whether the accept screen has been
+ * dismissed, and how many roots are shared. Never throws - /api/status is the
+ * first request the phone makes after unlocking, and a 500 there turns a
+ * hand-edited config into a dead app. A parse failure degrades to
+ * `acknowledged: false`, which re-shows the accept screen: fail-safe, not
+ * fail-open.
+ *
+ * Rebuilt on isAcknowledged + resolveSharedFolders when M9 merged, which is
+ * exactly what this function's first version said should happen once
+ * resolveSharedFolders existed. It no longer parses the config itself, so
+ * shared_count now honours every rule M9 settled - shared_folders wins over
+ * default_base_folder, a malformed entry is dropped, an empty array counts 0
+ * - instead of a second, simpler count that would drift from the real one.
+ */
+export function readStatusFacts(configPath = getConfigFilePath()) {
+  try {
+    return {
+      acknowledged: isAcknowledged(configPath),
+      shared_count: resolveSharedFolders(configPath).length,
+    };
+  } catch {
+    // isAcknowledged swallows its own read failure, but resolveSharedFolders
+    // lets readConfig's invalid-JSON throw through. Catching here is what
+    // keeps the never-throws promise above true.
+    return { acknowledged: false, shared_count: 0 };
+  }
+}
+/**
  * Writes acknowledged_at once and never again. The early return below is what
  * makes idempotency STRUCTURAL rather than behavioural: on a second call this
  * function does not write at all, so there is no code path that could

@@ -109,6 +109,10 @@ export function acknowledge() {
   return post('/api/acknowledge', {});
 }
 
+export function getStatus() {
+  return request('/api/status');
+}
+
 export function getSessions() {
   return request('/api/sessions');
 }
