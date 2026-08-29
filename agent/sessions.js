@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,7 @@ import {
   isPidAlive, HANDOFF_TIMEOUT_MS, claimDeskSession, resolveDeskSessionId,
   pidFileNameFor,
 } from './registry.js';
-import { containerChildrenOf } from './projects.js';
+import { containerChildrenOf, rootsFrom } from './projects.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
 const HANDOFF_SCRIPT = fileURLToPath(new URL('./handoff-session.ps1', import.meta.url));
@@ -67,21 +68,24 @@ async function defaultPidImageName(pid) {
  * whitespace class is used any more.
  *
  * The TWO-ARGUMENT form has NO PowerShell counterpart - ConvertTo-SessionName
- * has no concept of a container folder, and the Pester suite does not cover
- * this branch. Called with baseDir, a project exactly two levels below it
- * derives '<parent-slug>/<child-slug>', so 'Pull Requests\Vercel' can never
- * share a registry key with a top-level 'Vercel'. A single-segment path with
- * baseDir is unchanged. The '/' is a private separator: no single-segment
- * name can contain one, because path.basename never yields a separator and
- * the slug rule (slugSegment) only ever introduces '-'.
+ * has no concept of a root or a container folder, and the Pester suite does
+ * not cover this branch. Called with a root, ANY depth below it derives
+ * '<root-slug>/<seg>/<seg>/...' (sessionNameFor, below) - owner decision 1,
+ * 2026-08-29: the root prefix is ALWAYS present, and every segment between
+ * root and target is carried, not just the first two. 'Pull Requests\Vercel'
+ * can never share a registry key with a top-level 'Vercel'. The '/' is a
+ * private separator: no single segment can contain one, because path.basename
+ * never yields a separator and the slug rule (slugSegment) only ever
+ * introduces '-'.
  *
  * This MUST return the same string as deriveDeskSessionName (registry.js)
- * for the same path, or listSessions emits two views for one live session.
+ * for the same path, or listSessions emits two views for one live session -
+ * both now delegate to sessionNameFor so they cannot drift.
  *
- * ponytail: the caller must opt in by passing baseDir. Three call sites do
- * (launchSession, endSession, registry.js's prune); every other caller -
- * projects.js, the tests - passes a bare name or a flat path and is
- * unaffected.
+ * ponytail: the caller must opt in by passing a root. Call sites that do so
+ * always pass a root drawn from rootsFrom(ctx)/resolveProjectPath's return,
+ * never ctx.baseDir directly; every other caller - projects.js, the tests -
+ * passes a bare name or a flat path and is unaffected.
  */
 // SECURITY - an ALLOWLIST, and it must stay one. Everything that is not a
 // letter or a digit collapses to a single '-', so no shell metacharacter can
@@ -99,18 +103,102 @@ async function defaultPidImageName(pid) {
 // is a new character reaching cmd.exe.
 export const slugSegment = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
-export function deriveSessionName(projectPath, baseDir) {
-  const slug = slugSegment;
-  if (baseDir !== undefined) {
-    const rel = path.relative(path.resolve(baseDir), path.resolve(projectPath));
-    // Same "is it really underneath" test isInsideProject uses (registry.js):
-    // a path outside baseDir yields '..' segments and must NEVER be slugged.
-    if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
-      const segs = rel.split(path.sep).filter(Boolean);
-      if (segs.length === 2) return segs.map(slug).join('/');
-    }
+/**
+ * How many hex characters of the path digest ride on the end of a root slug.
+ * Six is a readability/uniqueness trade, not a security parameter - see the
+ * ponytail note on rootSlug.
+ */
+const ROOT_SLUG_HASH_CHARS = 6;
+
+/**
+ * The root's own segment of every session name under it: slugSegment applied
+ * to the root's WHOLE resolved path, plus a short digest OF that path.
+ * 'F:\Dev\Projects\Repos' -> 'f-dev-projects-repos-9c3f1a'.
+ *
+ * Owner decision 1, 2026-08-29: ALWAYS prefixed, from one root onward - never
+ * "only when there are two". A name that depends on HOW MANY roots exist is
+ * not stable, and listSessions drops any entry whose derived name no longer
+ * matches, so a conditional prefix would rename every running session at the
+ * instant the owner adds his second folder.
+ *
+ * THE DIGEST IS WHY DECISION 1 ACTUALLY WORKS. slugSegment collapses every run
+ * of non-alphanumerics to one '-', so a path SEPARATOR and a literal HYPHEN are
+ * indistinguishable after slugging: 'F:\Dev\Projects\Repos' and
+ * 'F:\Dev\Projects-Repos' are two different, non-overlapping folders that both
+ * slugged to 'f-dev-projects-repos'. The overlap check accepts that pair (they
+ * do not overlap) and usableRoots keeps both, so the two roots would share one
+ * session-name namespace: STOP would end the other root's session and the
+ * handoff would write HANDOFF.md into the wrong project. Reproduced, not
+ * theorised. The readable half stays for humans; the digest is what makes the
+ * identity true.
+ *
+ * Hashed on the UPPERCASED resolved path, deliberately: Windows paths are
+ * case-insensitive, so 'F:\Dev' and 'f:\dev' are ONE folder and must be ONE
+ * identity. Uppercase is the closer match to NTFS's own upcase-then-compare.
+ * Hashing the raw or resolved-but-not-case-folded string would give a running
+ * session a brand-new name the moment config.json was rewritten with different
+ * casing, and the prune drops any entry whose name no longer derives - i.e. it
+ * would silently kill live sessions on a rewrite.
+ *
+ * Pure function of the path: no counter, no stored id, no randomness, so it is
+ * identical across agent restarts and reboots. Hex only, so it introduces no
+ * character slugSegment's allowlist does not already emit.
+ *
+ * ponytail: 6 hex = 24 bits. Two roots collide only if their readable slugs
+ * ALSO collide (the digest is a fixed-width suffix, so equal full strings force
+ * equal readable halves) AND the digests collide - roughly 3e-5 across a
+ * 32-root ceiling, and the owner will have two. Upgrade path if that is ever
+ * not good enough: raise ROOT_SLUG_HASH_CHARS. It costs one more one-time
+ * registry drop (owner decision 3's, already accepted) and nothing else.
+ *
+ * INTERNAL KEY ONLY - the tile still shows the real folder name with the dim
+ * parent eyebrow. The digest never reaches the phone's UI.
+ */
+export function rootSlug(rootPath) {
+  const resolved = path.resolve(rootPath);
+  const digest = createHash('sha256')
+    .update(resolved.toUpperCase(), 'utf8')
+    .digest('hex')
+    .slice(0, ROOT_SLUG_HASH_CHARS);
+  return `${slugSegment(resolved)}-${digest}`;
+}
+
+/**
+ * The session name for targetPath under rootPath: the root slug, then every
+ * path segment between them, each slugged, joined with '/'. Returns null when
+ * targetPath is not inside rootPath - a path outside the root must NEVER be
+ * slugged into a name that looks confined.
+ * targetPath === rootPath yields the root slug alone: that is a `single`-mode
+ * root's session name.
+ * THE ONE IMPLEMENTATION. deriveSessionName and deriveDeskSessionName both
+ * delegate here, so they cannot drift; a second copy of this rule is exactly
+ * how one live session renders as two tiles, and since T72 that would end the
+ * WRONG session.
+ */
+export function sessionNameFor(rootPath, targetPath) {
+  const rel = path.relative(path.resolve(rootPath), path.resolve(targetPath));
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return [rootSlug(rootPath), ...rel.split(path.sep).filter(Boolean).map(slugSegment)].join('/');
+}
+
+/**
+ * Two latent behaviours this removed, deliberately:
+ * 1. The old `segs.length === 2` branch fell back to the bare basename at
+ *    depth 3+, while deriveDeskSessionName (registry.js) joined every
+ *    segment - they diverged BY DESIGN at depth 3. They now agree at every
+ *    depth via sessionNameFor.
+ * 2. A cwd outside root used to still get its '..' segments slugged. It now
+ *    returns null (deriveSessionName falls back to the bare basename, same
+ *    as the no-baseDir form always has), which fails the prune's equality
+ *    check and drops the entry. Safer, and the callers already gate on
+ *    containment before calling this.
+ */
+export function deriveSessionName(projectPath, root) {
+  if (root !== undefined) {
+    const name = sessionNameFor(root, projectPath);
+    if (name !== null) return name;
   }
-  return slug(path.basename(projectPath));
+  return slugSegment(path.basename(projectPath));
 }
 
 // Used by both the single- and two-segment branches of resolveProjectPath.
@@ -119,63 +207,57 @@ export function deriveSessionName(projectPath, baseDir) {
 const badSegment = (s) => /[\\/]/.test(s) || s.includes(':')
   || /[\u0000-\u001f]/.test(s) || s.startsWith('.') || path.isAbsolute(s);
 
-/**
- * Resolves and validates a client-supplied project identifier against
- * baseDir. This is the trust boundary: reject, never sanitize-and-continue.
- * Accepts either a single segment (a direct child of baseDir, unchanged
- * behaviour) or exactly two ('<container>/<child>', never deeper - one level
- * only, forever). Returns { ok: true, path } or { ok: false, status, error }.
- */
-export function resolveProjectPath(baseDir, project) {
-  // S1 - whole raw string, unchanged. Binds the 255 guard across BOTH
-  // segments: it runs before any split, so a second segment cannot be used
-  // to get past it.
-  if (typeof project !== 'string' || project.trim() === '' || project.length > 255) {
-    return { ok: false, status: 400, error: 'invalid_request' };
+// rootSlug + container + child. Exported so the number has one home.
+export const MAX_PROJECT_SEGMENTS = 3;
+
+/** root itself (a `single`-mode identifier with no child segment). */
+function resolveRootItself(base) {
+  let st;
+  try {
+    st = fs.lstatSync(base);
+  } catch {
+    return { ok: false, status: 404, error: 'project_not_found' };
   }
+  if (!st.isDirectory()) {
+    return { ok: false, status: 404, error: 'project_not_found' };
+  }
+  return { ok: true, path: base, root: base };
+}
 
-  const base = path.resolve(baseDir);
-
-  // S2 - split on '/' ONLY, never on '\'. '\' stays a rejected character
-  // inside every segment (badSegment) - a client sending 'Pull
-  // Requests\Vercel' is REJECTED, not normalised.
-  const segments = project.split('/');
-  if (segments.length > 2) {
+/** A direct child of base (the pre-T94 SINGLE branch, byte-identical). */
+function resolveFlatChild(base, seg) {
+  if (badSegment(seg)) {
     return { ok: false, status: 400, error: 'invalid_project' };
   }
 
-  if (segments.length === 1) {
-    // --- SINGLE branch - byte-identical to today ------------------------
-    if (badSegment(project)) {
-      return { ok: false, status: 400, error: 'invalid_project' };
-    }
-
-    const resolved = path.resolve(base, project);
-    if (path.dirname(resolved) !== base || resolved === base) {
-      return { ok: false, status: 400, error: 'invalid_project' };
-    }
-
-    let st;
-    try {
-      st = fs.lstatSync(resolved);
-    } catch {
-      return { ok: false, status: 404, error: 'project_not_found' };
-    }
-    if (!st.isDirectory()) {
-      return { ok: false, status: 404, error: 'project_not_found' };
-    }
-
-    const sessionName = deriveSessionName(resolved);
-    if (sessionName === '' || sessionName.startsWith('-')) {
-      return { ok: false, status: 400, error: 'invalid_project' };
-    }
-
-    return { ok: true, path: resolved };
+  const resolved = path.resolve(base, seg);
+  if (path.dirname(resolved) !== base || resolved === base) {
+    return { ok: false, status: 400, error: 'invalid_project' };
   }
 
-  // --- NESTED branch ------------------------------------------------------
-  const [seg1, seg2] = segments;
+  let st;
+  try {
+    st = fs.lstatSync(resolved);
+  } catch {
+    return { ok: false, status: 404, error: 'project_not_found' };
+  }
+  if (!st.isDirectory()) {
+    return { ok: false, status: 404, error: 'project_not_found' };
+  }
 
+  // Launchability check - ONE-ARGUMENT deliberately, to keep this narrowly
+  // scoped: this checks the basename's own slug, not the rooted name, and
+  // stays that way.
+  const sessionName = deriveSessionName(resolved);
+  if (sessionName === '' || sessionName.startsWith('-')) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+
+  return { ok: true, path: resolved, root: base };
+}
+
+/** '<container>/<child>' under base (the pre-T94 NESTED branch, byte-identical). */
+function resolveNestedChild(base, seg1, seg2) {
   // S3n - per-segment, in order. Must run before S6n: S6n's
   // containerChildrenOf console.warn's the folder path on a failed readdir,
   // and control characters are already rejected here, so no crafted segment
@@ -280,7 +362,152 @@ export function resolveProjectPath(baseDir, project) {
     return { ok: false, status: 400, error: 'invalid_project' };
   }
 
-  return { ok: true, path: resolved };
+  return { ok: true, path: resolved, root: base };
+}
+
+/**
+ * Resolves segs (0, 1 or 2 already-split segments) against ONE root, mode-
+ * gated. A `single` root has no children to resolve into - the only legal
+ * identifiers are zero segments, or (legacy compat) exactly one segment equal
+ * to the root's own basename - both resolve to the root itself. A `container`
+ * root resolves zero segments as invalid (there is no "root itself" entry for
+ * a container), one segment as a direct child, two as
+ * '<container-child>/<child>'.
+ */
+function resolveWithinRoot(root, segs) {
+  const base = path.resolve(root.path);
+
+  if (root.mode === 'single') {
+    if (segs.length === 0) return resolveRootItself(base);
+    if (segs.length === 1 && segs[0].toLowerCase() === path.basename(base).toLowerCase()) {
+      return resolveRootItself(base);
+    }
+    // A `single` root shares exactly one folder, never its children - any
+    // other identifier shape is refused, not resolved against disk.
+    return { ok: false, status: 404, error: 'project_not_found' };
+  }
+
+  // root.mode === 'container' from here.
+  if (segs.length === 0) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+  if (segs.length === 1) {
+    return resolveFlatChild(base, segs[0]);
+  }
+  return resolveNestedChild(base, segs[0], segs[1]);
+}
+
+/**
+ * Resolves and validates a client-supplied project identifier against roots
+ * (rootsFrom(ctx)'s output, or - registry.js's prune - a single-element array
+ * so form 2 stays unambiguous by construction). This is the trust boundary:
+ * reject, never sanitize-and-continue.
+ *
+ * Two identifier forms:
+ * FORM 1 - ROOT-QUALIFIED. First segment is a root slug, matched by EXACT
+ * STRING EQUALITY against the computed set of rootSlug(root.path) for the
+ * roots passed in - a lookup key against a closed server-side set, never used
+ * to build a path. Tried FIRST.
+ * FORM 2 - LEGACY (unchanged wire shape, no root prefix). Resolved against
+ * EVERY root: one match resolves, zero is the first-tried root's own error,
+ * two or more is 400 ambiguous_project - never a silent first-match-wins,
+ * which would launch (or END) the wrong root's project.
+ *
+ * Returns { ok: true, path, root } (root is the matched root's absolute
+ * path) or { ok: false, status, error }.
+ */
+export function resolveProjectPath(roots, project) {
+  // S1 - whole raw string cap 518 = 262 (a root slug: a root path capped at 255
+  // by folders.js's checkShape V1, plus '-' plus the 6-char digest) + 1 ('/')
+  // + 255 (the root-relative remainder - see below). Runs before any split, so
+  // a segment cannot be used to get past it. A pure DoS bound.
+  if (typeof project !== 'string' || project.trim() === '' || project.length > 518) {
+    return { ok: false, status: 400, error: 'invalid_request' };
+  }
+
+  const rootList = Array.isArray(roots) ? roots : [];
+
+  // S2 - split on '/' ONLY, never on '\'. '\' stays a rejected character
+  // inside every segment (badSegment) - a client sending 'Pull
+  // Requests\Vercel' is REJECTED, not normalised.
+  const segments = project.split('/');
+  if (segments.length > MAX_PROJECT_SEGMENTS) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+
+  // FORM 1 - root-qualified. Order matters: tried first, so a container
+  // literally named the same string as a root slug is unreachable by the
+  // legacy form - noted, not coded around.
+  const matchedRoot = rootList.find((r) => rootSlug(r.path) === segments[0]);
+  if (matchedRoot) {
+    const remainder = segments.slice(1);
+    // The root-relative remainder is capped at exactly 255, measured AFTER
+    // the root-slug segment is stripped and BEFORE the split - S1's original
+    // property ("the 255 guard binds across BOTH real-name segments") is
+    // preserved verbatim, one level down.
+    if (remainder.join('/').length > 255) {
+      return { ok: false, status: 400, error: 'invalid_project' };
+    }
+    return resolveWithinRoot(matchedRoot, remainder);
+  }
+
+  // FORM 2 - LEGACY. No root-slug match: resolve the 1-2 segments against
+  // every root and collect the matches. A legacy identifier is still at most
+  // 2 segments (invalid_project, matching S2's original code), and the
+  // un-prefixed whole string keeps the original 255 cap - there is no
+  // root-slug segment to strip first, so this is exactly S1's original
+  // check and keeps S1's original error code, invalid_request.
+  if (project.length > 255) {
+    return { ok: false, status: 400, error: 'invalid_request' };
+  }
+  if (segments.length > 2) {
+    return { ok: false, status: 400, error: 'invalid_project' };
+  }
+
+  const results = [];
+  let firstError = null;
+  for (const root of rootList) {
+    const r = resolveWithinRoot(root, segments);
+    if (r.ok) {
+      results.push(r);
+    } else if (firstError === null) {
+      firstError = r;
+    }
+  }
+  if (results.length === 1) return results[0];
+  if (results.length === 0) {
+    // Zero matches: the same error the single-root code returns today, from
+    // the FIRST root tried, so single-root error codes are unchanged.
+    return firstError || { ok: false, status: 404, error: 'project_not_found' };
+  }
+  // Two or more roots resolve the same legacy identifier: never silently
+  // launch (or END) the first one - that is exactly the "wrong session"
+  // landmine this form used to be.
+  return { ok: false, status: 400, error: 'ambiguous_project' };
+}
+
+/**
+ * The `project` field recorded and echoed for a launch/end - the client's
+ * raw identifier, minus a form-1 root-slug prefix if one was present. The
+ * registry's `project` field is a display label and every app.js path keys
+ * off it; normalising it further than this single strip would change the
+ * tile text. The legacy form (no root-slug match) is returned untouched.
+ */
+function displayProject(project, root) {
+  const slug = rootSlug(root);
+  // A form-1 identifier for a `single` root is the root slug ALONE, so the
+  // strip below would leave ''. An empty label is not cosmetic: listSessions'
+  // entry validator drops any entry whose project is '', and drop() unlinks
+  // the pid file - so the very next 5s poll deletes a RUNNING session and its
+  // only handle. Record the folder's own name instead, which round-trips: the
+  // legacy basename form already resolves within a `single` root and derives
+  // back to the same session name. The `|| slug` is for a hand-edited
+  // drive-root entry ('F:\', basename ''), which the write route refuses
+  // (`drive_root`) but resolveSharedFolders does not re-check; the slug itself
+  // is a legal form-1 identifier, so that path round-trips too.
+  if (project === slug) return path.basename(root) || slug;
+  if (project.startsWith(`${slug}/`)) return project.slice(slug.length + 1);
+  return project;
 }
 
 /**
@@ -345,17 +572,21 @@ function inFlightKey(ctx, sessionName) {
 }
 
 /**
- * Launches a detached Claude Code session for project, rooted at baseDir.
+ * Launches a detached Claude Code session for project, resolved against
+ * rootsFrom(ctx) - the shared set, never ctx.baseDir directly (see rootsFrom,
+ * projects.js).
  * ctx.spawner is the injectable seam for tests; defaults to child_process.spawn.
  * ctx also threads the registry seams (registryPath, pidDir, isPidAlive, now)
  * straight through to findLiveSession/clearPidFile/recordLaunch untouched.
  */
 export function launchSession(ctx, project) {
-  const { baseDir, spawner = spawn } = ctx;
-  const r = resolveProjectPath(baseDir, project);
+  const { spawner = spawn } = ctx;
+  const roots = rootsFrom(ctx);
+  const r = resolveProjectPath(roots, project);
   if (!r.ok) return r;
 
-  const sessionName = deriveSessionName(r.path, baseDir);
+  const sessionName = deriveSessionName(r.path, r.root);
+  const recordedProject = displayProject(project, r.root);
 
   // Known ceiling: two folders can derive the same session name ('Foo Bar' and
   // 'Foo.Bar' both -> 'foo-bar'), so they share one registry entry and the
@@ -468,7 +699,7 @@ export function launchSession(ctx, project) {
   child.on('exit', () => inFlightLaunches.delete(key));
   child.unref();
 
-  const view = recordLaunch(ctx, { sessionName, project, projectPath: r.path });
+  const view = recordLaunch(ctx, { sessionName, project: recordedProject, projectPath: r.path });
 
   // After the handlers, and safe there: node emits neither event on this
   // tick, so nothing can be released before it is recorded. `at` is read
@@ -574,12 +805,14 @@ export async function endSession(ctx, target) {
   }
 
   const project = target;
-  const r = resolveProjectPath(ctx.baseDir, project);
+  const roots = rootsFrom(ctx);
+  const r = resolveProjectPath(roots, project);
   if (!r.ok) return r;
 
-  const sessionName = deriveSessionName(r.path, ctx.baseDir);
+  const sessionName = deriveSessionName(r.path, r.root);
   const existing = findLiveSession(ctx, sessionName);
-  return endResolvedSession(ctx, { sessionName, projectPath: r.path, project, existing });
+  const recordedProject = displayProject(project, r.root);
+  return endResolvedSession(ctx, { sessionName, projectPath: r.path, project: recordedProject, existing });
 }
 
 /**

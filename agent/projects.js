@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { deriveSessionName } from './sessions.js';
+import { deriveSessionName, rootSlug } from './sessions.js';
+import { isInsideOrEqual } from './shared.js';
 
 const CONTAINER_MARKER = '.claude-remote-container';
 
@@ -67,36 +68,179 @@ export function containerChildrenOf(folderPath) {
 }
 
 /**
- * Lists the direct child directories of baseDir, one level deep. For a
- * child that is a CONTAINER - a folder holding a `.claude-remote-container`
- * marker, or (absent the marker) a folder whose own direct children are all
- * directories and which holds no file of its own - the entry also carries
- * `container: true` and `children`, that container's own direct child
- * directories. Never deeper than one level: a container's children are
- * never themselves classified. Never throws: any failure is logged to
- * stderr and results in an empty list (or that one entry being skipped).
+ * Every consumer of the shared set calls THIS - nobody reads ctx.baseDir or
+ * ctx.sharedFolders directly. Precedence is by PRESENCE, not truthiness,
+ * exactly the rule resolveSharedFolders (config.js) already uses for
+ * shared_folders vs default_base_folder: an explicit `sharedFolders: []`
+ * beside a `baseDir` yields [], not the baseDir - share less, never more.
+ * ctx.baseDir (when sharedFolders is absent) is sugar for one container root,
+ * which is what keeps every existing `{ baseDir }` ctx and every
+ * `listProjects(base)` call resolving the same folders with no edit.
  */
-export function listProjects(baseDir) {
-  const entries = readEntries(baseDir);
-  const projects = [];
-  for (const dirent of entries) {
-    // Known ceiling: dirent.isDirectory() is false for symlinks/junctions, so
-    // links are excluded for free - upgrade path if the owner ever
-    // junctions a project in is to follow links deliberately here. The same
-    // behaviour governs the child walk in containerChildrenOf.
-    if (!dirent.isDirectory() || dirent.name.startsWith('.')) {
+export function rootsFrom(ctx) {
+  const source = Object.prototype.hasOwnProperty.call(ctx, 'sharedFolders') && Array.isArray(ctx.sharedFolders)
+    ? ctx.sharedFolders
+    : typeof ctx.baseDir === 'string' && ctx.baseDir !== ''
+      ? [{ path: ctx.baseDir, mode: 'container', excludes: [], new_folders: 'show' }]
+      : [];
+  return usableRoots(source);
+}
+
+/**
+ * Two defensive filters over a candidate root list - every "hand-edited
+ * config" answer lives here, since resolveSharedFolders' own normalisation
+ * only guarantees shape, not usability as a SESSION-NAME PREFIX or as a
+ * DISJOINT set.
+ *
+ * D1 - unusable root slug. Drop any root whose rootSlug is '' or starts with
+ * '-'. resolveSharedFolders only requires path.isAbsolute, and
+ * path.isAbsolute('\\\\server\\share') is TRUE on win32 - a hand-edited UNC
+ * root would slug to '-server-share', and that leading '-' flows into
+ * launch-session.ps1's -SessionName argument. T94's write route already
+ * rejects UNC; this is the backstop for the file it does not own. rootSlug
+ * now always ends in a hash digest, but the digest is a fixed-width SUFFIX
+ * appended after slugSegment, so an empty readable half or a UNC path still
+ * yields a leading '-' (e.g. '-9c3f1a', '-server-share-9c3f1a') and this
+ * check still catches both.
+ *
+ * D2 - lexically nested roots. Drop the LATER of any overlapping pair
+ * (ancestor or descendant, either direction), keeping the first-listed root -
+ * the same "keep the earlier index" rule T94's own 409 overlapping_root uses
+ * at write time. isInsideOrEqual is IMPORTED from shared.js, never
+ * re-implemented - it is already case-folded and segment-aware, and it is
+ * the same comparison T94 uses, so the two agree by construction.
+ *
+ * ponytail: this comparison is LEXICAL, not canonical - it drops the inner
+ * one of a lexically-nested pair even when the two are canonically distinct
+ * (a folder, plus a path descending through a junction inside it to an
+ * unrelated target - T94 legally accepts that pair). Deliberate: listing
+ * less than was ticked is safe, listing more is not. The alternative is
+ * fs.realpathSync.native per root on the 5s poll, categorically refused on a
+ * 7.74GB host. Upgrade path if it ever bites: canonicalise once per call and
+ * compare canonically instead of lexically.
+ */
+export function usableRoots(roots) {
+  if (!Array.isArray(roots)) return [];
+
+  const withSlugs = [];
+  for (const root of roots) {
+    const slug = rootSlug(root.path);
+    if (slug === '' || slug.startsWith('-')) {
+      console.warn(`claude-remote agent: shared root '${root.path}' has an unusable slug; skipping it`);
       continue;
     }
-    const entry = { name: dirent.name, path: path.join(baseDir, dirent.name) };
-    // ponytail: one extra readdirSync per top-level folder per call, and
-    // listProjects runs on the 5s session poll (listSessions, registry.js).
-    // Metadata-only reads of ~15 folders; measure before caching.
-    const children = containerChildrenOf(entry.path);
-    if (children) {
-      entry.container = true;
-      entry.children = children;
+    withSlugs.push(root);
+  }
+
+  const kept = [];
+  for (const root of withSlugs) {
+    const resolved = path.resolve(root.path);
+    const overlapsKept = kept.some((k) => {
+      const keptResolved = path.resolve(k.path);
+      return isInsideOrEqual(resolved, keptResolved) || isInsideOrEqual(keptResolved, resolved);
+    });
+    if (overlapsKept) {
+      console.warn(`claude-remote agent: shared root '${root.path}' overlaps an earlier shared root; skipping it`);
+      continue;
     }
-    projects.push(entry);
+    kept.push(root);
+  }
+
+  return kept;
+}
+
+/**
+ * Lists projects across every usable root in `rootsOrBaseDir`. A string is
+ * sugar for one container root (keeps createProject's C2 guard, and every
+ * existing listProjects(base) call in the tests, working unchanged). An
+ * array is the roots, passed through usableRoots. Anything else -> [].
+ *
+ * Per root: a `container` root walks its direct child DIRECTORIES exactly as
+ * before (dot-prefixed skipped, dirent.isDirectory() so junctions are
+ * excluded for free, containerChildrenOf for grandchildren), minus
+ * `excludes` (case-insensitive match on direct children). A `single` root is
+ * NEVER walked and contributes exactly one entry: the root itself.
+ * `new_folders` does not filter here: `listProjects` filters on `excludes`
+ * alone. There is no record of which folders existed at share time to filter
+ * a "new since share" set against, and this reader must never write one -
+ * nothing may claim to hide what it does not hide.
+ *
+ * Every top-level entry gains `root` (the root's absolute path) and
+ * `rootName` (its basename); container CHILDREN do not - T99 groups on
+ * top-level entries, and a child is already inside a grouped parent.
+ *
+ * The combined list is sorted ONCE with the existing byName comparator, so a
+ * single root's output is byte-identical to today's and two roots interleave
+ * alphabetically. Never throws: a root whose directory is gone is skipped
+ * with a warn and the other roots still list in full.
+ */
+export function listProjects(rootsOrBaseDir) {
+  let roots;
+  if (typeof rootsOrBaseDir === 'string') {
+    roots = [{ path: rootsOrBaseDir, mode: 'container', excludes: [], new_folders: 'show' }];
+  } else if (Array.isArray(rootsOrBaseDir)) {
+    roots = rootsOrBaseDir;
+  } else {
+    roots = [];
+  }
+
+  const projects = [];
+
+  for (const root of usableRoots(roots)) {
+    const rootPath = path.resolve(root.path);
+    const rootName = path.basename(rootPath);
+
+    if (root.mode === 'single') {
+      // lstatSync, NEVER statSync, so a root that has become a junction is
+      // skipped rather than followed - same posture as every other reparse-
+      // point guard in this codebase.
+      let st;
+      try {
+        st = fs.lstatSync(rootPath);
+      } catch (err) {
+        console.warn(`claude-remote agent: could not list '${rootPath}': ${err.code || err.message}`);
+        continue;
+      }
+      if (!st.isDirectory()) {
+        console.warn(`claude-remote agent: could not list '${rootPath}': not a directory`);
+        continue;
+      }
+      projects.push({ name: rootName, path: rootPath, root: rootPath, rootName });
+      continue;
+    }
+
+    // container - never walked when mode is 'single', see above.
+    const excludeSet = new Set(
+      (Array.isArray(root.excludes) ? root.excludes : []).map((name) => name.toLowerCase()),
+    );
+
+    for (const dirent of readEntries(rootPath)) {
+      // Known ceiling: dirent.isDirectory() is false for symlinks/junctions, so
+      // links are excluded for free - upgrade path if the owner ever
+      // junctions a project in is to follow links deliberately here. The same
+      // behaviour governs the child walk in containerChildrenOf.
+      if (!dirent.isDirectory() || dirent.name.startsWith('.')) {
+        continue;
+      }
+      if (excludeSet.has(dirent.name.toLowerCase())) {
+        continue;
+      }
+      const entry = {
+        name: dirent.name,
+        path: path.join(rootPath, dirent.name),
+        root: rootPath,
+        rootName,
+      };
+      // ponytail: one extra readdirSync per top-level folder per call, and
+      // listProjects runs on the 5s session poll (listSessions, registry.js).
+      // Metadata-only reads of ~15 folders; measure before caching.
+      const children = containerChildrenOf(entry.path);
+      if (children) {
+        entry.container = true;
+        entry.children = children;
+      }
+      projects.push(entry);
+    }
   }
 
   projects.sort(byName);
@@ -214,19 +358,23 @@ export function createProject(baseDir, name) {
   // report the more specific `project_exists`, not `name_collision`.
   //
   // T69 asked whether this must also see NESTED projects. It must not, and
-  // it structurally cannot collide with one: a nested project is keyed
-  // '<parent-slug>/<child-slug>' (deriveSessionName's two-argument form,
-  // sessions.js; deriveDeskSessionName agrees, registry.js), while anything
-  // creatable here is a single segment that can never contain '/' -
-  // path.basename yields no separator, the slug rule introduces only '-',
-  // and V7 rejects '/' and '\' outright. So a top-level 'Vercel' alongside
-  // 'Pull Requests\Vercel' is legal, not a collision. If the nested
-  // separator ever stops being '/', this paragraph dies with it -
+  // it structurally cannot collide with one: a rooted session name is keyed
+  // '<root-slug>/<...segments>' (sessions.js's sessionNameFor - the root slug
+  // now carries a hash digest too, so it is nothing like a bare folder slug),
+  // while anything creatable here is a single segment that can never contain
+  // '/' - path.basename yields no separator, the slug rule introduces only
+  // '-', and V7 rejects '/' and '\' outright. So a top-level 'Vercel'
+  // alongside 'Pull Requests\Vercel' is legal, not a collision. If the
+  // nested separator ever stops being '/', this paragraph dies with it -
   // create-project.test.js pins the behaviour.
-  // deriveSessionName(entry.path) stays ONE-ARGUMENT deliberately: every
-  // entry listProjects(base) returns is exactly one level below base, where
-  // the two-argument form returns the identical string. Passing base would
-  // be a no-op that implies a nested comparison is happening.
+  // Both `deriveSessionName(target)` above and `deriveSessionName(entry.path)`
+  // below stay ONE-ARGUMENT deliberately, on BOTH sides: that compares
+  // basename-slug to basename-slug within one base, which is the only
+  // comparison that means anything here, since everything creatable is a
+  // single segment one level under `base`. Adding `base` to only one side -
+  // an easy "correction" now that the two-argument form prepends a root slug
+  // - would compare a rooted name against a bare one, which can never match,
+  // and would silently disable this guard.
   // Container entries are compared like any other, also deliberately: a
   // container's own folder name can collide ('Pull.Requests' vs a container
   // 'Pull Requests'), and a container stops being one the moment a loose

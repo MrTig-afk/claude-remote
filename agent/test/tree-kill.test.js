@@ -12,7 +12,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { test, after } from 'node:test';
 
 import { deriveSessionName, endSession } from '../sessions.js';
-import { recordLaunch, isPidAlive } from '../registry.js';
+import { recordLaunch, isPidAlive, pidFileNameFor } from '../registry.js';
 import { testSessionDirs } from './helper-auth.js';
 
 const perTestDirs = [];
@@ -101,11 +101,11 @@ test(
     assert.equal(isPidAlive(cmdPid), true, 'precondition: the cmd.exe wrapper must be alive');
     assert.equal(isPidAlive(childPid), true, 'precondition: the ping child must be alive');
 
-    const sessionName = deriveSessionName(projectPath);
+    const sessionName = deriveSessionName(projectPath, base);
     const registryPath = path.join(dir, 'sessions.json');
     const pidDir = path.join(dir, 'session-pids');
     fs.mkdirSync(pidDir, { recursive: true });
-    fs.writeFileSync(path.join(pidDir, `${sessionName}.pid`), String(cmdPid), 'ascii');
+    fs.writeFileSync(path.join(pidDir, pidFileNameFor(sessionName)), String(cmdPid), 'ascii');
 
     const ctx = {
       baseDir: base,

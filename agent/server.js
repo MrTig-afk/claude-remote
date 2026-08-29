@@ -1,8 +1,7 @@
-import fs from 'node:fs';
 import http from 'node:http';
 
-import { resolveBaseDir } from './config.js';
-import { listProjects, createProject } from './projects.js';
+import { resolveSharedFolders } from './config.js';
+import { listProjects, createProject, rootsFrom } from './projects.js';
 import { listDrives } from './drives.js';
 import { listFolders } from './folders.js';
 import { putSharedFolders } from './shared.js';
@@ -168,7 +167,7 @@ export async function handleRequest(req, res, ctx) {
     // -----------------------------------------------------------------------
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
-      sendJson(res, 200, { projects: listProjects(ctx.baseDir) });
+      sendJson(res, 200, { projects: listProjects(rootsFrom(ctx)) });
       return;
     }
 
@@ -216,7 +215,19 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, parsed.status, { error: parsed.error });
         return;
       }
-      const result = createProject(ctx.baseDir, parsed.value.name);
+      // The client sends only { name } - picking a root is UI (T97) and out
+      // of scope here, so: the FIRST container root in the shared set. A
+      // `single` root has no children to create into. No container root ->
+      // 400 base_unavailable BEFORE calling createProject (which itself maps
+      // an mkdirSync ENOENT failure to a 500 of the same code - app.js maps
+      // on the code, not the status, so no client change is needed for
+      // either status).
+      const containerRoot = rootsFrom(ctx).find((r) => r.mode === 'container');
+      if (!containerRoot) {
+        sendJson(res, 400, { error: 'base_unavailable' });
+        return;
+      }
+      const result = createProject(containerRoot.path, parsed.value.name);
       if (!result.ok) {
         sendJson(res, result.status, { error: result.error });
         return;
@@ -326,24 +337,23 @@ export function createAgentServer(ctx) {
 }
 
 if (import.meta.main) {
-  const baseDir = resolveBaseDir();
+  const sharedFolders = resolveSharedFolders();
   const port = Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT;
 
-  let baseDirOk = false;
-  try {
-    baseDirOk = fs.statSync(baseDir).isDirectory();
-  } catch {
-    baseDirOk = false;
-  }
-  if (!baseDirOk) {
-    console.warn(`claude-remote agent: base directory '${baseDir}' does not exist or is not a directory; /api/projects will return an empty list`);
+  // listProjects already warns PER ROOT, PER CALL (projects.js) - no need to
+  // stat each one again here. The one thing worth a boot-time warn is the
+  // empty set itself: on THIS install (no config.json yet) it means every
+  // /api/projects call returns [] until the owner completes the accept
+  // screen (T96) and ticks a folder in the picker (T97).
+  if (sharedFolders.length === 0) {
+    console.warn('claude-remote agent: no folders are shared yet; /api/projects will return an empty list until the picker is used');
   }
 
   if (!isConfigured({})) {
     console.warn(`claude-remote agent: NO PASSCODE SET. Open http://${HOST}:${port} at this desk and set one - every API route returns 403 until you do. Do NOT run 'tailscale serve' before it is set.`);
   }
 
-  const server = createAgentServer({ baseDir });
+  const server = createAgentServer({ sharedFolders });
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -354,6 +364,6 @@ if (import.meta.main) {
   });
 
   server.listen(port, HOST, () => {
-    console.log(`Local Agent listening on http://${HOST}:${port} (base: ${baseDir})`);
+    console.log(`Local Agent listening on http://${HOST}:${port} (${sharedFolders.length} shared folder(s))`);
   });
 }
