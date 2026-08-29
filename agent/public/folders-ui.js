@@ -215,6 +215,29 @@ export function shareErrorMessage(code, status, index, ticks) {
   return { text: `The agent refused the request (status ${status}).`, index: rowIndex };
 }
 
+/**
+ * The Shared Folders row's own state, so the list answers before you tap it.
+ * -> { text, enterable }
+ *
+ * enterable === false for an UNKNOWN set, and that is the whole point:
+ * sharedToTicks(null) returns [] silently, so a door that opened the picker
+ * without consulting this would open it BLANK and a SAVE from there would
+ * write { shared_folders: [] } - wiping every shared folder with no error.
+ * null and undefined mean the same thing here, exactly as in listZoneState.
+ *
+ * ponytail: this is the one settings row today. A second non-folder row in
+ * T79-T85 is the trigger to split a settings-ui.js out of this module -
+ * folders-ui.js already owns "the shared-folder STATE selection", so this one
+ * belongs here rather than starting a new file for a single function.
+ */
+export function sharedRowState(shared) {
+  if (shared === null || shared === undefined) return { text: 'not known yet', enterable: false };
+  if (shared.length === 0) return { text: 'nothing shared yet', enterable: true };
+  const gone = shared.filter((r) => r.missing === true).length;
+  const base = shared.length === 1 ? '1 folder shared' : `${shared.length} folders shared`;
+  return { text: gone > 0 ? `${base} - ${gone} not on the PC` : base, enterable: true };
+}
+
 /** Pure SAVE reducer: (share, apiResult) -> { done, ticks, message, errorIndex } */
 export function applySaveResult(share, res) {
   if (res.ok) {

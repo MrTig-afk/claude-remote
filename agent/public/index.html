@@ -47,9 +47,12 @@
   <div class="app">
     <header class="hdr">
       <div class="hdr-top">
-        <svg class="mark" width="22" height="22" aria-hidden="true"><use href="#mark"/></svg>
-        <div class="title">claude‑remote</div>
+        <button class="home" id="home" type="button" aria-label="All projects">
+          <svg class="mark" width="22" height="22" aria-hidden="true"><use href="#mark"/></svg>
+          <span class="title">claude‑remote</span>
+        </button>
         <div class="ver">v0.1</div>
+        <button class="settings-open" id="settings-open" type="button" hidden>SETTINGS</button>
       </div>
       <!-- Ships hidden and is revealed only when the project list itself is
            rendered. This line reports whether the agent answered for that
@@ -227,6 +230,22 @@
         <button class="share-skip" id="share-skip" type="button"></button>
         <button class="share-save" id="share-save" type="button" disabled>SAVE</button>
       </div>
+    </main>
+
+    <!-- Settings root (T77). One <main> per screen, listed in SCREEN_MAIN -
+         showScreen is the only thing that reveals it. T78-T85 add their own
+         group headings and rows beside FOLDERS; this ships with the one
+         destination that already exists. -->
+    <main id="settings" hidden>
+      <div class="set-head"><div class="set-label">SETTINGS</div></div>
+
+      <section class="zone">
+        <div class="allhdr"><span>FOLDERS</span></div>
+        <div class="rule"></div>
+        <div class="list" id="settings-list"></div>
+      </section>
+
+      <div class="spacer"></div>
     </main>
   </div>
 </body>

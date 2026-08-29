@@ -773,11 +773,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v24', () => {
+test('sw.js CACHE is claude-remote-shell-v25', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v24');
+  assert.equal(match[1], 'claude-remote-shell-v25');
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -1498,8 +1498,8 @@ test('renderProjects: with a folder open, only that folder\'s children render an
 function makePopState(state, historyStub) {
   const js = read('app.js');
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
-  return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed',
-    src + '; return onPopState;')(state, historyStub, () => {}, true, true);
+  return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
+    src + '; return onPopState;')(state, historyStub, () => {}, true, true, false, () => {});
 }
 
 test('back with only the drill-in open returns to the list', () => {
@@ -2350,7 +2350,7 @@ function loadPicker({ getDrives, getFolders, putShared } = {}) {
     'getDrives', 'getFolders', 'putShared',
     'crumbSegments', 'sharedBody', 'coverageOf', 'driveRowState',
     'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
-    'PICKER_SKIP', 'PICKER_CANCEL',
+    'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
     `${src}
 return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListClick, onShareListChange, onSharePickedClick, onSkipClick, finishFolders, toggleTick };`,
   );
@@ -2362,6 +2362,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
     folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
     copy.PICKER_SKIP, copy.PICKER_CANCEL,
+    () => {}, // showFolders' router call (T77) - this helper only exercises the picker's own wiring
   );
   picker.document = doc;
   picker.window = win;
@@ -2787,7 +2788,7 @@ function loadAccept({ acknowledge: acknowledgeImpl } = {}) {
 
   const fn = new Function(
     'document', 'TITLE', 'LEDE', 'CONSENT_LABEL', 'SETTINGS_NOTE', 'ACCEPT_BUTTON',
-    'SECTIONS_TOGGLE', 'renderSections', 'acknowledge', 'errorCopy',
+    'SECTIONS_TOGGLE', 'renderSections', 'acknowledge', 'errorCopy', 'showScreen',
     `${src}; return { showAccept };`,
   );
   const mod = fn(
@@ -2795,6 +2796,7 @@ function loadAccept({ acknowledge: acknowledgeImpl } = {}) {
     copy.SECTIONS_TOGGLE, wrappedRenderSections,
     acknowledgeImpl || (async () => ({ ok: true })),
     (code, status) => `${code} ${status}`,
+    () => {}, // showAccept's router call (T77) - this helper only exercises the accept screen's own wiring
   );
   mod.document = doc;
   return mod;

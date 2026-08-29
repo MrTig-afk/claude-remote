@@ -69,6 +69,53 @@ body {
 .conn-text { color: #9aab9a; }
 .conn-text.reachable { color: #7ee787; }
 
+/* The mark and the wordmark are one control on every screen. The vertical
+   padding is the 44px tap floor and the equal negative margin gives it back,
+   so the header block is exactly as tall as it was before this button
+   existed. Disabled on the gate and the warning: colour is set by .title and
+   by the symbol's own stroke attribute, so the UA's grey never reaches
+   either - the mark stays lit, which design/tokens.md requires in as many
+   words. */
+.home {
+  display: flex;
+  align-items: baseline;
+  padding: 13px 0;
+  margin-block: -13px;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.home:disabled { cursor: default; }
+
+/* Same type and colour as .ver beside it - a word, not a pictogram; this app
+   ships no icon but the mark and the status dot. 18px line-height plus 13px
+   top and bottom is the 44px floor - measured, not assumed - and it is
+   pulled back the same way .home is. */
+.settings-open {
+  font-size: 10px;
+  line-height: 18px;
+  /* .hdr-top is align-items: baseline, so a 10px label in a 44px padded
+     box sits its baseline 1px lower and grows the header row to 23px.
+     Measured, not assumed. Centring keeps the row at 22px with the tap
+     target still exactly 44. */
+  align-self: center;
+  letter-spacing: 0.08em;
+  color: #4a5a4a;
+  padding: 13px 0 13px 14px;
+  margin-block: -13px;
+  background: none;
+  border: 0;
+  font-family: inherit;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
 /* Splash - the first thing painted, before any script has parsed. Covers the
    whole viewport (z-index because the floating + button is positioned too),
    and reuses .title so the wordmark is identical to the header's. */
@@ -521,6 +568,11 @@ body {
    .newproj is absolutely positioned against .app. */
 #picker { display: flex; flex-direction: column; flex-grow: 1; }
 
+#settings { display: flex; flex-direction: column; flex-grow: 1; }
+
+.set-head  { padding: 12px 20px 0; }
+.set-label { font-size: 9px; letter-spacing: 0.09em; color: #4a5a4a; }
+
 #gate { display: flex; flex-direction: column; flex-grow: 1; }
 
 .gate {
@@ -716,6 +768,17 @@ body {
 }
 /* An inert row (blocked drive, unreadable folder) carries no tick control at
    all, so this padding is what keeps its name lined up with a tickable row's. */
+/* An inert Settings row, same posture as .share-off: muted name, no chevron.
+   The row is a div with no data-settings, so it is structurally inert too -
+   this only stops it LOOKING enterable.
+   THE `.row.folder` PREFIX IS LOAD-BEARING, not decoration. A settings row's
+   classes are `row folder set-off`, so a bare `.set-off .row-name` (0,2,0)
+   loses the cascade to `.row.folder .row-name` (0,3,0) above and the rule does
+   nothing at all. `.share-off` gets away with the short form only because
+   those rows are `share-row share-off` and have no `.row.folder` to outrank.
+   Shipped once without the prefix; it was dead, and a comment claimed it
+   worked. Do not shorten it back. */
+.row.folder.set-off .row-name { color: #4a5a4a; }
 .share-off { padding-left: 44px; }
 .share-off .row-name { color: #4a5a4a; }
 /* The error mark. No danger colour - #ff7b72/#e5534b mean "this ends

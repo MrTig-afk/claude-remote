@@ -8,12 +8,16 @@ import {
 } from './copy.js';
 import {
   crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS,
-  listZoneState, missingRoots, withoutRoot, sharedToTicks,
+  listZoneState, missingRoots, withoutRoot, sharedToTicks, sharedRowState,
 } from './folders-ui.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
 const state = {
+  // showScreen is the ONLY writer of this field - see the router below. The
+  // app always opens on the passcode gate, before boot() has asked the
+  // agent anything.
+  screen: 'gate',
   projects: [], // from /api/projects
   sessions: null, // array, or null = unknown (fetch failed / 404)
   launching: new Set(), // project names with a POST in flight
@@ -39,6 +43,37 @@ const state = {
 // Ended records announced this open. Announcing also dismisses at the agent,
 // so a record shows once; the 24h retention is the never-opened fallback.
 const reported = new Set();
+
+// The whole routing table. One <main> per screen, exactly one visible at a
+// time. T78-T85 add a key and a <main> here and inherit showScreen, goHome
+// and the back handling with no further wiring.
+const SCREEN_MAIN = {
+  gate: 'gate',
+  accept: 'accept',
+  list: 'picker',      // #picker IS the project list - it predates the folder picker
+  folders: 'folders',  // the folder picker (T97)
+  settings: 'settings',
+};
+
+// The one place a screen changes. Sets `hidden` on every <main> in
+// SCREEN_MAIN so two of them can never render stacked (the failure the
+// hideAccept() comment in boot() describes), records which screen the app is
+// on, and keeps the two pieces of header chrome that depend on it honest.
+function showScreen(name) {
+  state.screen = name;
+  for (const [screen, id] of Object.entries(SCREEN_MAIN)) {
+    document.getElementById(id).hidden = screen !== name;
+  }
+  // The gate and the acknowledgement warning each have exactly ONE way out
+  // and home is not it. Inert rather than hidden: design/tokens.md puts the
+  // mark on EVERY screen, lock included, and never muted - so the control
+  // stays fully drawn and stops being tappable.
+  document.getElementById('home').disabled = name === 'gate' || name === 'accept';
+  // Settings is reached from the project list and from nowhere else. On the
+  // picker it would be a loop; on the gate it would be a way past it.
+  document.getElementById('settings-open').hidden = name !== 'list';
+  renderConn();   // the status line belongs to the project list; renderConn derives that
+}
 
 const ERROR_COPY = {
   network: 'Cannot reach the agent. Check the PC is awake and Tailscale is connected, then tap REFRESH.',
@@ -1004,6 +1039,7 @@ function renderBackBar(open, canCreate = true) {
 
 function render() {
   renderConn();
+  renderSettings(); // a background load() must refresh the row while Settings is on screen
   const rows = renderProjects();
   renderFooter(rows);
 }
@@ -1116,11 +1152,8 @@ async function onProjectTap(e) {
 
 async function onChooseFolders() {
   if (state.shared === null || state.shared === undefined) return; // never enter blind
-  const picker = document.getElementById('picker');
-  picker.hidden = true;
-  hideConn(); // the status line belongs to the project list
-  await showFolders(sharedToTicks(state.shared));
-  picker.hidden = false;
+  await showFolders(sharedToTicks(state.shared));   // showFolders calls showScreen('folders')
+  showScreen('list');
   await load(); // the agent decides what is shared now, never an optimistic write
 }
 
@@ -1225,6 +1258,32 @@ function closeFolderScreen() {
   if (folderPushed) { folderPushed = false; history.back(); }
 }
 
+// The way out, once, for every screen. An installed PWA has no address bar
+// and no back button, so a screen with no route home is a force-quit.
+// ONE history move per tap, never two: confirmPushed goes false the instant a
+// guarded history.back() is ISSUED, and stacking two moves in one gesture is
+// the race onPopState's comment already documents.
+function goHome() {
+  // The gate and the warning are gates, not screens you got lost on. #home is
+  // disabled on both; this is the second lock, not the only one.
+  if (state.screen === 'gate' || state.screen === 'accept') return;
+  // Leaving the picker by the mark is a CANCEL, never a save - finishFolders
+  // never calls putShared, and it is what SKIP/CANCEL already does.
+  if (state.screen === 'folders') { finishFolders(); return; }
+  if (state.screen === 'settings') { closeSettings(); return; }
+  // On the project list, home means the TOP of the project list. Both of the
+  // app's own entries come off in one guarded traversal, the same discipline
+  // finishFolders uses: state is mutated and rendered synchronously first, so
+  // a double tap finds nothing left to pop.
+  const n = (confirmPushed ? 1 : 0) + (folderPushed ? 1 : 0);
+  state.confirmName = null;
+  state.openFolder = null;
+  confirmPushed = false;
+  folderPushed = false;
+  render();
+  if (n > 0) history.go(-n);
+}
+
 // Extracted to a named function (rather than the inline arrow it replaces)
 // so the four back-gesture cases are independently testable. history.state
 // after a pop is the state of the entry the browser landed ON, which is what
@@ -1241,6 +1300,19 @@ function closeFolderScreen() {
 // owner back out of the folder. Same class of race the single-entry code
 // already had, and a second tap recovers.
 function onPopState() {
+  // Settings' entry is ALWAYS the top one while Settings is on screen:
+  // nothing reachable from Settings pushes, openSettings refuses to push
+  // under an open confirm, and the picker is entered only after this entry
+  // has come off. So a pop landing here is that entry's own pop, and the
+  // early return leaves the confirm/drill reconciliation below untouched -
+  // including a {drill} entry still sitting underneath, which is why
+  // state.openFolder is not cleared here.
+  if (state.screen === 'settings') {
+    settingsPushed = false;
+    showScreen('list');
+    render();
+    return;
+  }
   confirmPushed = false;
   if (state.confirmName !== null) { state.confirmName = null; render(); }
   if (history.state && history.state.drill) return; // the folder's entry survived this pop
@@ -1886,6 +1958,7 @@ function onShareUpClick() {
 let pendingFolders = null;
 
 function showFolders(initial) {
+  showScreen('folders');
   document.getElementById('folders').hidden = false;
   // The fetch that 401'd is why the current level is empty - revealing it
   // with no error and no RETRY would be the same dead end in a different
@@ -1931,6 +2004,118 @@ function showFolders(initial) {
   openDrives();
 
   return pendingFolders;
+}
+
+// ============================================================================
+// Settings root (T77). One screen: a group heading, a list of navigation
+// rows, and nowhere else to go but the home control in the shared header.
+// ============================================================================
+
+function hideSettings() {
+  document.getElementById('settings').hidden = true;
+}
+
+// Same shape as confirmPushed/folderPushed: true exactly while Settings'
+// history entry is on the stack and this session is the one that pushed it.
+let settingsPushed = false;
+
+// The third caller of the history-push pattern folderPushed's comment
+// documents: cancelOpenConfirm() must run FIRST, or Settings' entry could
+// land above a live confirm entry and break "the confirm's entry is always
+// the top one".
+function openSettings() {
+  if (cancelOpenConfirm()) return;
+  showScreen('settings');
+  renderSettings();
+  if (!settingsPushed) {
+    history.pushState({ screen: 'settings' }, '');   // Android back = leave Settings
+    settingsPushed = true;
+  }
+}
+
+// Same double-tap discipline as closeFolderScreen: mutate/reveal
+// synchronously, then a guarded history.back(), so a double tap can never pop
+// the app's own base entry and close the PWA.
+function closeSettings() {
+  showScreen('list');
+  render();
+  if (settingsPushed) { settingsPushed = false; history.back(); }
+}
+
+// One picker, two doors, ONE implementation of the door.
+// THE ORDER IS LOAD-BEARING, but not for the reason it first looks. Swapped,
+// closeSettings()'s showScreen('list') would run AFTER showScreen('folders')
+// and hide the picker outright the moment it opened.
+// What it does NOT do is keep Settings' entry away from onFoldersPop:
+// history.back() is queued, not synchronous, so the picker registers
+// onFoldersPop in the same task and that listener DOES receive Settings' pop.
+// It is harmless only because share.pushed is clamped at 0 at the drive list,
+// so the pop costs one redundant GET /api/drives and nothing else.
+// T78 replaces this body with its own screen and keeps onChooseFolders as the
+// only way in - and inherits this ordering, so do not reorder it there either.
+function openSharedFolders() {
+  closeSettings();
+  onChooseFolders();
+}
+
+// A settings row IS a folder row: empty left slot, name and state stacked in
+// the middle, chevron on the right. The empty left slot is deliberate - see
+// buildRow's comment on why a folder row appends no dot, and never fix the
+// alignment with padding.
+// `enterable === false` means the row carries NO data-settings attribute at
+// all: structurally untappable, the same guarantee buildInertRow gives a
+// blocked drive and buildRow gives a container (no data-project, so it can
+// never launch). A disabled-looking row that still answers a tap is what this
+// avoids.
+function buildSettingsRow({
+  id, name, state: stateText, enterable,
+}) {
+  const el = document.createElement(enterable ? 'button' : 'div');
+  el.className = 'row folder';
+  if (enterable) {
+    el.type = 'button';
+    el.dataset.settings = id;
+  }
+  el.setAttribute('aria-label', `${name}, ${stateText}`);
+
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = name;
+  main.appendChild(nameEl);
+  const statusEl = document.createElement('span');
+  statusEl.className = 'row-status';
+  statusEl.textContent = stateText;
+  main.appendChild(statusEl);
+  el.appendChild(main);
+
+  // The chevron is the promise that this row goes somewhere. A row that
+  // cannot be entered must not make it - `shared === null` is the DAILY case
+  // here (a sleeping PC, a dropped link), not a rare one, so a bright name
+  // and an accent chevron over a row that ignores the tap is a dead control
+  // someone meets often. `.share-off` sets the same precedent: an inert row
+  // mutes its name and draws no chevron.
+  if (enterable) {
+    const chev = document.createElement('span');
+    chev.className = 'folder-chev';
+    chev.setAttribute('aria-hidden', 'true'); // the aria-label already says it
+    chev.textContent = '>';
+    el.appendChild(chev);
+  } else {
+    el.className += ' set-off';
+  }
+
+  return el;
+}
+
+function renderSettings() {
+  const listEl = document.getElementById('settings-list');
+  listEl.innerHTML = '';
+  const shared = sharedRowState(state.shared);
+  listEl.appendChild(buildSettingsRow({
+    id: 'shared', name: 'Shared folders', state: shared.text, enterable: shared.enterable,
+  }));
 }
 
 /**
@@ -1986,6 +2171,7 @@ async function ensureAccepted() {
   // the promise the first run is awaiting never resolves.
   if (firstRun || pendingFolders) await showFolders(share.ticks);
   picker.hidden = false;
+  showScreen('list');
 }
 
 /**
@@ -1997,6 +2183,7 @@ async function ensureAccepted() {
  * closure over the same nodes.
  */
 function showAccept() {
+  showScreen('accept');
   const el = {
     accept: document.getElementById('accept'),
     title: document.getElementById('accept-title'),
@@ -2098,6 +2285,12 @@ function wireEvents() {
     if (cancelOpenConfirm()) return;
     closeFolderScreen();
   });
+  document.getElementById('home').addEventListener('click', goHome);
+  document.getElementById('settings-open').addEventListener('click', openSettings);
+  document.getElementById('settings-list').addEventListener('click', (e) => {
+    const row = e.target.closest('[data-settings]');
+    if (row && row.dataset.settings === 'shared') openSharedFolders();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') load();
   });
@@ -2139,11 +2332,16 @@ async function boot() {
   // and two <main>s render stacked. ensureAccepted() after the re-unlock
   // brings the screen back if it was never accepted - and returns
   // immediately, one round trip, if it was.
-  onAuthLost(async () => { hideConn(); hideAccept(); hideFolders(); await showGate(); await ensureAccepted(); await load(); });
+  // hideConn/hideAccept/hideFolders are now redundant with showScreen('gate'),
+  // which also hides #settings - a screen this callback never named - but
+  // three tests pin the three hides verbatim, so they stay, in this order,
+  // before it.
+  onAuthLost(async () => { hideConn(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on
   // top of the passcode screen for as long as the owner takes to type.
+  showScreen('gate');
   const unlocked = showGate();
   hideSplash();
   await unlocked;
