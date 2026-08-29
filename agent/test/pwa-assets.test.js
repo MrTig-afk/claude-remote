@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import * as folders from '../public/folders-ui.js';
+import * as copy from '../public/copy.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -772,11 +773,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v22', () => {
+test('sw.js CACHE is claude-remote-shell-v23', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v22');
+  assert.equal(match[1], 'claude-remote-shell-v23');
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -1375,6 +1376,25 @@ test('onProjectTap: a folder-row tap with no confirm open opens the folder', () 
   assert.equal(opened, 'Pull Requests');
 });
 
+test("D11 - onProjectTap's [data-choose] branch returns before any [data-project] work and never calls launchSession", () => {
+  const js = read('app.js');
+  // Stops BEFORE onChooseFolders' own declaration, not at cancelOpenConfirm:
+  // a function declaration inside the sliced source would shadow the
+  // injected stub of the same name, silently calling the REAL onChooseFolders
+  // (which needs state/document/etc that this test never provides) instead
+  // of the stub - exactly the ReferenceError trap this task's brief warns
+  // about, one level removed.
+  const src = js.slice(js.indexOf('async function onProjectTap('), js.indexOf('async function onChooseFolders('));
+  let chosen = false;
+  const onProjectTap = new Function(
+    'onChooseFolders',
+    src + '; return onProjectTap;',
+  )(() => { chosen = true; });
+  const e = { target: { closest: (sel) => (sel === '[data-choose]' ? { dataset: { choose: '1' } } : null) } };
+  onProjectTap(e);
+  assert.equal(chosen, true, 'a misplaced or missing check would leave onChooseFolders uncalled, the same failure a launch attempt would need to be caught by');
+});
+
 // The back bar's click handler is an inline arrow inside wireEvents, not a
 // named function - lifted by its own literal id/text anchor, same guard.
 function callBackBarHandler(cancelOpenConfirmStub, closeFolderScreenStub) {
@@ -1400,6 +1420,13 @@ test('backbar click: with no confirm open, the tap closes the folder', () => {
 
 // Integration-level: renderProjects itself, with a folder open, scoped to
 // only that folder's children and sessions - not the piecewise helpers.
+// T100's trap: renderProjects now also references listZoneState, missingRoots,
+// buildEmptyState, buildGoneNotice and five copy.js constants at module
+// scope - every one of them has to be added to BOTH the parameter list and
+// the call arguments below, or a test that reaches those branches dies with
+// a ReferenceError instead of a useful failure. Each defaults to the REAL
+// implementation so every pre-existing call site (which passes none of
+// these) keeps working unedited.
 function makeRenderProjectsIntegration(stubs) {
   const js = read('app.js');
   const helpers = js.slice(js.indexOf('function elapsed('), js.indexOf('function setDot('));
@@ -1409,8 +1436,22 @@ function makeRenderProjectsIntegration(stubs) {
   const src = helpers + child + rp;
   return new Function(
     'document', 'state', 'buildTile', 'buildRow', 'renderBackBar',
+    'listZoneState', 'missingRoots', 'buildEmptyState', 'buildGoneNotice', 'crumbSegments',
+    'SHARED_UNKNOWN', 'NOTHING_SHARED', 'ALL_ROOTS_GONE', 'EMPTY_DAY_ONE_BODY', 'emptyDayOneTitle',
     src + '; return renderProjects;',
-  )(stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar);
+  )(
+    stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar,
+    stubs.listZoneState || folders.listZoneState,
+    stubs.missingRoots || folders.missingRoots,
+    stubs.buildEmptyState || (() => makeStubEl()),
+    stubs.buildGoneNotice || (() => makeStubEl()),
+    stubs.crumbSegments || folders.crumbSegments,
+    stubs.SHARED_UNKNOWN || copy.SHARED_UNKNOWN,
+    stubs.NOTHING_SHARED || copy.NOTHING_SHARED,
+    stubs.ALL_ROOTS_GONE || copy.ALL_ROOTS_GONE,
+    stubs.EMPTY_DAY_ONE_BODY || copy.EMPTY_DAY_ONE_BODY,
+    stubs.emptyDayOneTitle || copy.emptyDayOneTitle,
+  );
 }
 
 function makeStubEl() {
@@ -1691,6 +1732,216 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
   assert.equal(sherlock.parent, undefined);
 });
 
+// --- T100: the empty/broken project list ------------------------------
+
+// Same createElement shape makeBuildRow uses - dataset/className/textContent
+// plain objects, enough for buildEmptyState/buildGoneNotice to build a real
+// tree that D1-D6 can walk.
+function makeStubDocumentForBuild() {
+  return {
+    createElement(tag) {
+      return {
+        tag, children: [], attrs: {}, dataset: {}, className: '', textContent: '',
+        setAttribute(k, v) { this.attrs[k] = v; },
+        appendChild(c) { this.children.push(c); return c; },
+      };
+    },
+  };
+}
+
+// The REAL buildEmptyState/buildGoneNotice, sliced straight out of app.js -
+// so D1/D2/D3/D4 exercise the actual DOM shape, not a description of it.
+function makeEmptyGoneBuilders() {
+  const js = read('app.js');
+  const start = js.indexOf('function buildEmptyState(');
+  const end = js.indexOf('function setBanner(');
+  const src = js.slice(start, end);
+  return new Function(
+    'document', 'CHOOSE_FOLDERS_BUTTON', 'REMOVE_BUTTON', 'rootGoneTitle', 'ROOT_GONE_BODY', 'crumbSegments',
+    `${src}; return { buildEmptyState, buildGoneNotice };`,
+  )(
+    makeStubDocumentForBuild(), copy.CHOOSE_FOLDERS_BUTTON, copy.REMOVE_BUTTON, copy.rootGoneTitle, copy.ROOT_GONE_BODY, folders.crumbSegments,
+  );
+}
+
+function countByDataset(root, key) {
+  let n = 0;
+  const walk = (node) => {
+    if (node.dataset && node.dataset[key] !== undefined) n += 1;
+    for (const c of (node.children || [])) walk(c);
+  };
+  walk(root);
+  return n;
+}
+
+function baseEmptyListState(overrides) {
+  return {
+    projects: [],
+    openFolder: null,
+    reachable: true,
+    shared: [],
+    sessions: [],
+    launching: new Set(),
+    stopping: new Set(),
+    results: new Map(),
+    confirmName: null,
+    focusName: null,
+    ...overrides,
+  };
+}
+
+function makeProjectsEls() {
+  return { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+}
+
+// getElementById off the persistent `els` map, PLUS a real createElement -
+// every D-test below has zero running tiles, so renderProjects always builds
+// the "nothing running" placeholder too, and that also calls
+// document.createElement/append on the injected document.
+function makeProjectsDocument(els) {
+  return {
+    getElementById: (id) => els[id],
+    createElement(tag) {
+      return {
+        tag,
+        children: [],
+        dataset: {},
+        className: '',
+        textContent: '',
+        classList: { toggle() {}, add() {} },
+        setAttribute() {},
+        appendChild(c) { this.children.push(c); return c; },
+        append(...nodes) { this.children.push(...nodes); },
+      };
+    },
+  };
+}
+
+test('D1 - state 1: #projects holds exactly one [data-choose] and zero rows', () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({ shared: [] });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.equal(countByDataset(els.projects, 'choose'), 1, 'the empty project list must have exactly one way out');
+  assert.equal(countByDataset(els.projects, 'project'), 0);
+});
+
+test("D2 - state 4 also renders [data-choose], and its title text differs from state 1's", () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  function run(sharedVal) {
+    const state = baseEmptyListState({ shared: sharedVal });
+    const els = makeProjectsEls();
+    const document = makeProjectsDocument(els);
+    const renderProjects = makeRenderProjectsIntegration({
+      document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+    });
+    renderProjects();
+    return els.projects;
+  }
+  const state1 = run([]);
+  const state4 = run([{
+    path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+  }]);
+
+  assert.equal(countByDataset(state1, 'choose'), 1);
+  assert.equal(countByDataset(state4, 'choose'), 1);
+  const title1 = collectByClass(state1, 'empty-title')[0].textContent;
+  const title4 = collectByClass(state4, 'empty-title')[0].textContent;
+  assert.notEqual(title1, title4, 'state 1 and state 4 must not render the same words - they are not the same screen');
+});
+
+test('D3 - shared: null, 0 projects: #projects holds NO [data-choose]', () => {
+  // The real builders, NOT the harness defaults: makeStubEl() carries no
+  // dataset, so countByDataset() would read 0 no matter what the code passed
+  // and this pin could never fail. It is the only live cover for the rule.
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({ shared: null });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.equal(countByDataset(els.projects, 'choose'), 0, 'the picker must never be enterable blind - a SAVE from there would wipe every shared folder');
+});
+
+test('D4 - one missing root + two live projects: a [data-remove-root] node exists AND both project rows were built', () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({
+    projects: [{ name: 'Alpha', path: 'F:\\Dev\\Alpha' }, { name: 'Beta', path: 'F:\\Dev\\Beta' }],
+    shared: [{
+      path: 'F:\\Gone', mode: 'container', excludes: [], new_folders: 'show', missing: true,
+    }],
+  });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const rowsSeen = [];
+  const buildRow = (p) => { rowsSeen.push(p.name); return makeStubEl(); };
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow, renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.deepEqual(rowsSeen.sort(), ['Alpha', 'Beta'], 'a gone root must never blank a list that still has projects');
+  const removeNode = findByDataset(els.projects, 'removeRoot');
+  assert.ok(removeNode, 'a gone root must render its REMOVE control');
+  assert.equal(removeNode.dataset.removeRoot, 'F:\\Gone');
+});
+
+test('D5 - reachable:\'waiting\' with shared:[]: the waiting .msg renders and NO [data-choose]', () => {
+  // Real builders, same reason as D3 - the [data-choose] half of this test is
+  // vacuous against the harness stubs.
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({ reachable: 'waiting', shared: [] });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.equal(countByDataset(els.projects, 'choose'), 0, 'the app must never say "nothing shared yet" while the PC is asleep');
+  const msgNodes = collectByClass(els.projects, 'msg');
+  assert.equal(msgNodes.length, 1);
+  assert.match(msgNodes[0].textContent, /Waiting for the PC/);
+});
+
+test('D6 - renderBackBar receives canCreate=false for nothing-shared and true for empty-day-one', () => {
+  function canCreateFor(sharedVal) {
+    const state = baseEmptyListState({ shared: sharedVal });
+    const els = makeProjectsEls();
+    const document = makeProjectsDocument(els);
+    let seen;
+    const renderBackBar = (open, canCreate) => { seen = canCreate; };
+    const renderProjects = makeRenderProjectsIntegration({
+      document,
+      state,
+      buildTile: () => makeStubEl(),
+      buildRow: () => makeStubEl(),
+      renderBackBar,
+      buildEmptyState: () => makeStubEl(),
+      buildGoneNotice: () => makeStubEl(),
+    });
+    renderProjects();
+    return seen;
+  }
+
+  assert.equal(canCreateFor([]), false, "'nothing-shared' - + can only fail with no usable root");
+  assert.equal(canCreateFor([{
+    path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+  }]), true, "'empty-day-one' - a live root exists to create into");
+});
+
 test('the eyebrow is the dimmest token, clamps to one line, and clears the corner STOP chip', () => {
   const css = read('app.css');
   const rule = css.match(/\.tile-eyebrow\s*\{([^}]*)\}/);
@@ -1761,8 +2012,12 @@ test('the waiting state has its own status line, its own dot and its own empty-s
 
   const rp = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
   assert.match(rp, /Waiting for the PC\./);
+  // T100 moved the literal comparison into listZoneState (folders-ui.js,
+  // pinned there by S1/S2's own RED WHEN) - renderProjects now branches on
+  // the zone it returns, but the ordering property this test exists for
+  // ("waiting" wins over "unreachable") must still hold here too.
   assert.ok(
-    rp.indexOf("state.reachable === 'waiting'") < rp.indexOf('state.reachable === false'),
+    rp.indexOf("zone.kind === 'waiting'") < rp.indexOf("zone.kind === 'unreachable'"),
     'the waiting message must win over "Cannot reach the agent."',
   );
 });
@@ -2095,8 +2350,9 @@ function loadPicker({ getDrives, getFolders, putShared } = {}) {
     'getDrives', 'getFolders', 'putShared',
     'crumbSegments', 'sharedBody', 'coverageOf', 'driveRowState',
     'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
+    'PICKER_SKIP', 'PICKER_CANCEL',
     `${src}
-return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListClick, onShareListChange, onSharePickedClick, finishFolders, toggleTick };`,
+return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListClick, onShareListChange, onSharePickedClick, onSkipClick, finishFolders, toggleTick };`,
   );
   const picker = fn(
     doc, win, hist,
@@ -2105,6 +2361,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     putShared || (async () => ({ ok: true, status: 200, data: {} })),
     folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
     folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
+    copy.PICKER_SKIP, copy.PICKER_CANCEL,
   );
   picker.document = doc;
   picker.window = win;
@@ -2387,6 +2644,67 @@ test('A17 - an enterable drive row is disabled, not removed; a blocked drive sti
   const blockedRow = buildDriveRow({ letter: 'Z:', label: 'System', blocked: true, reason: 'system' }, []);
   assert.match(blockedRow.className, /share-off/);
   assert.ok(!flatten(blockedRow).some((n) => n.tag === 'input'), 'a blocked drive must still carry no input (A6 unaffected)');
+});
+
+test('D7 - picker: #share-skip gains a click listener on showFolders; firing it resolves, putShared is never called, #folders is hidden, and the listener is gone', async () => {
+  let putCalls = 0;
+  const putShared = async () => { putCalls += 1; return { ok: true, status: 200, data: { shared_folders: [] } }; };
+  const picker = loadPicker({ putShared });
+  const skip = picker.document.getElementById('share-skip');
+  assert.equal(skip.listenerCount('click'), 0);
+
+  const p = picker.showFolders([]);
+  await flush();
+  assert.equal(skip.listenerCount('click'), 1);
+
+  skip.fire('click');
+  await p;
+
+  assert.equal(putCalls, 0, 'SKIP must never call putShared');
+  assert.equal(picker.document.getElementById('folders').hidden, true);
+  assert.equal(skip.listenerCount('click'), 0, 'the listener must be torn down with the others');
+});
+
+test('D8 - the cap note sits above the first row, not below it', async () => {
+  const getFolders = async () => ({
+    ok: true,
+    status: 200,
+    data: {
+      path: 'F:/Dev', parent: 'F:', folders: [{ name: 'A', readable: true }, { name: 'B', readable: true }, { name: 'C', readable: true }], total: 600,
+    },
+  });
+  const picker = loadPicker({ getFolders });
+  picker.showFolders([]);
+  await flush();
+  picker.openPath('F:/Dev', { push: false });
+  await flush();
+
+  const list = picker.document.getElementById('share-list');
+  const noteIdx = list.children.findIndex((c) => c.className === 'share-note');
+  const firstOpenIdx = list.children.findIndex((c) => findByDataset(c, 'open'));
+  assert.ok(noteIdx !== -1, 'the cap note must render');
+  assert.ok(firstOpenIdx !== -1, 'a row must render');
+  assert.ok(noteIdx < firstOpenIdx, 'the cap note must sit above the first row, not below 500 of them');
+});
+
+test('D9 - showFolders(initial) opens with the roots already picked, no ticking needed', async () => {
+  const picker = loadPicker({});
+  picker.showFolders([{ path: 'F:\\Dev\\Projects\\Repos', name: 'Repos', newFolders: 'show' }]);
+  await flush();
+  assert.equal(picker.document.getElementById('share-picked-count').textContent, '1');
+  assert.equal(picker.document.getElementById('share-save').disabled, false);
+});
+
+test('D10 - the SKIP/CANCEL label depends on whether anything is already shared', async () => {
+  const picker1 = loadPicker({});
+  picker1.showFolders([]);
+  await flush();
+  assert.equal(picker1.document.getElementById('share-skip').textContent, copy.PICKER_SKIP);
+
+  const picker2 = loadPicker({});
+  picker2.showFolders([{ path: 'F:\\Dev', name: 'Dev', newFolders: 'show' }]);
+  await flush();
+  assert.equal(picker2.document.getElementById('share-skip').textContent, copy.PICKER_CANCEL);
 });
 
 test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {

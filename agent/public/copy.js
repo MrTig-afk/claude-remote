@@ -83,3 +83,50 @@ export function renderSections(host) {
     host.appendChild(wrap);
   }
 }
+
+// Below: the empty/broken project list (T100) - state 1 (nothing shared),
+// state 2 (a shared root gone), and state 4 (shared, empty on day one).
+// T78's Shared Folders screen reuses CHOOSE_FOLDERS_BUTTON.
+
+export const CHOOSE_FOLDERS_BUTTON = 'CHOOSE FOLDERS';
+export const PICKER_SKIP = 'SKIP FOR NOW';
+export const PICKER_CANCEL = 'CANCEL';
+export const REMOVE_BUTTON = 'REMOVE';
+
+export const NOTHING_SHARED = {
+  title: 'No folders shared yet.',
+  body: 'Pick the folder your projects are in. Nothing outside it is listed here.',
+};
+
+export const SHARED_UNKNOWN = {
+  title: 'The agent did not say which folders are shared.',
+  body: 'Tap REFRESH. If it keeps happening, check the agent on the PC.',
+};
+
+export const ALL_ROOTS_GONE = {
+  title: 'The folders you shared are not on the PC any more.',
+  body: 'They were renamed, moved or deleted. Pick them again.',
+};
+
+export const ROOT_GONE_BODY = 'It was renamed, moved or deleted. Remove it, then pick it again if you still want it.';
+
+/** One gone root's headline. `name` is the folder's own name, never a path. */
+export function rootGoneTitle(name) {
+  return `${name} is not on the PC any more.`;
+}
+
+/**
+ * State 4's headline. Naming the folder is what makes this visibly a
+ * different screen from NOTHING_SHARED rather than the same words twice.
+ */
+export function emptyDayOneTitle(names) {
+  return names.length === 1 ? `Nothing in ${names[0]} yet.` : 'Nothing in your shared folders yet.';
+}
+
+export const EMPTY_DAY_ONE_BODY = 'No project folders in there yet. Tap + to make one, or share a different folder.';
+
+// CHOOSE_FOLDERS_BUTTON duplicates ACCEPT_BUTTON's value on purpose and must
+// NOT be aliased to it: ACCEPT_BUTTON is verbatim accept-screen copy owned by
+// design/accept-screen-copy.txt, and coupling another screen's control to it
+// would mean an edit to that file silently renames a button it does not own.
+// Two constants, same string, different owners.

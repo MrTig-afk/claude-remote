@@ -349,6 +349,36 @@ body {
 
 .msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
 
+/* T100 - the way out of an empty or broken project list. The empty-state
+   zone must always say what to do, never render as an empty box. Same
+   type/colour values as .msg, just with a title added above the body. */
+.empty {
+  padding: 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+}
+.empty-title { font-size: 13px; font-weight: 500; color: #eafbea; }
+.empty-body { font-size: 11px; line-height: 1.5; color: #9aab9a; }
+
+/* A gone root's notice - additive, above the rows it never blanks. Same card
+   language as .banner (bg #0f150f, 4px radius, 12px inset) so it reads as
+   chrome and never as a project row - but no HORIZONTAL margin: unlike
+   .banner (outside .list), this sits inside .list, which already carries its
+   own 12px horizontal padding. No danger colour: REMOVE here unshares a
+   folder, it deletes nothing and ends no session - a missing folder is a
+   state, not a destructive action. */
+.gone {
+  background: #0f150f;
+  border-radius: 4px;
+  margin: 12px 0 0;
+  padding: 12px;
+}
+.gone-title { font-size: 12px; font-weight: 500; color: #eafbea; }
+.gone-path { font-size: 10px; color: #4a5a4a; overflow-wrap: anywhere; }
+.gone-body { font-size: 11px; color: #9aab9a; }
+
 /* New-project panel - opened by the + button. Same card language as .banner
    (bg #0f150f, 4px radius); no new colour outside the token list above. */
 .newproj-panel {
@@ -663,7 +693,7 @@ body {
    something" and an error is not that. */
 .share-bad .row-name { color: #eafbea; }
 
-.share-new, .share-remove {
+.share-new, .share-remove, .share-skip, .empty-action {
   min-height: 44px;
   padding: 0 10px;
   font: inherit;
@@ -678,18 +708,26 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 .share-remove { width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
+.empty-action { width: 100%; }
 
-.share-note { padding: 8px 13px 0; font-size: 10px; line-height: 1.5; color: #4a5a4a; }
+/* Moved above the row loop (T100): a cap notice printed under 500 rows is
+   not a notice - the owner would have to scroll past all of them to read it.
+   Padding flips top<->bottom so the spacing lands the same way now that it
+   sits above its neighbour instead of below it. */
+.share-note { padding: 0 13px 8px; font-size: 10px; line-height: 1.5; color: #4a5a4a; }
 
 /* Sticky is the fix for "SAVE below a 500-row list". Opaque background
    because it floats over content, the same reason .newproj-box is opaque. */
 .share-actions {
+  display: flex;
+  gap: 8px;
   position: sticky;
   bottom: 0;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
   background: #0a0d0a;
   border-top: 1px solid #1b231b;
 }
+.share-save { flex-grow: 1; }
 
 /* At 320px the toggle drops to a second line instead of crushing the name -
    scoped to the SELECTED row only, so a plain tickable row never wraps. */

@@ -119,10 +119,10 @@ after(() => {
   cleanupAuthCtx(mainCtx);
 });
 
-test('B1 - GET /api/acknowledge on a fresh ctx -> 200 { acknowledged: false }', async () => {
+test('B1 - GET /api/acknowledge on a fresh ctx -> 200 { acknowledged: false, shared_folders: [] } (T100 OQ-A: re-pinned to include the new field, not loosened)', async () => {
   const res = await mainFetch('/api/acknowledge');
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { acknowledged: false });
+  assert.deepEqual(await res.json(), { acknowledged: false, shared_folders: [] });
 });
 
 let firstAcknowledgedAt;
@@ -138,10 +138,10 @@ test('B2 - POST /api/acknowledge -> 200, acknowledged:true and an ISO acknowledg
   assert.equal(onDisk.acknowledged_at, firstAcknowledgedAt);
 });
 
-test('B3 - GET after the POST -> { acknowledged: true }', async () => {
+test('B3 - GET after the POST -> { acknowledged: true, shared_folders: [] } (T100 OQ-A: re-pinned to include the new field, not loosened)', async () => {
   const res = await mainFetch('/api/acknowledge');
   assert.equal(res.status, 200);
-  assert.deepEqual(await res.json(), { acknowledged: true });
+  assert.deepEqual(await res.json(), { acknowledged: true, shared_folders: [] });
 });
 
 test('B4 - two POSTs both 200, acknowledged_at identical in both bodies and on disk', async () => {
@@ -249,6 +249,185 @@ test('B10 - POST /api/acknowledge does not drop shared_folders (the HTTP twin of
   } finally {
     server.close();
     cleanupAuthCtx(seedCtx);
+  }
+});
+
+// ============================================================
+// H - GET /api/acknowledge's shared_folders field (T100 OQ-A). Fixture
+// recipe borrowed from folders-ui.test.js's makeShareServer: the temp dir's
+// own drive letter as a fixed drive plus one other letter as the blocked
+// system drive, systemDirs: [] because os.tmpdir() on Windows lives under
+// %USERPROFILE%\AppData.
+// ============================================================
+
+function makeSharedGetServer() {
+  const authCtx = makeAuthCtx();
+  seedPasscode(authCtx, '481902');
+  const token = issueTestToken(authCtx);
+  const tmpLetter = path.parse(path.resolve(authCtx.dir)).root.replace(/[\\/]+$/, '').toUpperCase();
+  const blockedLetter = ['Q:', 'Y:', 'X:', 'W:'].find((l) => l !== tmpLetter);
+  const driveRows = [
+    { DeviceID: tmpLetter, VolumeName: 'Test' },
+    { DeviceID: blockedLetter, VolumeName: 'Sys' },
+  ];
+  const ctx = {
+    ...authCtx,
+    driveExec: async () => JSON.stringify(driveRows),
+    systemDrive: blockedLetter,
+    systemDirs: [],
+  };
+  const server = fixtureServer(ctx);
+  return { ctx, token, server };
+}
+
+test('H1 - GET /api/acknowledge with nothing shared -> 200 { acknowledged:false, shared_folders: [] }', async () => {
+  const { ctx, token, server } = makeSharedGetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
+  try {
+    const res = await authedFetch('/api/acknowledge');
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { acknowledged: false, shared_folders: [] });
+  } finally {
+    server.close();
+    cleanupAuthCtx(ctx);
+  }
+});
+
+test('H2 - two real temp dirs shared -> both echoed, ctx order preserved, each with mode/excludes/new_folders/missing:false', async () => {
+  const { ctx, token, server } = makeSharedGetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
+  try {
+    const rootA = path.join(ctx.dir, 'root-a');
+    const rootB = path.join(ctx.dir, 'root-b');
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+    const put = await authedFetch('/api/shared', {
+      method: 'PUT',
+      body: JSON.stringify({ shared_folders: [{ path: rootA }, { path: rootB }] }),
+    });
+    assert.equal(put.status, 200);
+
+    const res = await authedFetch('/api/acknowledge');
+    const body = await res.json();
+    assert.equal(body.shared_folders.length, 2);
+    assert.equal(body.shared_folders[0].path, path.resolve(rootA));
+    assert.equal(body.shared_folders[1].path, path.resolve(rootB));
+    for (const entry of body.shared_folders) {
+      assert.equal(entry.mode, 'container');
+      assert.deepEqual(entry.excludes, []);
+      assert.equal(entry.new_folders, 'show');
+      assert.equal(entry.missing, false);
+    }
+  } finally {
+    server.close();
+    cleanupAuthCtx(ctx);
+  }
+});
+
+test('H3 - share two temp dirs, delete one on disk, GET -> that one missing:true, the other missing:false', async () => {
+  const { ctx, token, server } = makeSharedGetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
+  try {
+    const rootA = path.join(ctx.dir, 'root-a');
+    const rootB = path.join(ctx.dir, 'root-b');
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+    const put = await authedFetch('/api/shared', {
+      method: 'PUT',
+      body: JSON.stringify({ shared_folders: [{ path: rootA }, { path: rootB }] }),
+    });
+    assert.equal(put.status, 200);
+
+    fs.rmSync(rootA, { recursive: true, force: true });
+
+    const res = await authedFetch('/api/acknowledge');
+    const body = await res.json();
+    const a = body.shared_folders.find((r) => r.path === path.resolve(rootA));
+    const b = body.shared_folders.find((r) => r.path === path.resolve(rootB));
+    assert.equal(a.missing, true, 'a deleted root must be reported gone');
+    assert.equal(b.missing, false, 'the surviving root must not be caught up in it');
+  } finally {
+    server.close();
+    cleanupAuthCtx(ctx);
+  }
+});
+
+test('H4 - GET with no token -> 401, and the body never leaks shared_folders', async () => {
+  const { ctx, server } = makeSharedGetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/acknowledge`);
+    assert.equal(res.status, 401);
+    const body = await res.json();
+    assert.equal(body.shared_folders, undefined, 'an unauthenticated caller must never see a filesystem path');
+  } finally {
+    server.close();
+    cleanupAuthCtx(ctx);
+  }
+});
+
+test('H5 - a root whose lstat throws EACCES -> missing:false, 200, no throw', async (t) => {
+  const { ctx, token, server } = makeSharedGetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
+  try {
+    const root = path.join(ctx.dir, 'root-a');
+    fs.mkdirSync(root);
+    const put = await authedFetch('/api/shared', {
+      method: 'PUT',
+      body: JSON.stringify({ shared_folders: [{ path: root }] }),
+    });
+    assert.equal(put.status, 200);
+
+    const real = fs.lstatSync;
+    const resolvedRoot = path.resolve(root);
+    t.mock.method(fs, 'lstatSync', (p, ...rest) => {
+      if (path.resolve(String(p)) === resolvedRoot) {
+        const err = new Error('EACCES: permission denied');
+        err.code = 'EACCES';
+        throw err;
+      }
+      return real.call(fs, p, ...rest);
+    });
+
+    await assert.doesNotReject(async () => {
+      const res = await authedFetch('/api/acknowledge');
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.equal(body.shared_folders[0].missing, false, 'a permissions blip must never be reported as deleted');
+    });
+  } finally {
+    server.close();
+    cleanupAuthCtx(ctx);
+  }
+});
+
+test('H6 - PUT /api/shared then GET /api/acknowledge reflects the new set, from ctx, not the boot value', async () => {
+  const { ctx, token, server } = makeSharedGetServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
+  try {
+    const before = await authedFetch('/api/acknowledge');
+    assert.deepEqual((await before.json()).shared_folders, []);
+
+    const root = path.join(ctx.dir, 'root-a');
+    fs.mkdirSync(root);
+    const put = await authedFetch('/api/shared', {
+      method: 'PUT',
+      body: JSON.stringify({ shared_folders: [{ path: root }] }),
+    });
+    assert.equal(put.status, 200);
+
+    const after = await authedFetch('/api/acknowledge');
+    const body = await after.json();
+    assert.equal(body.shared_folders.length, 1);
+    assert.equal(body.shared_folders[0].path, path.resolve(root));
+  } finally {
+    server.close();
+    cleanupAuthCtx(ctx);
   }
 });
 

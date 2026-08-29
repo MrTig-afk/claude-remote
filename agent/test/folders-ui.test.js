@@ -6,7 +6,9 @@ import { test } from 'node:test';
 import {
   MAX_SHARED_ROOTS, crumbSegments, sharedBody, coverageOf, driveRowState,
   truncatedNote, shareErrorMessage, applySaveResult,
+  listZoneState, missingRoots, withoutRoot, sharedToTicks,
 } from '../public/folders-ui.js';
+import { emptyDayOneTitle } from '../public/copy.js';
 import { MAX_SHARED_ROOTS as SERVER_MAX_SHARED_ROOTS } from '../shared.js';
 import { resolveSharedFolders } from '../config.js';
 import {
@@ -117,6 +119,130 @@ test('P11 - applySaveResult on a successful SAVE resolves with no message and no
   assert.equal(result.done, true);
   assert.equal(result.message, null);
   assert.equal(result.errorIndex, null);
+});
+
+// ============================================================
+// S - T100's pure state selection: listZoneState / missingRoots /
+// withoutRoot / sharedToTicks / emptyDayOneTitle. No server, no DOM.
+// ============================================================
+
+const LIVE_ROOT = {
+  path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+};
+const GONE_ROOT = {
+  path: 'F:\\Dev\\Old', mode: 'container', excludes: [], new_folders: 'show', missing: true,
+};
+
+test('S1 - reachable:\'waiting\' with shared:[], 0 projects -> \'waiting\'', () => {
+  const zone = listZoneState({
+    reachable: 'waiting', openFolderEmpty: false, projectCount: 0, shared: [],
+  });
+  assert.equal(zone.kind, 'waiting');
+});
+
+test('S2 - reachable:false with shared:[], 0 projects -> \'unreachable\'', () => {
+  const zone = listZoneState({
+    reachable: false, openFolderEmpty: false, projectCount: 0, shared: [],
+  });
+  assert.equal(zone.kind, 'unreachable');
+});
+
+test('S3 - reachable:true, shared:[], 0 projects -> \'nothing-shared\'', () => {
+  const zone = listZoneState({
+    reachable: true, openFolderEmpty: false, projectCount: 0, shared: [],
+  });
+  assert.equal(zone.kind, 'nothing-shared');
+});
+
+test('S4 - reachable:true, one live root, 0 projects -> \'empty-day-one\', roots = that root', () => {
+  const zone = listZoneState({
+    reachable: true, openFolderEmpty: false, projectCount: 0, shared: [LIVE_ROOT],
+  });
+  assert.equal(zone.kind, 'empty-day-one');
+  assert.deepEqual(zone.roots, [LIVE_ROOT]);
+});
+
+test('S5 - S3 and S4 inputs differ ONLY in shared; the two kinds must differ', () => {
+  const base = { reachable: true, openFolderEmpty: false, projectCount: 0 };
+  const nothing = listZoneState({ ...base, shared: [] });
+  const dayOne = listZoneState({ ...base, shared: [LIVE_ROOT] });
+  assert.notEqual(nothing.kind, dayOne.kind, 'the client must be able to tell state 1 from state 4');
+});
+
+test('S6 - one root, missing:true, 0 projects -> \'all-gone\'', () => {
+  const zone = listZoneState({
+    reachable: true, openFolderEmpty: false, projectCount: 0, shared: [GONE_ROOT],
+  });
+  assert.equal(zone.kind, 'all-gone');
+});
+
+test('S7 - roots [missing, live], 3 projects -> \'rows\'; missingRoots returns exactly the missing one', () => {
+  const shared = [GONE_ROOT, LIVE_ROOT];
+  const zone = listZoneState({
+    reachable: true, openFolderEmpty: false, projectCount: 3, shared,
+  });
+  assert.equal(zone.kind, 'rows');
+  assert.deepEqual(missingRoots(shared), [GONE_ROOT]);
+});
+
+test('S8 - shared: null and shared: undefined, 0 projects -> both \'unknown-shared\', never \'nothing-shared\'', () => {
+  const base = { reachable: true, openFolderEmpty: false, projectCount: 0 };
+  assert.equal(listZoneState({ ...base, shared: null }).kind, 'unknown-shared');
+  assert.equal(listZoneState({ ...base, shared: undefined }).kind, 'unknown-shared');
+});
+
+test('S9 - openFolderEmpty:true with shared:[] -> \'folder-empty\'', () => {
+  const zone = listZoneState({
+    reachable: true, openFolderEmpty: true, projectCount: 0, shared: [],
+  });
+  assert.equal(zone.kind, 'folder-empty');
+});
+
+test('S10 - withoutRoot preserves the survivors\' mode/excludes/new_folders, strips missing, matches case-insensitively and with a trailing separator', () => {
+  const survivor = {
+    path: 'F:\\Dev\\Projects\\Solo', mode: 'single', excludes: ['node_modules'], new_folders: 'hide', missing: false,
+  };
+  const shared = [GONE_ROOT, survivor];
+  const body = withoutRoot(shared, 'f:\\dev\\old\\');
+  assert.deepEqual(body, {
+    shared_folders: [
+      { path: survivor.path, mode: 'single', excludes: ['node_modules'], new_folders: 'hide' },
+    ],
+  });
+});
+
+test('S11 - withoutRoot(oneRoot, thatPath) -> { shared_folders: [] }', () => {
+  assert.deepEqual(withoutRoot([LIVE_ROOT], LIVE_ROOT.path), { shared_folders: [] });
+});
+
+test('S12 - sharedToTicks -> path, name = last segment, newFolders, mode, excludes', () => {
+  const ticks = sharedToTicks([LIVE_ROOT, { ...GONE_ROOT, mode: 'single', excludes: ['x'], new_folders: 'hide' }]);
+  assert.deepEqual(ticks, [
+    {
+      path: 'F:\\Dev\\Projects\\Repos', name: 'Repos', newFolders: 'show', mode: 'container', excludes: [],
+    },
+    {
+      path: 'F:\\Dev\\Old', name: 'Old', newFolders: 'hide', mode: 'single', excludes: ['x'],
+    },
+  ]);
+});
+
+test('S13 - sharedBody carries a tick\'s mode/excludes through, defaults to container/[] for a tick that has neither', () => {
+  const withFields = sharedBody([{
+    path: 'F:\\A', name: 'A', newFolders: 'show', mode: 'single', excludes: ['y'],
+  }]);
+  assert.deepEqual(withFields.shared_folders[0], {
+    path: 'F:\\A', mode: 'single', excludes: ['y'], new_folders: 'show',
+  });
+  const bare = sharedBody([{ path: 'F:\\B', name: 'B', newFolders: 'show' }]);
+  assert.deepEqual(bare.shared_folders[0], {
+    path: 'F:\\B', mode: 'container', excludes: [], new_folders: 'show',
+  });
+});
+
+test('S14 - emptyDayOneTitle(["Repos"]) names the folder; two names -> the generic line', () => {
+  assert.equal(emptyDayOneTitle(['Repos']), 'Nothing in Repos yet.');
+  assert.equal(emptyDayOneTitle(['Repos', 'Sherlock']), 'Nothing in your shared folders yet.');
 });
 
 // ============================================================

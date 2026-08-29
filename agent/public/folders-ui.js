@@ -1,4 +1,5 @@
-// Pure shell module for the folder picker (T97). No DOM access anywhere -
+// Pure shell module for the folder picker (T97) and the shared-folder STATE
+// selection (T100). No DOM access anywhere -
 // not at module scope, not inside a function - so `node --test` imports this
 // directly, the same way accept.test.js imports copy.js. app.js is the only
 // place any of this touches the page.
@@ -46,13 +47,20 @@ export function crumbSegments(absPath) {
   return segs;
 }
 
-/** ticks -> the exact PUT body. Order preserved: a 400's `index` names a row. */
+/**
+ * ticks -> the exact PUT body. Order preserved: a 400's `index` names a row.
+ * Carries a tick's `mode`/`excludes` through when present, defaulting to
+ * `container`/`[]` for a tick that has neither (one made by ticking a row in
+ * the picker never carries them). Without this, re-entering the picker from
+ * state 4 and tapping SAVE would silently rewrite a `single` root to
+ * `container` and erase its excludes - a data-loss fix, not a feature.
+ */
 export function sharedBody(ticks) {
   return {
     shared_folders: ticks.map((t) => ({
       path: t.path,
-      mode: 'container',
-      excludes: [],
+      mode: t.mode === 'single' ? 'single' : 'container',
+      excludes: Array.isArray(t.excludes) ? t.excludes : [],
       new_folders: t.newFolders,
     })),
   };
@@ -90,6 +98,85 @@ export function driveRowState(drive) {
 export function truncatedNote(total, shown) {
   if (total <= shown) return null;
   return `This folder holds ${total} folders. Showing the first ${shown}, in alphabetical order.`;
+}
+
+/**
+ * Which thing owns the project list's list zone (T100). Pure, so the
+ * precedence is unit-testable with no DOM and no server.
+ *
+ * `shared` is null/undefined when the agent has not told us the set (the
+ * fetch failed, or it has not happened yet) - the two are treated
+ * IDENTICALLY, which is also what keeps every existing test's state literal
+ * working without an edit.
+ *
+ * -> { kind, roots }  roots is [] except where noted.
+ *    'waiting' | 'unreachable' | 'folder-empty' | 'rows'
+ *  | 'unknown-shared' | 'nothing-shared'
+ *  | 'all-gone'      roots = every root, all missing
+ *  | 'empty-day-one' roots = the roots that are NOT missing
+ */
+export function listZoneState({
+  reachable, openFolderEmpty, projectCount, shared,
+}) {
+  // Unreachable (or still waking up) beats every state below, and it must
+  // stay first: the phone cannot tell "nothing shared" from "the PC did not
+  // answer" - both look like an empty list - and `shared` is stale or absent
+  // on this path anyway. A later refactor that moves the shared-set checks
+  // ahead of these two would tell an asleep PC's owner "nothing shared yet"
+  // and send him into a picker that would wipe a set the PC never reported.
+  if (reachable === 'waiting') return { kind: 'waiting', roots: [] };
+  if (reachable === false) return { kind: 'unreachable', roots: [] };
+  if (openFolderEmpty) return { kind: 'folder-empty', roots: [] };
+  if (projectCount > 0) return { kind: 'rows', roots: [] };
+  if (shared === null || shared === undefined) return { kind: 'unknown-shared', roots: [] };
+  if (shared.length === 0) return { kind: 'nothing-shared', roots: [] };
+  if (shared.every((r) => r.missing === true)) return { kind: 'all-gone', roots: shared };
+  return { kind: 'empty-day-one', roots: shared.filter((r) => !r.missing) };
+}
+
+/** The roots the agent says are gone. [] when the set is unknown. */
+export function missingRoots(shared) {
+  return (shared || []).filter((r) => r.missing === true);
+}
+
+/**
+ * A PUT body with one root removed and EVERY other root byte-preserved.
+ * Comparison is the module's existing pathKey (case-folded, trailing
+ * separator tolerated). `missing` is stripped - it is a report field, never
+ * part of the schema. Removing the only root yields
+ * { shared_folders: [] }, which PUT /api/shared accepts.
+ */
+export function withoutRoot(shared, path) {
+  const target = pathKey(path);
+  return {
+    shared_folders: (shared || [])
+      .filter((r) => pathKey(r.path) !== target)
+      .map((r) => ({
+        path: r.path,
+        mode: r.mode === 'single' ? 'single' : 'container',
+        excludes: Array.isArray(r.excludes) ? r.excludes : [],
+        new_folders: r.new_folders === 'hide' ? 'hide' : 'show',
+      })),
+  };
+}
+
+/**
+ * shared_folders -> the picker's tick objects, so re-entering the picker
+ * with roots already shared opens with them ticked instead of empty.
+ * `name` is the last path segment, taken from crumbSegments so this module
+ * keeps exactly one path parser.
+ *
+ * Accepted ceiling: the picker still shows no per-root exclusion list, so a
+ * root with excludes round-trips them but cannot be edited until T98.
+ */
+export function sharedToTicks(shared) {
+  return (shared || []).map((r) => ({
+    path: r.path,
+    name: crumbSegments(r.path).at(-1).label,
+    newFolders: r.new_folders === 'hide' ? 'hide' : 'show',
+    mode: r.mode === 'single' ? 'single' : 'container',
+    excludes: Array.isArray(r.excludes) ? r.excludes : [],
+  }));
 }
 
 const SHARE_ERROR_COPY = {

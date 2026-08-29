@@ -1,7 +1,15 @@
 import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
-import { TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, renderSections } from './copy.js';
-import { crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS } from './folders-ui.js';
+import {
+  TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, renderSections,
+  CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON,
+  NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle,
+  emptyDayOneTitle, EMPTY_DAY_ONE_BODY,
+} from './copy.js';
+import {
+  crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS,
+  listZoneState, missingRoots, withoutRoot, sharedToTicks,
+} from './folders-ui.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
@@ -22,6 +30,10 @@ const state = {
   // cannot leave a stale folder on screen. Set by openFolderScreen(name) only;
   // cleared by closeFolderScreen(), the popstate handler, and renderProjects
   // when the name no longer resolves to a container.
+  // The agent's answer for the shared set: an array of
+  // { path, mode, excludes, new_folders, missing }, or null = it has not told
+  // us. null and absent mean the same thing everywhere - see listZoneState.
+  shared: null,
 };
 
 // Ended records announced this open. Announcing also dismisses at the agent,
@@ -392,6 +404,61 @@ function buildRow(p, rs) {
   return btn;
 }
 
+// The way out (T100). `withAction` is false for 'unknown-shared' only - see
+// the safety rule on onChooseFolders; it is the one state that must NOT
+// offer the picker.
+function buildEmptyState({ title, body }, withAction) {
+  const el = document.createElement('div');
+  el.className = 'empty';
+  const t = document.createElement('div');
+  t.className = 'empty-title';
+  t.textContent = title;
+  el.appendChild(t);
+  const b = document.createElement('div');
+  b.className = 'empty-body';
+  b.textContent = body;
+  el.appendChild(b);
+  if (withAction) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'empty-action';
+    btn.dataset.choose = '1';
+    btn.textContent = CHOOSE_FOLDERS_BUTTON;
+    el.appendChild(btn);
+  }
+  return el;
+}
+
+// One gone root's notice (T100), additive above the rows - see the
+// precedence rules in renderProjects. `.share-new` is reused wholesale for
+// REMOVE: same bordered, unfilled, colourless language as everywhere else in
+// this app, and no new rule to carry.
+function buildGoneNotice(root) {
+  const el = document.createElement('div');
+  el.className = 'gone';
+  const name = crumbSegments(root.path).at(-1).label;
+  const t = document.createElement('div');
+  t.className = 'gone-title';
+  t.textContent = rootGoneTitle(name);
+  el.appendChild(t);
+  const p = document.createElement('div');
+  p.className = 'gone-path';
+  p.textContent = root.path;
+  el.appendChild(p);
+  const b = document.createElement('div');
+  b.className = 'gone-body';
+  b.textContent = ROOT_GONE_BODY;
+  el.appendChild(b);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'share-new';
+  btn.dataset.removeRoot = root.path;
+  btn.setAttribute('aria-label', `Remove ${name}`);
+  btn.textContent = REMOVE_BUTTON;
+  el.appendChild(btn);
+  return el;
+}
+
 // The project name the launch banner is about, or null. Held because the
 // launch banner is the only one with no natural end: nothing but load()
 // ever hid it, so "- start requested." stayed on screen until the owner
@@ -745,7 +812,20 @@ function renderProjects() {
     ? null
     : (state.projects.find((p) => p.name === state.openFolder && p.container) ?? null);
   if (state.openFolder !== null && !open) state.openFolder = null;
-  renderBackBar(open);
+
+  // Section 2a of T100's spec, driven by one call - see listZoneState for the
+  // precedence order and why "unreachable" must beat every shared-set check.
+  const zone = listZoneState({
+    reachable: state.reachable,
+    openFolderEmpty: !!open && (open.children || []).length === 0,
+    projectCount: state.projects.length,
+    shared: state.shared,
+  });
+  // With no usable root, POST /api/projects can only answer base_unavailable,
+  // and a control that can only fail is the failed screen this task exists
+  // to delete.
+  const canCreate = zone.kind !== 'nothing-shared' && zone.kind !== 'all-gone' && zone.kind !== 'unknown-shared';
+  renderBackBar(open, canCreate);
 
   const rows = open
     ? (open.children || []).map((c) => {
@@ -817,29 +897,43 @@ function renderProjects() {
   }
   runCount.textContent = String(tiles.length);
 
-  if (state.reachable === 'waiting') {
+  // State 2 (T100): additive, above the rows it never blanks. An unreachable
+  // agent never gets to accuse a folder of being gone, and the drill-in
+  // screen is scoped to one container - a whole-share notice there is noise.
+  if (state.reachable === true && state.openFolder === null) {
+    for (const root of missingRoots(state.shared)) listEl.appendChild(buildGoneNotice(root));
+  }
+
+  if (zone.kind === 'waiting') {
     const msg = document.createElement('div');
     msg.className = 'msg';
     msg.textContent = 'Waiting for the PC. This screen will fill in on its own as soon as the agent answers.';
     listEl.appendChild(msg);
-  } else if (state.reachable === false) {
+  } else if (zone.kind === 'unreachable') {
     const msg = document.createElement('div');
     msg.className = 'msg';
     msg.textContent = 'Cannot reach the agent.';
     listEl.appendChild(msg);
-  } else if (open && (open.children || []).length === 0) {
+  } else if (zone.kind === 'folder-empty') {
     // a marked container can legitimately hold no project folders
     const msg = document.createElement('div');
     msg.className = 'msg';
     msg.textContent = 'This folder has no projects in it.';
     listEl.appendChild(msg);
-  } else if (state.projects.length === 0) {
-    const msg = document.createElement('div');
-    msg.className = 'msg';
-    msg.textContent = "No project folders found. Check the agent's base folder on the PC.";
-    listEl.appendChild(msg);
-  } else {
+  } else if (zone.kind === 'rows') {
     for (const { p, rs } of list) listEl.appendChild(buildRow(p, rs));
+  } else if (zone.kind === 'unknown-shared') {
+    // The one state that must NOT offer the picker - see the safety rule on
+    // onChooseFolders. Entering blind would open the picker with initial =
+    // [] and a SAVE from there wipes every shared folder.
+    listEl.appendChild(buildEmptyState(SHARED_UNKNOWN, false));
+  } else if (zone.kind === 'nothing-shared') {
+    listEl.appendChild(buildEmptyState(NOTHING_SHARED, true));
+  } else if (zone.kind === 'all-gone') {
+    listEl.appendChild(buildEmptyState(ALL_ROOTS_GONE, true));
+  } else if (zone.kind === 'empty-day-one') {
+    const names = zone.roots.map((r) => crumbSegments(r.path).at(-1).label);
+    listEl.appendChild(buildEmptyState({ title: emptyDayOneTitle(names), body: EMPTY_DAY_ONE_BODY }, true));
   }
 
   allCount.textContent = String(state.projects.length);
@@ -890,13 +984,17 @@ function childProject(container, child) {
 
 
 // open = the resolved container entry (from renderProjects), or null.
-function renderBackBar(open) {
+// canCreate defaults true so every existing call/test that only ever passed
+// `open` keeps working with no edit - T100 is the only caller that passes
+// false, and only when nothing usable is shared (see renderProjects).
+function renderBackBar(open, canCreate = true) {
   document.getElementById('backbar').hidden = open === null;
   // The + creates a TOP-LEVEL project only - the agent's create route is one
   // level deep, which is what the "No \ or / - projects are created directly
   // in Repos" copy already says - so inside a folder it has nothing true to
-  // offer.
-  document.getElementById('newproj').hidden = open !== null;
+  // offer. Also hidden at the top level when there is no usable root to
+  // create into - a control that can only fail is not an affordance.
+  document.getElementById('newproj').hidden = open !== null || !canCreate;
   if (open === null) return;
   document.getElementById('backbar-name').textContent = open.name;
   document.getElementById('backbar-path').textContent = open.path;
@@ -914,7 +1012,7 @@ async function load() {
   state.results = new Map();
   hideBanner();
 
-  const [proj, sess] = await Promise.allSettled([getProjects(), getSessions()]);
+  const [proj, sess, ack] = await Promise.allSettled([getProjects(), getSessions(), getAcknowledged()]);
   const p = proj.value; // api.js never throws - always fulfilled
   if (p.ok) {
     state.projects = p.data.projects;
@@ -942,6 +1040,12 @@ async function load() {
   state.sessions = s.ok ? s.data.sessions : null;
   reportEnded();
 
+  // A failed acknowledge call is not fatal and gets no banner: a project list
+  // that loaded fine leaves state.shared = null, precedence rule 4 wins
+  // whenever there are rows, and the screen is byte-identical to today.
+  const a = ack.value;
+  state.shared = a.ok && Array.isArray(a.data.shared_folders) ? a.data.shared_folders : null;
+
   render();
   // `=== true` and not a truthiness test: 'waiting' is truthy, and on that
   // path state.sessions is null anyway, so this would only ever be a no-op
@@ -952,6 +1056,13 @@ async function load() {
 }
 
 async function onProjectTap(e) {
+  // The two T100 checks come first, each with an early return, so neither
+  // can fall through to [data-folder] or [data-project].
+  const choose = e.target.closest('[data-choose]');
+  if (choose) { onChooseFolders(); return; }
+  const remove = e.target.closest('[data-remove-root]');
+  if (remove) { onRemoveRoot(remove.dataset.removeRoot); return; }
+
   // A tap on a folder row while a confirm is open answers the question
   // instead of opening the folder: the history invariant (see folderPushed)
   // requires the confirm's entry to always be the top one, and renderProjects' stale-
@@ -998,6 +1109,39 @@ async function onProjectTap(e) {
   // check at 3s is what brings it in.
   if (res.ok && res.status === 202) confirmStarting(true);
   watchSessions();
+}
+
+// T100's two new #projects delegate targets - onProjectTap's first two
+// checks, above.
+
+async function onChooseFolders() {
+  if (state.shared === null || state.shared === undefined) return; // never enter blind
+  const picker = document.getElementById('picker');
+  picker.hidden = true;
+  hideConn(); // the status line belongs to the project list
+  await showFolders(sharedToTicks(state.shared));
+  picker.hidden = false;
+  await load(); // the agent decides what is shared now, never an optimistic write
+}
+
+// Guarded against a double tap the same way onSave is: one in-flight write
+// at a time.
+let removingRoot = false;
+
+async function onRemoveRoot(rootPath) {
+  if (removingRoot) return;
+  removingRoot = true;
+  const res = await putShared(withoutRoot(state.shared, rootPath));
+  removingRoot = false;
+  if (res.ok) {
+    state.shared = res.data.shared_folders ?? null;
+    await load();
+    return;
+  }
+  // The existing banner channel, no new one. write_failed and
+  // config_unreadable are already in ERROR_COPY; a 401 is handled by api.js
+  // re-locking, exactly as everywhere else.
+  setErrorBanner(res.code, res.status);
 }
 
 // Same order and same reason as onTileTap's CANCEL branch: mutate and render
@@ -1297,6 +1441,7 @@ function shareEls() {
     listCount: document.getElementById('share-list-count'),
     list: document.getElementById('share-list'),
     save: document.getElementById('share-save'),
+    skip: document.getElementById('share-skip'),
   };
 }
 
@@ -1515,7 +1660,9 @@ function renderShare() {
       msg.textContent = 'No folders in here.';
       el.list.appendChild(msg);
     }
-    for (const f of share.rows) el.list.appendChild(buildFolderRow(f, share.path, share.ticks));
+    // Moved above the row loop (T100): a cap notice printed under 500 rows
+    // is not a notice - the owner would have to scroll past all of them to
+    // read it.
     const note = truncatedNote(share.total, share.rows.length);
     if (note) {
       const t = document.createElement('div');
@@ -1523,6 +1670,7 @@ function renderShare() {
       t.textContent = note;
       el.list.appendChild(t);
     }
+    for (const f of share.rows) el.list.appendChild(buildFolderRow(f, share.path, share.ticks));
   }
 
   el.save.disabled = share.ticks.length === 0 || share.busy;
@@ -1651,6 +1799,7 @@ function finishFolders() {
   els.picked.removeEventListener('click', onSharePickedClick);
   els.up.removeEventListener('click', onShareUpClick);
   els.save.removeEventListener('click', onSave);
+  els.skip.removeEventListener('click', onSkipClick);
   window.removeEventListener('popstate', onFoldersPop);
   // Same double-tap discipline as cancelOpenConfirm: never more than one go().
   if (share.pushed > 0) {
@@ -1688,6 +1837,14 @@ async function onSave() {
   share.errorIndex = result.errorIndex;
   share.error = { text: result.message, retry: false };
   renderShare();
+}
+
+// SKIP is finishFolders() and nothing else - it must not call putShared. Same
+// guard as onSave: let an in-flight SAVE finish and tear the screen down
+// itself, rather than racing it.
+function onSkipClick() {
+  if (share.busy) return;
+  finishFolders();
 }
 
 function onShareListChange(e) {
@@ -1735,9 +1892,16 @@ function showFolders(initial) {
   // costume, so a re-entrant call reloads before handing back the same promise.
   if (pendingFolders) { reloadShareLevel(); return pendingFolders; }
 
-  share.ticks = (initial || []).map((t) => ({
-    path: t.path, name: t.name, newFolders: t.newFolders === 'hide' ? 'hide' : 'show',
-  }));
+  // mode/excludes are carried through ONLY when the caller supplied them
+  // (T100's onChooseFolders, via sharedToTicks) - a tick made by ticking a
+  // row in this screen never has them, and that shape must stay exactly
+  // 3 keys for sharedBody's own defaulting to apply.
+  share.ticks = (initial || []).map((t) => {
+    const tick = { path: t.path, name: t.name, newFolders: t.newFolders === 'hide' ? 'hide' : 'show' };
+    if (t.mode !== undefined) tick.mode = t.mode;
+    if (t.excludes !== undefined) tick.excludes = t.excludes;
+    return tick;
+  });
   share.path = null;
   share.parent = null;
   share.rows = [];
@@ -1748,11 +1912,16 @@ function showFolders(initial) {
   share.pushed = 0;
 
   const els = shareEls();
+  // Entering with nothing shared is a skip; entering from state 4 with roots
+  // already shared is a cancel - calling that "skip" would read as "skip my
+  // existing folders".
+  els.skip.textContent = (initial || []).length === 0 ? PICKER_SKIP : PICKER_CANCEL;
   els.list.addEventListener('change', onShareListChange);
   els.list.addEventListener('click', onShareListClick);
   els.picked.addEventListener('click', onSharePickedClick);
   els.up.addEventListener('click', onShareUpClick);
   els.save.addEventListener('click', onSave);
+  els.skip.addEventListener('click', onSkipClick);
   window.addEventListener('popstate', onFoldersPop);
 
   pendingFolders = new Promise((resolve) => {
@@ -1795,6 +1964,10 @@ async function ensureAccepted() {
   // the picker and without opening the accept screen - is what stops two
   // screens racing onto the page at once.
   if (!res.ok && res.status === 401) return;
+  // Stashed here too (load() also does this) so the very first render after
+  // unlock is not "unknown" - ensureAccepted has already fetched this exact
+  // answer, and waiting for the first load() would draw one wrong frame.
+  state.shared = res.ok && Array.isArray(res.data.shared_folders) ? res.data.shared_folders : null;
   // Pinned verbatim by the suite - see the comment above it. The picker call
   // below reads the same pure answer rather than restructuring this line.
   const firstRun = screenAfterUnlock(res) === 'accept';

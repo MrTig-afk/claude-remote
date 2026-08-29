@@ -90,6 +90,36 @@ function isPlainExcludeName(name) {
 }
 
 /**
+ * The shared set as the phone needs to see it: every root the agent is
+ * actually using, plus whether it still resolves. Report only - it never
+ * writes, and it is never called from the session poll.
+ *
+ * `missing` is true ONLY when lstat says ENOENT or ENOTDIR. Any other failure
+ * (a permissions blip, a busy volume) reports missing:false: accusing a folder
+ * of being deleted because one stat failed is exactly the lie this screen
+ * exists to remove. lstat, never stat, matching every other reparse-point
+ * guard in this codebase - but a successful lstat reports missing:false
+ * whatever the type, because a container-mode walk through a junction still
+ * lists.
+ *
+ * ponytail: one lstat per root, at most 32, on a route hit at boot, on
+ * REFRESH and on visibilitychange - never on the 5s poll.
+ */
+export function describeSharedRoots(roots) {
+  return roots.map((r) => {
+    let missing = false;
+    try {
+      fs.lstatSync(r.path);
+    } catch (err) {
+      if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) missing = true;
+    }
+    return {
+      path: r.path, mode: r.mode, excludes: r.excludes, new_folders: r.new_folders, missing,
+    };
+  });
+}
+
+/**
  * One entry, all checks except overlap (which is cross-entry).
  * `drives` is listDrives()'s `drives` array. `systemDirs` is systemDirsFor()'s
  * output. Pure except for the filesystem calls resolveRealFolderPath makes.

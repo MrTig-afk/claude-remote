@@ -4,7 +4,7 @@ import { resolveSharedFolders, isAcknowledged, acknowledge } from './config.js';
 import { listProjects, createProject, rootsFrom } from './projects.js';
 import { listDrives } from './drives.js';
 import { listFolders } from './folders.js';
-import { putSharedFolders } from './shared.js';
+import { putSharedFolders, describeSharedRoots } from './shared.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
@@ -173,7 +173,14 @@ export async function handleRequest(req, res, ctx) {
     // this route does, so there is nothing to parse.
     if (url.pathname === '/api/acknowledge') {
       if (req.method === 'GET') {
-        sendJson(res, 200, { acknowledged: isAcknowledged(ctx.configPath) });
+        // shared_folders is T100's OQ-A: the phone cannot otherwise tell
+        // "nothing shared" from "shared, empty", or notice a root that has
+        // vanished. rootsFrom(ctx), never a fresh config read - it is the
+        // same set /api/projects lists from, so the two can never disagree.
+        sendJson(res, 200, {
+          acknowledged: isAcknowledged(ctx.configPath),
+          shared_folders: describeSharedRoots(rootsFrom(ctx)),
+        });
         return;
       }
       if (req.method === 'POST') {
