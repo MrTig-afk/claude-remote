@@ -3454,3 +3454,36 @@ test('no passcode field group is a <label>, or tapping its eye types into the fi
   const groups = [...html.matchAll(/<div class="gate-field"[^>]*>/g)];
   assert.ok(groups.length >= 5, `expected five field groups, got ${groups.length}`);
 });
+
+test('every local module the app imports is in the shell lists, or the app cannot boot offline', () => {
+  // RED WHEN: a new ES module is added and nobody remembers these two lists.
+  // The existing sibling test only checks they match EACH OTHER, and they did
+  // - both omitting update-ui.js. The consequences are two, and neither shows
+  // up in a suite: app.js's static import of a file the worker never cached
+  // fails outright offline, so the PWA does not boot at all; and a file
+  // outside SHELL_FILES is not in the hash, so editing it alone does not move
+  // the cache key and the phone keeps yesterday's copy. Found by reading the
+  // lists after a commit, not by a failing test.
+  const modules = new Set();
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = read(rel);
+    for (const m of src.matchAll(/(?:^|\n)\s*(?:import|export)[\s\S]*?from\s+'(\.\/[^']+)'/g)) {
+      const dep = m[1].replace(/^\.\//, '');
+      modules.add(dep);
+      walk(dep);
+    }
+  };
+  walk('app.js');
+  assert.ok(modules.size >= 5, `expected app.js to import several modules, found ${modules.size}`);
+
+  const shellSrc = fs.readFileSync(path.join(AGENT_DIR, 'static.js'), 'utf8');
+  const shell = new Set(
+    [...shellSrc.match(/const SHELL_FILES = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]),
+  );
+  for (const mod of modules) {
+    assert.ok(shell.has(mod), `${mod} is imported by the app but is not in static.js's SHELL_FILES`);
+  }
+});

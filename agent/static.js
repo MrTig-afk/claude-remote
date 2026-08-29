@@ -27,6 +27,7 @@ const CONTROL_CHARS = /[\x00-\x1f]/;
 // a test, not by hope.
 const SHELL_FILES = [
   'index.html', 'app.css', 'app.js', 'api.js', 'lock.js', 'copy.js', 'folders-ui.js',
+  'update-ui.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
