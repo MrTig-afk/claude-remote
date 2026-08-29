@@ -244,24 +244,20 @@ function verifyPasscode(passcode, stored) {
   return crypto.timingSafeEqual(derived, storedHash);
 }
 
-export function setPasscode(ctx, passcode, confirm) {
-  // Checked first so a second caller learns nothing about format rules from
-  // a set attempt once a passcode already exists.
-  if (isConfigured(ctx)) return { ok: false, status: 409, error: 'already_configured' };
-  if (!isSixDigits(passcode)) return { ok: false, status: 400, error: 'malformed_passcode' };
-  if (!isSixDigits(confirm)) return { ok: false, status: 400, error: 'malformed_passcode' };
-  if (passcode !== confirm) return { ok: false, status: 400, error: 'passcode_mismatch' };
-  if (WEAK.has(passcode)) return { ok: false, status: 400, error: 'passcode_too_weak' };
-
+// A fresh salt and a fresh hash, written atomically. Shared by the first-run
+// set and by a later change, so the two can never disagree about the KDF
+// parameters or the file shape - a change that wrote a different N would be
+// readable by nothing.
+function writePasscodeFile(ctx, passcode) {
   const salt = crypto.randomBytes(16);
-  // Global sync KDF, ~15-40ms of event loop per set/unlock call. Refused
-  // (429) attempts never reach it, so the worst case per backoff window is
-  // the 3 free attempts. Move to crypto.scrypt async if a second concurrent
-  // user of this agent ever exists.
+  // Global sync KDF, ~15-40ms of event loop per set/unlock/change call.
+  // Refused (429) attempts never reach it, so the worst case per backoff
+  // window is the 3 free attempts. Move to crypto.scrypt async if a second
+  // concurrent user of this agent ever exists.
   const hash = crypto.scryptSync(passcode, salt, KEYLEN, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P });
 
   const passcodePath = ctx.passcodePath || getPasscodeFilePath();
-  const written = writeJsonAtomic(passcodePath, {
+  return writeJsonAtomic(passcodePath, {
     version: PASSCODE_VERSION,
     algo: 'scrypt',
     N: SCRYPT_N,
@@ -272,8 +268,18 @@ export function setPasscode(ctx, passcode, confirm) {
     hash: hash.toString('base64'),
     created_at: new Date((ctx.now || Date.now)()).toISOString(),
   }, 'passcode file');
+}
 
-  if (!written) return { ok: false, status: 500, error: 'internal_error' };
+export function setPasscode(ctx, passcode, confirm) {
+  // Checked first so a second caller learns nothing about format rules from
+  // a set attempt once a passcode already exists.
+  if (isConfigured(ctx)) return { ok: false, status: 409, error: 'already_configured' };
+  if (!isSixDigits(passcode)) return { ok: false, status: 400, error: 'malformed_passcode' };
+  if (!isSixDigits(confirm)) return { ok: false, status: 400, error: 'malformed_passcode' };
+  if (passcode !== confirm) return { ok: false, status: 400, error: 'passcode_mismatch' };
+  if (WEAK.has(passcode)) return { ok: false, status: 400, error: 'passcode_too_weak' };
+
+  if (!writePasscodeFile(ctx, passcode)) return { ok: false, status: 500, error: 'internal_error' };
 
   writeAttempts(ctx, 0, 0);
 
@@ -325,6 +331,58 @@ export function attemptUnlock(ctx, passcode) {
   writeAttempts(ctx, 0, 0);
   const issued = issueToken(ctx);
   return { ok: true, status: 200, token: issued.token, expiresAt: issued.expiresAtIso };
+}
+
+/**
+ * Changes an existing passcode, and signs EVERY device out - the one that
+ * asked included, which is why nothing here issues a replacement token. That
+ * is the artifact's own promise on this screen ("Every device is signed out,
+ * including this one."), and issuing a fresh token would quietly make it a
+ * lie for the device holding it.
+ *
+ * A wrong `current` is a guess at the real credential, so it goes through the
+ * SAME limiter as the gate: same counter, same backoff, same
+ * never-permanent-lockout rule. The route above it already requires a valid
+ * token, so anyone reaching here is inside - the limiter is here because this
+ * is the same secret, not because it is the last line.
+ */
+export function changePasscode(ctx, current, next, confirm) {
+  const stored = readPasscodeFile(ctx);
+  if (!stored) return { ok: false, status: 403, error: 'not_configured' };
+
+  const now = (ctx.now || Date.now)();
+  const { failures, lockedUntil } = readAttempts(ctx);
+  if (now < lockedUntil) {
+    return { ok: false, status: 429, error: 'too_many_attempts', retryAfterMs: lockedUntil - now };
+  }
+
+  // Same reasoning as attemptUnlock: a malformed body is not a guess and must
+  // not cost the owner an attempt.
+  if (!isSixDigits(current) || !isSixDigits(next) || !isSixDigits(confirm)) {
+    return { ok: false, status: 400, error: 'malformed_passcode' };
+  }
+
+  if (!verifyPasscode(current, stored)) {
+    const newFailures = failures + 1;
+    const wait = backoffMs(newFailures);
+    if (!writeAttempts(ctx, newFailures, wait > 0 ? now + wait : 0)) {
+      return { ok: false, status: 500, error: 'internal_error' };
+    }
+    return { ok: false, status: 401, error: 'passcode_incorrect', failures: newFailures, retryAfterMs: wait };
+  }
+
+  // Checked only AFTER the current passcode is proven, so a caller who cannot
+  // supply it learns nothing about the rules the new one must satisfy.
+  if (next !== confirm) return { ok: false, status: 400, error: 'passcode_mismatch' };
+  if (WEAK.has(next)) return { ok: false, status: 400, error: 'passcode_too_weak' };
+
+  if (!writePasscodeFile(ctx, next)) return { ok: false, status: 500, error: 'internal_error' };
+
+  writeAttempts(ctx, 0, 0);
+  // AFTER the write, never before: a failed write must leave the owner
+  // holding the session they already had, on the passcode they still have.
+  (ctx.tokens || defaultTokens).clear();
+  return { ok: true, status: 200 };
 }
 
 export function authStatus(ctx) {

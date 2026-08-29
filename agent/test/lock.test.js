@@ -14,6 +14,15 @@ function makeEl() {
     disabled: false,
     textContent: '',
     value: '',
+    // The eye toggle's surface: it flips the input's type, and on the button
+    // it moves aria-pressed, aria-label and the <use href>. dataset.pinName
+    // is the noun the label is built from.
+    type: 'password',
+    dataset: { pinName: 'passcode' },
+    attrs: {},
+    setAttribute(k, v) { this.attrs[k] = v; },
+    getAttribute(k) { return this.attrs[k]; },
+    querySelector() { return this._use || (this._use = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } }); },
     focus() {}, // lock.js calls e.pin.focus() on the RETRY re-probe path
     addEventListener(type, fn) {
       if (!listeners.has(type)) listeners.set(type, new Set());
@@ -30,7 +39,9 @@ function makeEl() {
 
 function makeDocument({ visibilityState = 'visible' } = {}) {
   const ids = ['picker', 'gate', 'gate-form', 'gate-label', 'gate-title',
-    'gate-sub', 'gate-go', 'gate-msg', 'pin', 'field-confirm', 'pin-confirm'];
+    'gate-sub', 'gate-go', 'gate-msg', 'pin', 'field-confirm', 'pin-confirm',
+    // The two eye toggles, found by the `<input id>-eye` convention.
+    'pin-eye', 'pin-confirm-eye'];
   const map = new Map(ids.map((id) => [id, makeEl()]));
   // document itself, not just its elements: the gate's own retry loop reads
   // visibilityState so it does not sit retrying in the background, and
@@ -301,4 +312,83 @@ test('the gate does not retry while the app is in the background', async (t) => 
   doc.visibilityState = 'visible';
   assert.equal(doc.docListenerCount('visibilitychange'), 1,
     'the gate must listen for the way back, or it freezes for good');
+});
+
+// --- The eye toggle on the gate (Lane 1 and Lane 2 both draw one) ----------
+
+test('the eye reveals ONE field, and the other stays masked', async () => {
+  // RED WHEN: one toggle starts driving both fields, or the icon swaps while
+  // aria-pressed does not - a reveal a screen reader cannot hear.
+  stubFetch({ '/api/auth/status': okStatus({ configured: false, retry_after_ms: 0 }) });
+  const doc = makeDocument();
+  globalThis.document = doc;
+
+  const mod = await freshLock();
+  mod.showGate();
+  await flush();
+  assert.equal(doc.el('field-confirm').hidden, false, 'first run shows the CONFIRM field');
+
+  doc.el('pin-eye').fire('click');
+  assert.equal(doc.el('pin').type, 'text');
+  assert.equal(doc.el('pin-eye').getAttribute('aria-pressed'), 'true');
+  assert.match(doc.el('pin-eye').getAttribute('aria-label'), /^Hide /);
+  assert.equal(doc.el('pin-eye').querySelector().attrs.href, '#i-eye');
+  assert.equal(doc.el('pin-confirm').type, 'password', 'the other field must not follow');
+
+  doc.el('pin-eye').fire('click');
+  assert.equal(doc.el('pin').type, 'password');
+  assert.equal(doc.el('pin-eye').getAttribute('aria-pressed'), 'false');
+  assert.equal(doc.el('pin-eye').querySelector().attrs.href, '#i-eyeoff');
+});
+
+test('a wrong passcode clears the field AND re-masks it', async () => {
+  // RED WHEN: clearInputs empties the box but leaves it revealed, so the next
+  // person to pick the phone up finds a passcode field set to show its digits.
+  stubFetch({
+    '/api/auth/status': okStatus({ configured: true, retry_after_ms: 0 }),
+    '/api/auth/unlock': async () => ({
+      ok: false, status: 401, json: async () => ({ error: 'passcode_incorrect', failures: 1, retry_after_ms: 0 }),
+    }),
+  });
+  const doc = makeDocument();
+  globalThis.document = doc;
+
+  const mod = await freshLock();
+  mod.showGate();
+  await flush();
+
+  doc.el('pin').value = '481902';
+  doc.el('pin-eye').fire('click');
+  assert.equal(doc.el('pin').type, 'text', 'fixture: the field is revealed before the failure');
+
+  doc.el('gate-form').fire('submit');
+  await flush();
+
+  assert.equal(doc.el('pin').value, '');
+  assert.equal(doc.el('pin').type, 'password', 'a cleared field must be re-masked');
+  assert.equal(doc.el('pin-eye').getAttribute('aria-pressed'), 'false');
+});
+
+test('the eye is unwired on the way out, so a second showGate cannot stack a listener', async () => {
+  // RED WHEN: the eye listeners outlive the run. showGate() runs again after
+  // a token expiry, and a listener left behind holds the previous run's
+  // closure over the same node - two toggles per tap, which cancel out and
+  // look like a dead control.
+  stubFetch({
+    '/api/auth/status': okStatus({ configured: true, retry_after_ms: 0 }),
+    '/api/auth/unlock': okToken,
+  });
+  const doc = makeDocument();
+  globalThis.document = doc;
+
+  const mod = await freshLock();
+  const gate = mod.showGate();
+  await flush();
+  assert.equal(doc.el('pin-eye').listenerCount('click'), 1);
+
+  doc.el('pin').value = '481902';
+  doc.el('gate-form').fire('submit');
+  await gate;
+
+  assert.equal(doc.el('pin-eye').listenerCount('click'), 0, 'the eye must be unwired with the rest');
 });

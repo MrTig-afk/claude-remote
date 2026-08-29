@@ -690,6 +690,196 @@ body {
    var(--danger) for 'this ends something'. */
 .set-btn-solid { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 600; }
 
+/* Home grouped by folder (Lane 9, option C) ---------------------------------
+   One collapsible header per shared folder, below the running zone and never
+   inside it. The header is a row in its own right, so it keeps the app's 44px
+   tap floor and the same left-icon anatomy as everything else. */
+.acc-hd {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 13px;
+  border-top: 1px solid var(--line);
+  font: inherit;
+  color: var(--muted);
+  background: none;
+  appearance: none;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+.acc-hd .ico { color: var(--accent-2); }
+.acc-name { flex-grow: 1; font-size: 13px; color: var(--text-2); min-width: 0; overflow-wrap: anywhere; }
+/* A folder with a live session says so in the accent - it is the one fact on
+   the header worth the colour. One with none shows just its total. */
+.acc-run { font-size: 11px; color: var(--accent); white-space: nowrap; }
+.acc-total { font-size: 11px; color: var(--dim); white-space: nowrap; }
+/* The chevron points right when closed and down when open, so the header
+   states which way a tap will go. Matches the drill-in chevron's direction
+   rule: right means "there is more this way". */
+.acc-chev { flex-shrink: 0; color: var(--accent-2); font-size: 14px; transition: transform 140ms ease; }
+.acc-hd.open .acc-chev { transform: rotate(90deg); }
+/* The indent is what makes a project read as being INSIDE the folder above
+   it rather than as another header. */
+.acc-body { padding-left: 8px; }
+
+/* Editing one shared folder (Lane 3, step 2) --------------------------------
+   Amber, not red: this warns about a consequence, it does not end anything.
+   The artifact's own note - it "warns rather than blocks", because silently
+   orphaning a live session is the bug it exists to prevent. */
+.banner.set-orphan { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 8px; color: var(--warn); }
+.banner.set-orphan .ico { margin-top: 2px; }
+/* The one extra thing a row here says that a picker row does not: this
+   folder has a session running in it right now. */
+.root-live { font-size: 10px; color: var(--accent); white-space: nowrap; }
+
+/* Updates (Lane 5) ----------------------------------------------------------
+   The dot on the gear, and the same dot repeated on the row that holds the
+   news, "so the trail never breaks". NO animation on either: the artifact
+   lists that as a decision, not an omission - the quiet update route was
+   chosen deliberately and a pulsing dot is a nag.
+   The ring is the page background, so the dot reads as a marker sitting on
+   the icon rather than a blob touching it. */
+.updot {
+  position: absolute;
+  top: -1px;
+  right: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.settings-open { position: relative; }
+/* On a settings row the ring is the row's own raised background instead, or
+   it would punch a page-coloured hole in the row. */
+.set-row { position: relative; }
+.set-row .updot { top: 6px; right: auto; left: 26px; box-shadow: 0 0 0 2px var(--raised); }
+/* The row that carries the news reads in the accent, the way the artifact
+   draws it - it is the one row on the screen with something to say. */
+.set-row.has-update .row-status { color: var(--accent); }
+
+.banner.set-ready { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 4px; color: var(--accent); }
+.banner.set-ready .ico { margin-top: 2px; }
+.notes { display: flex; flex-direction: column; gap: 9px; padding: 12px 13px 4px; }
+.note { display: flex; gap: 9px; font-size: 11px; line-height: 1.55; color: var(--text-2); }
+/* '+' for something added, '~' for something changed - the artifact's own two
+   marks. Tabular so the marks line up down the column. */
+.note-mark { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.note-mark.add { color: var(--accent); }
+.note-mark.chg { color: var(--warn); }
+
+/* Shared folders (Lane 3) ---------------------------------------------------
+   The rows are the app's ordinary .row.folder, so this screen inherits the
+   row anatomy the whole app shares. Only the remove control and the two
+   banners are new. */
+
+/* The X that removes a shared root (Lane 8, second half). Its own 44px
+   target beside the row, never inside it - Lane 8 is explicit that the
+   remove X and the unticked-state X "never appear on the same row", so this
+   one must not be mistakable for a checkbox. */
+.shared-remove {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--danger);
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* A root the agent cannot find is dim and unenterable, but its remove X
+   stays full strength: removing it is the ONE thing still worth doing. */
+.row.folder.shared-gone-row .row-name { color: var(--dim); }
+.row.folder.shared-gone-row .row-status { color: var(--dim); }
+/* The icon dims with the row. Left on .set-ico's accent green it would be the
+   brightest thing on a row that is reporting a broken folder. */
+.row.folder.shared-gone-row .set-ico { color: var(--dim); }
+
+/* The tappable part of a shared-folder row: everything the remove X is not.
+   Grows to fill, so the whole row minus the X opens the editor - a 44px band
+   for the chevron alone would leave most of the row inert and unexplained. */
+.shared-open {
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 44px;
+  padding: 0 4px;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.set-confirm { margin-top: 12px; }
+/* The only destructive confirmation outside the session tiles, so it is the
+   one place on a settings screen that earns var(--danger). */
+.banner.set-danger { display: flex; align-items: flex-start; gap: 9px; margin: 0; color: var(--danger); }
+.banner.set-gone { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 12px; color: var(--danger); }
+.set-btn-danger { color: var(--danger); border-color: var(--danger-2); }
+/* The quiet explanatory note - muted, not amber: it states a fact about
+   where a button goes, not a consequence. */
+.banner.set-note { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0 0; color: var(--muted); }
+.banner.set-note .ico { color: var(--muted-2); margin-top: 2px; }
+
+/* Change passcode (Lane 7). The fields themselves are the gate's - .gate-field,
+   .gate-fieldlabel and .pin - so the two passcode screens are the same screen
+   twice, which is how the artifact draws them. Only the layout around them is
+   new.
+   16px between groups matches the gate's own column gap; the artifact's
+   equivalent is its .sec.sp margin. The button's own margin-top is dropped so
+   that one gap governs, rather than 16 plus 10. */
+.pw-form { display: flex; flex-direction: column; gap: 16px; padding-top: 12px; }
+.pw-form .set-btn { margin-top: 0; }
+
+/* The eye sits to the RIGHT of the digits, where the artifact draws it, and
+   is its own 44px target - revealing a field must never mean tapping into it
+   and moving the caret. */
+.pin-row { display: flex; align-items: center; gap: 8px; }
+.pin-row .pin { flex-grow: 1; min-width: 0; }
+.pin-eye {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Lit while that field is readable, so a revealed passcode is visible as a
+   STATE and not only as the glyph swap. --accent-2, not --accent: tokens.md
+   keeps the full accent for active/running. */
+.pin-eye[aria-pressed="true"] { color: var(--accent-2); }
+
+/* The mirror of .banner.set-safe: that one says what a tap leaves alone, this
+   one says what it costs, so it takes the caution colour rather than the
+   accent. Not var(--danger) - tokens.md reserves that for 'this ends
+   something', and this ends a session, not a folder or a run.
+   The WORDS take the caution colour, not just the icon: the artifact's own
+   warn banner is amber throughout, and an amber icon in front of muted grey
+   text reads as decoration rather than as a warning. The icon inherits, so
+   there is no second colour rule. */
+.banner.set-warn { display: flex; align-items: flex-start; gap: 9px; margin: 16px 0 0; color: var(--warn); }
+.banner.set-warn .ico { margin-top: 2px; }
+
 .about-mark  { color: var(--accent); }
 .about-name  { font-size: 13px; font-weight: 700; margin-top: 9px; color: var(--text); }
 .about-ver   { font-size: 10px; color: var(--dim); margin-top: 5px; }
@@ -867,9 +1057,55 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-/* Same accent T96's .accept-consent input uses - the same control in the
-   same app. */
-.share-tick input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
+/* Lane 8: the tick and the X are drawn by the .chk span below, so the real
+   input is hidden VISUALLY ONLY - never display:none and never hidden, both
+   of which take it out of the tab order and off the accessibility tree. It
+   stays the thing that is focused, toggled, announced and associated with the
+   label; .chk is only pixels.
+   Kept at 18px and stacked under .chk rather than 1px-clipped, so a browser
+   that fails to load the stylesheet still shows a usable checkbox. */
+.share-tick { position: relative; }
+.share-tick input {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  opacity: 0;
+  accent-color: var(--accent);
+}
+
+/* The drawn control. Both glyphs are in the DOM and CSS picks one, so
+   toggling is a paint and never a rebuild - which is what lets the tick
+   animate its own GLYPH, the thing a native checkbox cannot do (the ceiling
+   the tick-pop rule used to state). */
+.chk {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--dim);
+  border-radius: 4px;
+  color: transparent;
+  pointer-events: none;   /* the input underneath takes every tap */
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.chk > .ico { grid-area: 1 / 1; width: 10px; height: 10px; stroke-width: 3; }
+.chk-tick { transform: scale(0.4); opacity: 0; transition: transform 160ms cubic-bezier(0.2, 0.8, 0.3, 1), opacity 120ms ease; }
+.chk-x { opacity: 0; stroke-width: 2.5; }
+
+/* Ticked: filled box, tick scaled in. Unticked: an X in the dim outline -
+   "nothing is destroyed, tapping flips between the two". */
+.share-tick input:checked + .chk { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.share-tick input:checked + .chk .chk-tick { transform: scale(1); opacity: 1; }
+.share-tick input:not(:checked) + .chk { color: var(--dim); }
+.share-tick input:not(:checked) + .chk .chk-x { opacity: 1; }
+/* A row that cannot be ticked (covered by a parent, or not tickable) shows
+   neither glyph: it is not "deliberately off", it is not yours to set. */
+.share-tick input:disabled + .chk { opacity: 0.4; color: transparent; }
+.share-tick input:disabled + .chk .chk-x { opacity: 0; }
+/* The focus ring belongs to the drawn box, since the real one is invisible.
+   Without this the keyboard user has no idea where they are. */
+.share-tick input:focus-visible + .chk { outline: 2px solid var(--accent); outline-offset: 2px; }
 .share-open {
   flex-grow: 1;
   display: flex;
@@ -954,22 +1190,23 @@ body {
    =========================================================================== */
 
 /* "Scales up from 0.4 with a slight overshoot, 160ms. The box fills at the
-   same time." The fill is accent-color on a native checkbox, which the
-   browser paints the instant :checked applies - so the two are simultaneous
-   for free. The overshoot peaks at 1.12 and settles, which is the "slight"
-   in the note; a bigger one reads as a bounce.
-   CEILING, stated rather than hidden: this scales the whole control, because
-   the tick GLYPH inside a native <input> cannot be animated. The artifact
-   draws a custom .chk span with its own SVG check, which would animate the
-   glyph exactly as written. Swapping the picker's native input for that is a
-   real change with real accessibility consequences, so it is not smuggled in
-   here - see design/motion.md. */
+   same time." The GLYPH is what scales now, which is what the artifact draws:
+   the .chk span above owns the tick, and its transition carries the scale
+   while the box's background transition fills behind it - simultaneous, as
+   the note requires.
+   The former ceiling is gone. This used to scale the whole native control,
+   because the tick inside an <input> cannot be animated; the owner chose the
+   hidden-input-plus-drawn-box route on 2026-08-29, so the input is still the
+   real control and the glyph is ours to move. The overshoot peaks at 1.12 and
+   settles - a bigger one reads as a bounce.
+   The keyframes stay because they are the overshoot; a plain transition to
+   scale(1) has no peak. */
 @keyframes tick-pop {
   0%   { transform: scale(0.4); }
   70%  { transform: scale(1.12); }
   100% { transform: scale(1); }
 }
-.share-tick input:checked { animation: tick-pop 160ms cubic-bezier(0.2, 0.8, 0.3, 1); }
+.share-tick input:checked + .chk .chk-tick { animation: tick-pop 160ms cubic-bezier(0.2, 0.8, 0.3, 1); }
 
 /* "Ripple expanding from centre, 2.4s loop in this mockup; on a real tap it
    fires once from the touch point." Both halves matter: ONCE, and from where

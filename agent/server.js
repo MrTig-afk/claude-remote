@@ -20,7 +20,7 @@ import { putSharedFolders, describeSharedRoots } from './shared.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
-import { isConfigured, setPasscode, attemptUnlock, authStatus, authorize } from './auth.js';
+import { isConfigured, setPasscode, attemptUnlock, changePasscode, authStatus, authorize } from './auth.js';
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
@@ -257,6 +257,35 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
       // Any other method falls through to the 404 at the bottom.
+    }
+
+    // Lane 7's Change passcode. Deliberately NOT under /api/auth/*: those
+    // three are the routes that run BEFORE the gate, and this one is their
+    // opposite - it sits behind the token gate above and re-checks the
+    // current passcode on top of it. The prefix matters on the client too:
+    // api.js excludes /api/auth/ from its 401 re-lock, which is right for the
+    // lock screen and wrong for a screen reached from Settings.
+    // No isJsonRequest guard, for the same reason PUT /api/shared has none:
+    // the token header alone forces a preflight that fails closed.
+    if (req.method === 'POST' && url.pathname === '/api/passcode') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) {
+        sendJson(res, parsed.status, { error: parsed.error });
+        return;
+      }
+      const result = changePasscode(ctx, parsed.value.current, parsed.value.passcode, parsed.value.confirm);
+      if (!result.ok) {
+        const body = { error: result.error };
+        if (result.failures !== undefined) body.failures = result.failures;
+        if (result.retryAfterMs !== undefined) body.retry_after_ms = result.retryAfterMs;
+        const extraHeaders = result.status === 429 ? { 'Retry-After': String(Math.ceil(result.retryAfterMs / 1000)) } : {};
+        sendJson(res, result.status, body, extraHeaders);
+        return;
+      }
+      // No token in the reply, by design: every one was just dropped,
+      // including the caller's. The phone re-locks on this answer.
+      sendJson(res, 200, { changed: true });
+      return;
     }
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {

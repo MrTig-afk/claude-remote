@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import * as folders from '../public/folders-ui.js';
+import * as update from '../public/update-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 
@@ -73,15 +74,14 @@ function readScreenMain() {
   return new Function(`${js.slice(start, end)}; return SCREEN_MAIN;`)();
 }
 
-test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the nine screens', () => {
+test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the thirteen screens', () => {
   // RED WHEN: a screen is added to the map with no <main>, or a <main> is
   // renamed - the router would then hide nothing and two screens stack.
-  // The four Lane 7 destinations are here now; a fifth (Change passcode)
-  // lands with its agent route.
+  // All five Lane 7 destinations are here now, Change passcode included.
   const SCREEN_MAIN = readScreenMain();
   assert.deepEqual(
     Object.keys(SCREEN_MAIN).sort(),
-    ['about', 'accept', 'agent', 'folders', 'gate', 'list', 'reset', 'see', 'settings'],
+    ['about', 'accept', 'agent', 'folders', 'gate', 'list', 'passcode', 'reset', 'root', 'see', 'settings', 'shared', 'update'],
   );
   const html = read('index.html');
   for (const id of Object.values(SCREEN_MAIN)) {
@@ -132,14 +132,16 @@ function makePopState(state, historyStub, showScreenSpy = () => {}, sub = null) 
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
-    'settingsSub', 'SETTINGS_SUBS', 'renderSettings',
+    'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
     `${src}; return onPopState;`,
   );
-  // settingsSub defaults to null: the sub-screen branch is opt-in per test,
-  // so every existing case still exercises the root/drill paths unchanged.
+  // The stack defaults to EMPTY: the sub-screen branch is opt-in per test, so
+  // every existing case still exercises the root/drill paths unchanged.
+  const stack = sub === null ? [] : [sub];
   return fn(
     state, historyStub, () => {}, true, true, true, showScreenSpy,
-    sub, new Set(['see', 'agent', 'reset', 'about']), () => {},
+    stack, () => (stack.length === 0 ? null : stack[stack.length - 1]), false,
+    new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update']), () => {}, () => {},
   );
 }
 
@@ -201,7 +203,7 @@ test('S6 - openSettings pushes exactly one settings entry across two calls, and 
 function loadCloseSettings() {
   const js = read('app.js');
   const start = js.indexOf('function closeSettings(');
-  const end = js.indexOf('function openSharedFolders(');
+  const end = js.indexOf('// The settings screens open BELOW the root');
   const src = js.slice(start, end);
   const calls = { back: 0, showScreen: [], render: 0 };
   const fn = new Function(
@@ -232,6 +234,10 @@ function loadGoHome({
   screen, confirmPushed = false, folderPushed = false,
   settingsSub = null, settingsPushed = false,
 }) {
+  // `settingsSub` stays the caller-facing knob (one sub-screen open, or none)
+  // and becomes the stack the code now reads. Depth is what these assertions
+  // are about, and one open sub-screen is still depth 1.
+  const settingsSubs = settingsSub === null ? [] : [settingsSub];
   const js = read('app.js');
   const start = js.indexOf('function goHome(');
   const end = js.indexOf('// Extracted to a named function');
@@ -242,7 +248,7 @@ function loadGoHome({
   };
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'finishFolders', 'closeSettings',
-    'settingsSub', 'settingsPushed', 'showScreen',
+    'settingsSubs', 'closingSub', 'settingsPushed', 'showScreen',
     `${src}; return goHome;`,
   );
   const goHome = fn(
@@ -253,7 +259,8 @@ function loadGoHome({
     folderPushed,
     () => { calls.finishFolders += 1; },
     () => { calls.closeSettings += 1; },
-    settingsSub,
+    settingsSubs,
+    false,
     settingsPushed,
     (name) => { calls.showScreen.push(name); },
   );
@@ -409,11 +416,13 @@ function loadRenderSettings(state, buildSettingsRowImpl) {
   const doc = fakeDocument({ 'settings-list': listEl });
   const fn = new Function(
     'document', 'state', 'sharedRowState', 'buildSettingsRow', 'agentStateLine', 'SHELL_VERSION',
+    'aboutRowState',
     `${src}; return renderSettings;`,
   );
   const renderSettings = fn(
     doc, state, folders.sharedRowState, buildSettingsRowImpl,
     (r) => (r === true ? 'reachable' : 'checking'), '0.1.0',
+    update.aboutRowState,
   );
   return { renderSettings, listEl };
 }
@@ -449,7 +458,7 @@ test('S12 - renderSettings draws the groups Lane 6 names, in order, each with an
   const rows = renderedRows(listEl);
   assert.deepEqual(
     rows.map((r) => r.dataset.settings),
-    ['shared', 'see', 'lock', 'agent', 'reset', 'about'],
+    ['shared', 'passcode', 'see', 'lock', 'agent', 'reset', 'about'],
   );
   // Lane 7: 'No exceptions anywhere in the app.'
   for (const row of rows) {
@@ -470,9 +479,10 @@ test('S12b - every enterable settings row has somewhere to go', () => {
   const decl = js.slice(declStart, js.indexOf(';', declStart));
   const subs = new Set([...decl.matchAll(/'([a-z]+)'/g)].map((m) => m[1]));
   assert.ok(subs.size > 0, 'SETTINGS_SUBS must name at least one screen');
-  // The two ids that are ACTIONS rather than screens, handled in the click
-  // delegate: one opens the picker, one drops the token.
-  const actions = new Set(['shared', 'lock']);
+  // The one id that is an ACTION rather than a screen, handled in the click
+  // delegate: it drops the token. 'shared' used to be one too - it jumped
+  // straight into the picker - and is now Lane 3's own screen.
+  const actions = new Set(['lock']);
   for (const row of renderedRows(listEl)) {
     const id = row.dataset.settings;
     if (id === undefined) continue;
@@ -484,29 +494,56 @@ test('S12b - every enterable settings row has somewhere to go', () => {
 });
 // --- S13 - the one door, order-checked ---------------------------------------
 
-function loadOpenSharedFolders(closeSettingsSpy, onChooseFoldersSpy) {
+function loadOpenPickerFromShared(onChooseFoldersSpy, { subPushed = true, settingsPushed = true } = {}) {
   const js = read('app.js');
-  const start = js.indexOf('function openSharedFolders(');
+  const start = js.indexOf('function openPickerFromShared(');
   const end = js.indexOf('function buildSettingsRow(');
   const src = js.slice(start, end);
-  return new Function(
-    'closeSettings', 'onChooseFolders',
-    `${src}; return openSharedFolders;`,
-  )(closeSettingsSpy, onChooseFoldersSpy);
-}
-
-test('S13 - openSharedFolders calls closeSettings before onChooseFolders', () => {
-  // RED WHEN: swapped, closeSettings()'s showScreen('list') runs AFTER
-  // showScreen('folders') and hides the picker outright the moment it opens.
-  // NOT because it keeps Settings' entry from onFoldersPop - history.back()
-  // is queued, so that listener is registered first and does receive the pop.
   const order = [];
-  const openSharedFolders = loadOpenSharedFolders(
-    () => order.push('closeSettings'),
+  const gos = [];
+  // The three flags are module-level `let`s in app.js and this function
+  // ASSIGNS them, so they are declared inside the body rather than injected -
+  // a parameter could be written but never read back out.
+  const fn = new Function(
+    'showScreen', 'render', 'history', 'onChooseFolders',
+    `const settingsSubs = ${subPushed ? "['shared']" : '[]'};
+     let closingSub = false, settingsPushed = ${settingsPushed};
+     ${src}
+     return { openPickerFromShared, flags: () => ({ subs: settingsSubs.length, closingSub, settingsPushed }) };`,
+  );
+  const mod = fn(
+    (name) => order.push(`showScreen:${name}`),
+    () => {},
+    { go: (n) => gos.push(n) },
     () => order.push('onChooseFolders'),
   );
-  openSharedFolders();
-  assert.deepEqual(order, ['closeSettings', 'onChooseFolders']);
+  return { ...mod, order, gos };
+}
+
+test('S13 - ADD A FOLDER leaves Settings BEFORE it opens the picker', () => {
+  // RED WHEN: swapped, closeSettings()'s showScreen('list') runs AFTER
+  // showScreen('folders') and hides the picker outright the moment it opens.
+  // NOT because it keeps Settings' entry from onFoldersPop - the traversal is
+  // queued, so that listener is registered first and does receive the pop.
+  const { openPickerFromShared, order } = loadOpenPickerFromShared();
+  openPickerFromShared();
+  assert.deepEqual(order, ['showScreen:list', 'onChooseFolders']);
+});
+
+test('S13b - BOTH settings entries come off in one traversal, counted before the flags are cleared', () => {
+  // RED WHEN: the depth is read after the flags are nulled - the traversal is
+  // then one entry short and the settings root is left underneath the picker.
+  // That exact bug has been fixed twice in this file's history (the back
+  // button, and lockNow's depth), which is why it is pinned here.
+  const deep = loadOpenPickerFromShared(null, { subPushed: true, settingsPushed: true });
+  deep.openPickerFromShared();
+  assert.deepEqual(deep.gos, [-2], 'a sub-screen means two entries, not one');
+  assert.deepEqual(deep.flags(), { subs: 0, closingSub: false, settingsPushed: false });
+
+  // Nothing pushed - nothing to pop, and history is left alone entirely.
+  const shallow = loadOpenPickerFromShared(null, { subPushed: false, settingsPushed: false });
+  shallow.openPickerFromShared();
+  assert.deepEqual(shallow.gos, [], 'with no entries pushed there is nothing to traverse');
 });
 
 // --- S14 - the guard T78 inherits, and its one point of entry ---------------
@@ -598,7 +635,7 @@ test('S17 - the inert-row muting rule outranks .row.folder, or it does nothing a
 
 function loadSubNav() {
   const js = read('app.js');
-  const start = js.indexOf('let settingsSub = null;');
+  const start = js.indexOf('// The settings screens open BELOW the root');
   const end = js.indexOf('function renderSettingsSub(');
   const navSrc = js.slice(start, end);
   const popSrc = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
@@ -622,7 +659,7 @@ return { openSettingsSub, closeSettingsSub, onPopState };`,
   );
   const api = fn(
     state, history, showScreen, () => {}, () => {},
-    new Set(['see', 'agent', 'reset', 'about']), () => {}, false, false, true,
+    new Set(['see', 'agent', 'reset', 'about', 'update']), () => {}, false, false, true,
   );
   return { ...api, state, shown, queued };
 }
@@ -661,4 +698,36 @@ test('S18c - a double tap on back pops exactly one entry', () => {
   nav.closeSettingsSub();
   nav.closeSettingsSub();
   assert.equal(nav.queued.filter((q) => q === 'back').length, 1);
+});
+
+test('S18d - three deep: back from Update lands on About, then on the settings root', () => {
+  // RED WHEN: the stack goes back to being one key, or a pop empties it
+  // wholesale. Lane 5 puts Update under About, so a single back from there
+  // must land on About - which is exactly what its crumb promises - and the
+  // next one on the settings root. Verified in a browser too; this is the
+  // regression net.
+  const nav = loadSubNav();
+
+  nav.openSettingsSub('about');
+  nav.openSettingsSub('update');
+  assert.equal(nav.state.screen, 'update');
+
+  nav.closeSettingsSub();
+  nav.onPopState();
+  assert.equal(nav.state.screen, 'about', 'one back is one level, not all the way out');
+
+  nav.closeSettingsSub();
+  nav.onPopState();
+  assert.equal(nav.state.screen, 'settings');
+  assert.ok(!nav.shown.includes('list'), 'no back in this chain may route through the project list');
+});
+
+test('S18e - each open pushes exactly one entry, so the stack and history stay in step', () => {
+  // RED WHEN: a screen pushes twice, or not at all. The stack's LENGTH is
+  // what goHome and lockNow traverse by, so a mismatch there strands the app
+  // one entry short - the off-by-one this file has already seen twice.
+  const nav = loadSubNav();
+  nav.openSettingsSub('about');
+  nav.openSettingsSub('update');
+  assert.equal(nav.queued.filter((q) => q === 'push').length, 2);
 });

@@ -85,7 +85,16 @@
           <span class="title">claude‑remote</span>
         </button>
         <div class="ver">v0.1</div>
-        <button class="settings-open" id="settings-open" type="button" hidden aria-label="Settings"><svg class="ico" width="18" height="18" aria-hidden="true"><use href="#i-gear"/></svg></button>
+        <!-- Lane 5, step 1: the update marker. A plain dot on the gear, and
+             the artifact is explicit that it does NOT animate - "a pulsing dot
+             is a nag, and you picked the quiet option". It ships hidden; only
+             renderUpdateDot reveals it, by the hidden attribute, so the
+             force-hide rule at the top of app.css keeps it off the passcode
+             screen like every other piece of state. -->
+        <button class="settings-open" id="settings-open" type="button" hidden aria-label="Settings">
+          <svg class="ico" width="18" height="18" aria-hidden="true"><use href="#i-gear"/></svg>
+          <span class="updot" id="update-dot" hidden></span>
+        </button>
       </div>
       <!-- Ships hidden and is revealed only when the project list itself is
            rendered. This line reports whether the agent answered for that
@@ -143,11 +152,16 @@
       </section>
 
       <section class="zone">
-        <div class="allhdr">
-          <span>ALL PROJECTS</span>
+        <!-- Lane 9: with ONE shared folder this header is named after that
+             folder ("All projects" told you nothing), and the list below it
+             stays flat and expanded so a single-folder install looks exactly
+             as it did before folders existed. With two or more it is hidden
+             and each folder brings its own collapsible header instead. -->
+        <div class="allhdr" id="all-header">
+          <span id="all-label">ALL PROJECTS</span>
           <span class="count" id="all-count">0</span>
         </div>
-        <div class="rule"></div>
+        <div class="rule" id="all-rule"></div>
         <div class="list" id="projects"></div>
       </section>
 
@@ -206,19 +220,38 @@
         <div class="gate-title" id="gate-title">Enter passcode</div>
         <div class="gate-sub" id="gate-sub">6 digits. Asked every time the app opens.</div>
 
-        <label class="gate-field" id="field-pin">
-          <span class="gate-fieldlabel">PASSCODE</span>
-          <input class="pin" id="pin" type="password" inputmode="numeric"
-                 pattern="[0-9]*" maxlength="6" autocomplete="off"
-                 enterkeyhint="go" aria-label="Passcode">
-        </label>
+        <!-- Lane 1 and Lane 2 both draw an eye beside the digits. NOT a
+             <label> wrapper: a click on a button inside a <label> is
+             forwarded to the labelled control, so the reveal would also move
+             the caret. `for` gives the same association without that.
+             The eye's id is <input id>-eye by convention - lock.js's
+             setPinRevealed finds it that way, on this screen and on Change
+             passcode alike. -->
+        <div class="gate-field" id="field-pin">
+          <label class="gate-fieldlabel" for="pin">PASSCODE</label>
+          <div class="pin-row">
+            <input class="pin" id="pin" type="password" inputmode="numeric"
+                   pattern="[0-9]*" maxlength="6" autocomplete="off"
+                   enterkeyhint="go" aria-label="Passcode">
+            <button class="pin-eye" id="pin-eye" type="button" data-pin-name="passcode"
+                    aria-pressed="false" aria-label="Show passcode">
+              <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-eyeoff"/></svg>
+            </button>
+          </div>
+        </div>
 
-        <label class="gate-field" id="field-confirm" hidden>
-          <span class="gate-fieldlabel">CONFIRM</span>
-          <input class="pin" id="pin-confirm" type="password" inputmode="numeric"
-                 pattern="[0-9]*" maxlength="6" autocomplete="off"
-                 enterkeyhint="go" aria-label="Confirm passcode">
-        </label>
+        <div class="gate-field" id="field-confirm" hidden>
+          <label class="gate-fieldlabel" for="pin-confirm">CONFIRM</label>
+          <div class="pin-row">
+            <input class="pin" id="pin-confirm" type="password" inputmode="numeric"
+                   pattern="[0-9]*" maxlength="6" autocomplete="off"
+                   enterkeyhint="go" aria-label="Confirm passcode">
+            <button class="pin-eye" id="pin-confirm-eye" type="button" data-pin-name="confirmed passcode"
+                    aria-pressed="false" aria-label="Show confirmed passcode">
+              <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-eyeoff"/></svg>
+            </button>
+          </div>
+        </div>
 
         <button class="gate-go" id="gate-go" type="submit" disabled>UNLOCK</button>
         <div class="gate-msg" id="gate-msg" role="status" aria-live="polite"></div>
@@ -298,6 +331,171 @@
            read only and with no checkbox - so the words a person agreed to
            and the words they can re-read are the same words, forever. -->
       <div class="set-body"><div class="accept-sections" id="see-sections"></div></div>
+      <div class="spacer"></div>
+    </main>
+
+    <!-- Lane 3, step 2 - "Editing one". Reached from a Shared folders row,
+         so its crumb names that screen. The rows here are the picker's own
+         .share-row / .share-tick, because they are the same control doing the
+         same job - ticking a folder. -->
+    <main id="set-root" hidden>
+      <div class="set-head">
+        <button class="set-back" type="button" data-set-back aria-label="Back to Shared folders">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Shared folders</span>
+        </button>
+        <div class="set-label" id="root-label"></div>
+      </div>
+      <div class="set-body">
+        <!-- Warns, never blocks. Revealed only while an unticked row holds a
+             live session. -->
+        <div class="banner set-orphan" id="root-warn" role="status" aria-live="polite" hidden></div>
+        <div class="list" id="root-rows"></div>
+        <div class="gate-msg" id="root-msg" role="status" aria-live="polite"></div>
+        <button class="set-btn set-btn-solid ripples" id="root-save" type="button" disabled>SAVE</button>
+        <button class="set-btn set-btn-danger" id="root-stop" type="button">STOP SHARING THIS FOLDER</button>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
+    <!-- Lane 5, step 3. Reached from About's update row, so its crumb says
+         About and not Settings - it is the one screen in the app two levels
+         below the settings root. -->
+    <main id="set-update" hidden>
+      <div class="set-head">
+        <button class="set-back" type="button" data-set-back aria-label="Back to About">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>About</span>
+        </button>
+        <div class="set-label">UPDATE</div>
+      </div>
+      <div class="set-body">
+        <div class="banner set-ready">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-dl"/></svg>
+          <span id="update-ready"></span>
+        </div>
+        <div class="allhdr"><span>WHAT CHANGED</span></div>
+        <div class="rule"></div>
+        <div class="notes" id="update-notes"></div>
+        <button class="set-btn set-btn-solid ripples" id="update-go" type="button">UPDATE NOW</button>
+        <!-- The sentence that makes the button safe to press: the thing people
+             are afraid of here is losing a session mid-run. -->
+        <div class="banner set-note">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg>
+          <span>Takes a second and reloads the app. Running sessions keep running.</span>
+        </div>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
+    <main id="set-shared" hidden>
+      <div class="set-head">
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">SHARED FOLDERS</div>
+      </div>
+      <div class="set-body">
+        <!-- Lane 4's "folder is gone" banner. Revealed by renderSharedScreen
+             only when the agent reports a root missing. -->
+        <div class="banner set-gone" id="shared-gone" role="status" aria-live="polite" hidden></div>
+        <div id="shared-rows"></div>
+        <!-- Lane 8's remove confirmation. One panel for the whole screen, not
+             one per row: only one removal can be in flight at a time, and a
+             panel per row would put N copies of the same words on the page. -->
+        <div class="set-confirm" id="shared-confirm" hidden>
+          <div class="banner set-danger">
+            <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-warn"/></svg>
+            <span id="shared-confirm-text"></span>
+          </div>
+          <button class="set-btn set-btn-danger ripples" id="shared-stop" type="button">STOP SHARING</button>
+          <button class="set-btn" id="shared-cancel" type="button">CANCEL</button>
+        </div>
+        <button class="set-btn ripples" id="shared-add" type="button">ADD A FOLDER</button>
+        <!-- "One picker, two entry points" is a Decided item; this line is
+             what tells the owner the button is not a second, different one. -->
+        <div class="banner set-note">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg>
+          <span>Opens the drive list, the same one used on first run.</span>
+        </div>
+        <div class="gate-msg" id="shared-msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
+    <main id="set-passcode" hidden>
+      <div class="set-head">
+        <!-- The crumb from Lane 7: every sub-screen names the screen it
+             returns to. data-set-back is what wires it, so a screen added
+             later gets the behaviour by copying the markup. -->
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">CHANGE PASSCODE</div>
+      </div>
+      <div class="set-body">
+        <!-- Three labelled groups in the artifact's order, reusing the gate's
+             own .gate-field / .gate-fieldlabel / .pin so the two passcode
+             screens are the same screen twice.
+             NOT <label>-wrapped like the gate's fields: the eye is a real
+             button inside the group, and a click inside a <label> is
+             forwarded to the labelled control. `for` gives the same
+             association without that. -->
+        <form class="pw-form" id="pw-form" novalidate>
+          <div class="gate-field">
+            <label class="gate-fieldlabel" for="pw-current">CURRENT</label>
+            <div class="pin-row">
+              <input class="pin" id="pw-current" type="password" inputmode="numeric"
+                     pattern="[0-9]*" maxlength="6" autocomplete="off"
+                     enterkeyhint="next" aria-label="Current passcode">
+              <!-- "each field reveals on its own" - one toggle per field, never
+                   one switch for the form. -->
+              <button class="pin-eye" id="pw-current-eye" type="button" data-pin-name="current passcode"
+                      aria-pressed="false" aria-label="Show current passcode">
+                <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-eyeoff"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="gate-field">
+            <label class="gate-fieldlabel" for="pw-new">NEW</label>
+            <div class="pin-row">
+              <input class="pin" id="pw-new" type="password" inputmode="numeric"
+                     pattern="[0-9]*" maxlength="6" autocomplete="off"
+                     enterkeyhint="next" aria-label="New passcode">
+              <button class="pin-eye" id="pw-new-eye" type="button" data-pin-name="new passcode"
+                      aria-pressed="false" aria-label="Show new passcode">
+                <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-eyeoff"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="gate-field">
+            <label class="gate-fieldlabel" for="pw-confirm">CONFIRM</label>
+            <div class="pin-row">
+              <input class="pin" id="pw-confirm" type="password" inputmode="numeric"
+                     pattern="[0-9]*" maxlength="6" autocomplete="off"
+                     enterkeyhint="go" aria-label="Confirm new passcode">
+              <button class="pin-eye" id="pw-confirm-eye" type="button" data-pin-name="confirmed passcode"
+                      aria-pressed="false" aria-label="Show confirmed passcode">
+                <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-eyeoff"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <button class="set-btn ripples" id="pw-go" type="submit" disabled>CHANGE PASSCODE</button>
+        </form>
+        <!-- The counterpart to Reset's set-safe banner: that one says what is
+             untouched, this one says what the tap costs. Directly under the
+             button, as the artifact draws it. -->
+        <div class="banner set-warn">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-warn"/></svg>
+          <span>Every device is signed out, including this one.</span>
+        </div>
+        <!-- BELOW the banner, not between it and the button. .gate-msg reserves
+             two lines so nothing jumps when a refusal arrives - and reserving
+             them up there put a 49px hole between the action and the note
+             explaining it, measured in a browser at 390px. -->
+        <div class="gate-msg" id="pw-msg" role="status" aria-live="polite"></div>
+      </div>
       <div class="spacer"></div>
     </main>
 

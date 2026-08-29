@@ -147,3 +147,12 @@ export function setPasscode(pc, confirm) {
 export function unlock(pc) {
   return post('/api/auth/unlock', { passcode: pc });
 }
+
+// Not /api/auth/*, and that is the point: this one runs behind the token gate
+// (see server.js), so a 401 here IS a lost session and must re-lock the app -
+// which the /api/auth/ exclusion above would otherwise suppress.
+// The success body carries no token: the agent has just dropped every one,
+// this device's included, so the caller re-locks rather than carrying on.
+export function changePasscode(current, pc, confirm) {
+  return post('/api/passcode', { current, passcode: pc, confirm });
+}

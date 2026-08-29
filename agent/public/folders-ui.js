@@ -238,6 +238,203 @@ export function sharedRowState(shared) {
   return { text: gone > 0 ? `${base} - ${gone} not on the PC` : base, enterable: true };
 }
 
+/**
+ * The Shared folders screen's rows (Lane 3), one per shared root, in the
+ * order the config holds them. -> [{ path, name, state, missing }]
+ *
+ * The artifact's sub-line reads "F:\Dev\Projects · 3 of 14" - the count
+ * shared out of the count on disk. Only the first half is knowable in the
+ * app: GET /api/projects reports the projects a root actually yielded (each
+ * carries `root`), and NO payload says how many folders the root holds in
+ * total. So this renders "<parent> · N projects" rather than inventing the
+ * denominator. Add a total to agent/shared.js:describeSharedRoots if the
+ * "of 14" is wanted; it is not guessable here.
+ *
+ * A missing root says so and nothing else. Reporting "0 projects" for a
+ * folder that is not there would read as an empty folder rather than an
+ * absent one, which is the distinction Lane 4 exists to draw.
+ */
+export function sharedFolderRows(shared, projects) {
+  const counts = new Map();
+  for (const p of projects || []) {
+    const key = pathKey(p.root || '');
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return (shared || []).map((r) => {
+    const segs = crumbSegments(r.path);
+    const name = segs.at(-1).label;
+    // The parent is the crumb one step up; segs[0] is the synthetic DRIVES
+    // entry, so a root directly on a drive has no parent segment to show.
+    const parentSeg = segs.length >= 3 ? segs.at(-2) : null;
+    const parent = parentSeg && parentSeg.path ? parentSeg.path.replace(/\\+$/, '') : '';
+    const missing = r.missing === true;
+    const single = r.mode === 'single';
+    const projectCount = single ? null : (counts.get(pathKey(r.path)) || 0);
+    let coverage;
+    if (missing) coverage = 'not found';
+    else if (single) coverage = 'this folder only';
+    else coverage = projectCount === 1 ? '1 project' : `${projectCount} projects`;
+    return {
+      path: r.path,
+      name,
+      coverage,
+      projectCount,
+      missing,
+      state: parent ? `${parent} · ${coverage}` : coverage,
+    };
+  });
+}
+
+/**
+ * Lane 9, option C: the project list grouped into one section per shared
+ * root, "expanded when there is only one so a single-folder install looks
+ * exactly as it does today".
+ *
+ * Each header carries its OWN running count, and a folder with none shows
+ * just its total - the artifact's wording. Section headers are named after
+ * the folder even when there is only one, because "All projects" told you
+ * nothing (Decided).
+ *
+ * Projects whose root matches no shared folder still appear, under a section
+ * named for the root they claim. Dropping them would make a project vanish
+ * from the app because its config entry was hand-edited - the list must show
+ * what the agent actually returned.
+ *
+ * `open` is which sections are expanded. A single section is always open
+ * regardless: that is the whole point of the rule.
+ *
+ * -> [{ name, path, projects, running, total, open }]
+ */
+export function projectSections(projects, shared, openNames, isRunning) {
+  const order = [];
+  const byRoot = new Map();
+  const push = (key, name, path, project) => {
+    if (!byRoot.has(key)) {
+      byRoot.set(key, { name, path, projects: [] });
+      order.push(key);
+    }
+    if (project) byRoot.get(key).projects.push(project);
+  };
+
+  // Shared roots first and in config order, so the sections do not reshuffle
+  // as projects come and go.
+  for (const r of shared || []) {
+    if (r.missing === true) continue;
+    push(pathKey(r.path), crumbSegments(r.path).at(-1).label, r.path, null);
+  }
+  for (const p of projects || []) {
+    // A row with NO root is a synthetic one, built for a desk session whose
+    // folder is not a listed project (see app.js). It belongs to no shared
+    // folder, and grouping it would open a section with no name on it. It is
+    // already drawn as a tile in the running zone above, which is the only
+    // place it has ever appeared - so it is skipped here, not lost.
+    const name = p.rootName || (p.root ? crumbSegments(p.root).at(-1).label : '');
+    if (!p.root || !name) continue;
+    push(pathKey(p.root), name, p.root, p);
+  }
+
+  const open = new Set(openNames || []);
+  const sections = order.map((key) => {
+    const s = byRoot.get(key);
+    const running = s.projects.filter((p) => (isRunning ? isRunning(p) : false)).length;
+    return {
+      name: s.name,
+      path: s.path,
+      projects: s.projects,
+      running,
+      total: s.projects.length,
+      open: open.has(s.name),
+    };
+  });
+  // One section is always expanded: a single-folder install must look exactly
+  // as it did before folders existed, not hide its whole list behind a tap.
+  if (sections.length === 1) sections[0].open = true;
+  return sections;
+}
+
+/**
+ * Lane 3's "Editing one": the children of ONE shared root, each ticked or
+ * not, with the ones holding a live session marked.
+ *
+ * The child list comes from GET /api/folders, never from /api/projects - an
+ * EXCLUDED child is filtered out server-side and would simply be missing from
+ * the projects list, so a screen built from that could never show you what
+ * you had already switched off, let alone switch it back on.
+ *
+ * `excludes` is stored as folder NAMES (agent/shared.js), compared without
+ * case - the same rule the agent applies when it walks the root.
+ *
+ * -> [{ name, path, ticked, running, readable }]
+ */
+export function rootEditRows(folders, excludes, runningNames) {
+  const off = new Set((excludes || []).map((n) => String(n).toLowerCase()));
+  const live = new Set((runningNames || []).map((n) => String(n).toLowerCase()));
+  return (folders || []).map((f) => ({
+    name: f.name,
+    path: f.path,
+    ticked: !off.has(String(f.name).toLowerCase()),
+    running: live.has(String(f.name).toLowerCase()),
+    readable: f.readable !== false,
+  }));
+}
+
+/** The names to store as `excludes` for a root, from the rows on screen. */
+export function excludesFrom(rows) {
+  return (rows || []).filter((r) => !r.ticked).map((r) => r.name);
+}
+
+/**
+ * A PUT body with ONE root's excludes replaced and every other root
+ * byte-preserved - the same guarantee withoutRoot gives, for the same reason:
+ * saving one folder's selection must not rewrite a sibling's mode or lose its
+ * own excludes. A root this app does not hold is returned unchanged.
+ */
+export function withRootExcludes(shared, path, excludes) {
+  const target = pathKey(path);
+  return {
+    shared_folders: (shared || []).map((r) => ({
+      path: r.path,
+      mode: r.mode === 'single' ? 'single' : 'container',
+      excludes: pathKey(r.path) === target
+        ? [...excludes]
+        : (Array.isArray(r.excludes) ? r.excludes : []),
+      new_folders: r.new_folders === 'hide' ? 'hide' : 'show',
+    })),
+  };
+}
+
+/**
+ * The warning above the list when unticking would orphan a live session.
+ * The artifact is explicit that this WARNS rather than blocks - "silently
+ * orphaning a live session is a bug in a costume" - so this returns words,
+ * never a veto. null when there is nothing to say.
+ */
+export function orphanWarning(rows) {
+  const hit = (rows || []).filter((r) => r.running && !r.ticked).map((r) => r.name);
+  if (hit.length === 0) return null;
+  if (hit.length === 1) return `${hit[0]} has a session running. Unsharing it will not stop it.`;
+  return `${hit.length} of these have sessions running. Unsharing them will not stop them.`;
+}
+
+/**
+ * The words on the remove confirmation (Lane 8's X-as-remove), from the
+ * artifact: "Stop sharing Repos? Its 3 projects disappear from the app.
+ * Nothing on disk is touched."
+ *
+ * Pure, so the copy is testable without a DOM. The middle sentence is built
+ * from the row's own fields rather than re-read out of its display string -
+ * a container names its count, a single-folder root has none to name, and a
+ * missing one has already gone.
+ */
+export function stopSharingPrompt(row) {
+  let effect;
+  if (row.missing) effect = 'It is already gone from the PC.';
+  else if (row.projectCount === null) effect = 'It disappears from the app.';
+  else if (row.projectCount === 1) effect = 'Its 1 project disappears from the app.';
+  else effect = `Its ${row.projectCount} projects disappear from the app.`;
+  return `Stop sharing ${row.name}? ${effect} Nothing on disk is touched.`;
+}
+
 /** Pure SAVE reducer: (share, apiResult) -> { done, ticks, message, errorIndex } */
 export function applySaveResult(share, res) {
   if (res.ok) {

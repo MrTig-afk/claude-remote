@@ -1,5 +1,7 @@
-import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, getStatus, setToken, onAuthLost } from './api.js';
-import { showGate } from './lock.js';
+import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, getStatus, setToken, onAuthLost, changePasscode } from './api.js';
+// setPinRevealed lives in lock.js because the gate needs it before
+// wireEvents() has run - see the note on it there.
+import { showGate, messageFor, setPinRevealed } from './lock.js';
 import {
   TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
   CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON,
@@ -7,9 +9,14 @@ import {
   emptyDayOneTitle, EMPTY_DAY_ONE_BODY,
 } from './copy.js';
 import {
-  crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS,
+  projectSections, crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS,
   listZoneState, missingRoots, withoutRoot, sharedToTicks, sharedRowState,
+  sharedFolderRows, stopSharingPrompt,
+  rootEditRows, excludesFrom, withRootExcludes, orphanWarning,
 } from './folders-ui.js';
+import {
+  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState,
+} from './update-ui.js';
 
 // The version baked into whatever copy of the shell the phone has cached.
 // Keep it a plain single-quoted literal: the version test reads it out of
@@ -23,6 +30,10 @@ const state = {
   // app always opens on the passcode gate, before boot() has asked the
   // agent anything.
   screen: 'gate',
+  // Lane 9: which folder sections are expanded, by name. Held here rather
+  // than read off the DOM so a re-render cannot collapse what the owner
+  // opened. A single section ignores this and is always open.
+  openSections: [],
   projects: [], // from /api/projects
   sessions: null, // array, or null = unknown (fetch failed / 404)
   launching: new Set(), // project names with a POST in flight
@@ -66,6 +77,10 @@ const SCREEN_MAIN = {
   // Lane 7 destinations. Exactly one level below the settings root - the app
   // is never three screens deep in Settings - which is what lets the history
   // handling below stay a root flag plus one sub, rather than a stack.
+  shared: 'set-shared',
+  update: 'set-update',
+  root: 'set-root',
+  passcode: 'set-passcode',
   see: 'set-see',
   agent: 'set-agent',
   reset: 'set-reset',
@@ -76,7 +91,7 @@ const SCREEN_MAIN = {
 // onPopState which of the two entries just popped, so a screen added to
 // SCREEN_MAIN above must be added here too or its back gesture will fall
 // through and close Settings entirely.
-const SETTINGS_SUBS = new Set(['see', 'agent', 'reset', 'about']);
+const SETTINGS_SUBS = new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update', 'root']);
 
 // The one place a screen changes. Sets `hidden` on every <main> in
 // SCREEN_MAIN so two of them can never render stacked (the failure the
@@ -985,7 +1000,7 @@ function renderProjects() {
     msg.textContent = 'This folder has no projects in it.';
     listEl.appendChild(msg);
   } else if (zone.kind === 'rows') {
-    for (const { p, rs } of list) listEl.appendChild(buildRow(p, rs));
+    renderRowZone(listEl, rows, open);
   } else if (zone.kind === 'unknown-shared') {
     // The one state that must NOT offer the picker - see the safety rule on
     // onChooseFolders. Entering blind would open the picker with initial =
@@ -1013,6 +1028,119 @@ function renderProjects() {
   }
 
   return rows;
+}
+
+/**
+ * Lane 9, option C. Inside a drilled-in container the list is flat - that
+ * screen is already scoped to one folder, and grouping it by root would be a
+ * second answer to a question the back bar has already answered.
+ *
+ * At the top level: ONE shared folder keeps today's flat list and renames the
+ * zone header after that folder. TWO OR MORE hides the zone header and gives
+ * each folder its own collapsible one, carrying its own running count.
+ * The running tiles above are untouched either way - "folders change what is
+ * BELOW the running zone, never the zone itself" (Decided).
+ */
+function renderRowZone(listEl, rows, open) {
+  const header = document.getElementById('all-header');
+  const rule = document.getElementById('all-rule');
+  const label = document.getElementById('all-label');
+  // Only list-zone rows are DRAWN here - a running project is a tile above -
+  // but the sections are built from ALL of them, or a folder's header could
+  // never count the sessions running inside it, which is the number Lane 9
+  // puts on it.
+  const list = rows.filter((r) => r.rs.zone === 'list');
+
+  const flat = () => { for (const { p, rs } of list) listEl.appendChild(buildRow(p, rs)); };
+
+  if (open) {
+    header.hidden = false;
+    rule.hidden = false;
+    label.textContent = 'ALL PROJECTS';
+    flat();
+    return;
+  }
+
+  const byName = new Map(rows.map((r) => [r.p.name, r]));
+  const sections = projectSections(
+    rows.map((r) => r.p),
+    state.shared,
+    state.openSections,
+    (p) => (byName.get(p.name) || { rs: {} }).rs.zone === 'tile',
+  );
+
+  if (sections.length <= 1) {
+    header.hidden = false;
+    rule.hidden = false;
+    // Named after the folder even when there is only one.
+    label.textContent = sections.length === 1 ? sections[0].name.toUpperCase() : 'ALL PROJECTS';
+    flat();
+    return;
+  }
+
+  header.hidden = true;
+  rule.hidden = true;
+  for (const section of sections) {
+    listEl.appendChild(buildSectionHeader(section));
+    if (!section.open) continue;
+    const body = document.createElement('div');
+    body.className = 'acc-body';
+    for (const p of section.projects) {
+      const row = byName.get(p.name);
+      // Running ones are tiles at the top and must not be drawn twice.
+      if (row && row.rs.zone === 'list') body.appendChild(buildRow(row.p, row.rs));
+    }
+    listEl.appendChild(body);
+  }
+}
+
+// Folder icon, name, its OWN running count, its total, and a chevron that
+// turns when the section is open. A folder with none running shows just its
+// total - the artifact's wording, and the reason the accent span is
+// conditional rather than always drawn as "0 running".
+function buildSectionHeader(section) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = section.open ? 'acc-hd open' : 'acc-hd';
+  el.dataset.section = section.name;
+  el.setAttribute('aria-expanded', String(section.open));
+
+  const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  ico.querySelector('use').setAttribute('href', '#i-folder');
+  el.appendChild(ico);
+
+  const name = document.createElement('span');
+  name.className = 'acc-name';
+  name.textContent = section.name;
+  el.appendChild(name);
+
+  if (section.running > 0) {
+    const run = document.createElement('span');
+    run.className = 'acc-run';
+    run.textContent = `${section.running} running`;
+    el.appendChild(run);
+  }
+  // NOT named `total`. renderFooter declares a const of that name and a test
+  // finds it by scanning this file for the declaration, so a second one
+  // earlier in the file is what that scan would match instead.
+  const totalEl = document.createElement('span');
+  totalEl.className = 'acc-total';
+  totalEl.textContent = section.running > 0 ? `/ ${section.total}` : String(section.total);
+  el.appendChild(totalEl);
+
+  const chev = document.createElement('span');
+  chev.className = 'acc-chev';
+  chev.setAttribute('aria-hidden', 'true');
+  chev.textContent = '>';
+  el.appendChild(chev);
+  return el;
+}
+
+function toggleSection(name) {
+  const open = new Set(state.openSections);
+  if (open.has(name)) open.delete(name); else open.add(name);
+  state.openSections = [...open];
+  render();
 }
 
 function renderFooter(rows) {
@@ -1068,6 +1196,7 @@ function renderBackBar(open, canCreate = true) {
 
 function render() {
   renderConn();
+  renderUpdateDot(); // the gear is on the project list, so the marker rides every render
   renderSettings(); // a background load() must refresh the row while Settings is on screen
   const rows = renderProjects();
   renderFooter(rows);
@@ -1077,7 +1206,16 @@ async function load() {
   state.results = new Map();
   hideBanner();
 
-  const [proj, sess, ack] = await Promise.allSettled([getProjects(), getSessions(), getAcknowledged()]);
+  // Four in parallel, not three. /api/status is what Lane 5's update marker
+  // is derived from, and it has to be asked for on the PROJECT LIST - the dot
+  // lives on the gear there. Previously only the Agent status screen fetched
+  // it, so the dot could never appear before someone had already gone looking
+  // for it. Still no poll and still nothing off this machine: it rides the
+  // existing refresh (boot, and returning to the app), which is also exactly
+  // when the agent may have restarted under it.
+  const [proj, sess, ack, status] = await Promise.allSettled([
+    getProjects(), getSessions(), getAcknowledged(), getStatus(),
+  ]);
   const p = proj.value; // api.js never throws - always fulfilled
   if (p.ok) {
     state.projects = p.data.projects;
@@ -1111,6 +1249,12 @@ async function load() {
   const a = ack.value;
   state.shared = a.ok && Array.isArray(a.data.shared_folders) ? a.data.shared_folders : null;
 
+  // Same fail-quiet rule as the other two: a status this app cannot read is
+  // no status, which updateAvailable reads as "no update". A dot claiming an
+  // update that is not there sends someone to an empty screen.
+  const st = status.value;
+  state.status = st.ok ? st.data : null;
+
   render();
   // `=== true` and not a truthiness test: 'waiting' is truthy, and on that
   // path state.sessions is null anyway, so this would only ever be a no-op
@@ -1133,6 +1277,11 @@ async function onProjectTap(e) {
   // requires the confirm's entry to always be the top one, and renderProjects' stale-
   // confirm reconcile assumes it can pop that entry safely - a folder opened
   // underneath it would break that assumption.
+  // Lane 9's collapsible folder header. Checked before [data-folder]: a
+  // section header is not a project row and must not open a drill-in.
+  const section = e.target.closest('[data-section]');
+  if (section) { toggleSection(section.dataset.section); return; }
+
   const folder = e.target.closest('[data-folder]');
   if (folder) {
     if (cancelOpenConfirm()) return;
@@ -1190,13 +1339,31 @@ async function onChooseFolders() {
 // at a time.
 let removingRoot = false;
 
-async function onRemoveRoot(rootPath) {
-  if (removingRoot) return;
+/**
+ * The one write that removes a shared root, shared by the two screens that
+ * can ask for it: the project list's all-gone state (T100) and the Shared
+ * folders screen (Lane 3). Returns the api result - or null if a write was
+ * already in flight - so each caller reports a failure on the surface the
+ * owner is actually looking at, rather than one of them writing to a banner
+ * on a screen that is not showing.
+ *
+ * withoutRoot preserves every OTHER root byte for byte, which is why it
+ * exists rather than a filter at the call site: a removal must not quietly
+ * rewrite a sibling's mode or drop its excludes.
+ */
+async function removeRoot(rootPath) {
+  if (removingRoot) return null;
   removingRoot = true;
   const res = await putShared(withoutRoot(state.shared, rootPath));
   removingRoot = false;
+  if (res.ok) state.shared = res.data.shared_folders ?? null;
+  return res;
+}
+
+async function onRemoveRoot(rootPath) {
+  const res = await removeRoot(rootPath);
+  if (res === null) return;
   if (res.ok) {
-    state.shared = res.data.shared_folders ?? null;
     await load();
     return;
   }
@@ -1304,10 +1471,14 @@ function goHome() {
   // altogether rather than stepping back one level - that is what the back
   // control in the sub-screen's own header is for. Both entries come off in
   // one traversal.
-  if (settingsSub !== null) {
-    const depth = (subPushed ? 1 : 0) + (settingsPushed ? 1 : 0);
-    settingsSub = null;
-    subPushed = false;
+  if (settingsSubs.length > 0) {
+    // The stack's length IS the number of sub entries pushed, so the whole of
+    // Settings comes off in one traversal however deep it went. Counted
+    // BEFORE the stack is emptied - read after, it is always zero, which is
+    // the same off-by-one that broke the back button and lockNow.
+    const depth = settingsSubs.length + (settingsPushed ? 1 : 0);
+    settingsSubs.length = 0;
+    closingSub = false;
     settingsPushed = false;
     showScreen('list');
     render();
@@ -1354,13 +1525,16 @@ function onPopState() {
   // A settings SUB-screen's entry is above the settings entry, so it pops
   // first and lands back on the root rather than leaving Settings. Checked
   // before the root case: both are true while a sub-screen is open, and the
-  // root's branch would close Settings outright and leave settingsSub set,
+  // root's branch would close Settings outright and leave the stack loaded,
   // which is a screen the app thinks it is on and isn't.
-  if (settingsSub !== null && SETTINGS_SUBS.has(state.screen)) {
-    settingsSub = null;
-    subPushed = false;
-    showScreen('settings', 'back');
-    renderSettings();
+  // ONE entry per pop: a three-deep screen (About -> Update) lands back on
+  // About, not on the settings root, which is what its crumb promises.
+  if (settingsSubs.length > 0 && SETTINGS_SUBS.has(state.screen)) {
+    settingsSubs.pop();
+    closingSub = false;
+    const parent = currentSub();
+    showScreen(parent === null ? 'settings' : parent, 'back');
+    if (parent === null) renderSettings(); else renderSettingsSub(parent);
     return;
   }
   if (state.screen === 'settings') {
@@ -1614,6 +1788,27 @@ function buildInertRow(name, status) {
 // PUT /api/shared rejects every drive root with 400 drive_root, so the
 // checkbox stays present (same alignment as a covered row) but disabled
 // rather than removed, which is buildInertRow's job.
+/**
+ * The drawn tick box (Lane 8). Both glyphs go in and CSS picks one off
+ * :checked, so a toggle is a paint rather than a rebuild - which is what lets
+ * the tick animate its own glyph. aria-hidden: the real input beside it
+ * already says everything a screen reader needs.
+ * Shared by the picker and by Lane 3's per-folder editor - one control, so
+ * the two screens cannot drift into looking like different checkboxes.
+ */
+function buildChk() {
+  const chk = document.createElement('span');
+  chk.className = 'chk';
+  chk.setAttribute('aria-hidden', 'true');
+  for (const icon of ['#i-check', '#i-x']) {
+    const glyph = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+    glyph.setAttribute('class', `ico chk-${icon === '#i-check' ? 'tick' : 'x'}`);
+    glyph.querySelector('use').setAttribute('href', icon);
+    chk.appendChild(glyph);
+  }
+  return chk;
+}
+
 function buildTickableRow({
   path, name, status, coverage, tickable = true,
 }) {
@@ -1628,6 +1823,16 @@ function buildTickableRow({
   if (coverage === 'ticked') input.checked = true;
   if (coverage === 'covered' || coverage === 'covers' || !tickable) input.disabled = true;
   label.appendChild(input);
+  // Lane 8, first half: "an empty box reads as 'unset', an X reads as
+  // deliberately off". The X and the tick are drawn HERE, in a span over the
+  // real checkbox input built just above - which is visually hidden but still
+  // focusable and still announced, so the keyboard, the screen reader and the
+  // label association stay the browser's, and only the pixels are ours.
+  // (The literal markup form of that input is a banned string in this file -
+  // a stop-confirmation rule - so it is described rather than spelled.)
+  // Which glyph shows is decided in CSS off :checked; this draws both.
+  // aria-hidden because the input beside it already says the same thing.
+  label.appendChild(buildChk());
   row.appendChild(label);
 
   const btn = document.createElement('button');
@@ -2102,11 +2307,27 @@ function closeSettings() {
 // one the artifact draws), this becomes an array - do not bolt a second flag
 // on beside it.
 // ---------------------------------------------------------------------------
-let settingsSub = null;
-// True exactly while a sub-screen's history entry is on the stack and this
-// session pushed it - the same shape as settingsPushed/confirmPushed/
-// folderPushed, and the double-tap guard for closeSettingsSub.
-let subPushed = false;
+// The settings screens open BELOW the root, innermost last. A stack, not a
+// single key: About -> Update is two deep (Lane 5), and the artifact's
+// About -> Contact me will be too. The previous single `settingsSub` plus a
+// `subPushed` flag carried its own instruction to become this the moment a
+// sub-screen needed a sub-screen of its own, rather than growing a second
+// flag beside it - which is what this is.
+//
+// One entry is pushed per open, so the stack's LENGTH is also the number of
+// history entries this session put on above the settings root. There is no
+// separate pushed flag to fall out of step with it.
+const settingsSubs = [];
+
+/** The screen currently showing below the root, or null on the root itself. */
+function currentSub() {
+  return settingsSubs.length === 0 ? null : settingsSubs[settingsSubs.length - 1];
+}
+
+/** The screen a back gesture from the top of the stack lands on. */
+function parentScreen() {
+  return settingsSubs.length <= 1 ? 'settings' : settingsSubs[settingsSubs.length - 2];
+}
 
 /** Pure, so the wording can be tested without a DOM. */
 function agentStateLine(reachable) {
@@ -2117,11 +2338,10 @@ function agentStateLine(reachable) {
 
 function openSettingsSub(key) {
   if (!SETTINGS_SUBS.has(key)) return;
-  settingsSub = key;
+  settingsSubs.push(key);
   showScreen(key, 'deeper');
   renderSettingsSub(key);
   history.pushState({ screen: key }, '');
-  subPushed = true;
 }
 
 // Mutate and render synchronously, then a guarded history.back() - the same
@@ -2131,25 +2351,103 @@ function openSettingsSub(key) {
 // Unlike closeSettings, this does NOT mutate before the back(): it issues the
 // traversal and lets onPopState's sub branch do the screen change.
 //
-// Clearing settingsSub here first is what shipped, and it sent the back
-// control to the PROJECT LIST instead of the settings root. The sequence:
-// settingsSub goes null and showScreen sets state.screen to 'settings', then
-// the queued pop lands, finds settingsSub === null so the sub branch does not
-// match, falls into the ROOT branch - whose condition state.screen ===
-// 'settings' is now true - and that branch closes Settings altogether.
-// Both flags must still be set when the pop arrives, which is why the only
-// thing that happens before back() is the double-tap guard.
+// Popping the stack here first is what shipped (as clearing settingsSub), and
+// it sent the back control to the PROJECT LIST instead of the settings root.
+// The sequence: the stack empties and showScreen sets state.screen to
+// 'settings', then the queued pop lands, finds an empty stack so the sub
+// branch does not match, falls into the ROOT branch - whose condition
+// state.screen === 'settings' is now true - and that branch closes Settings
+// altogether. The stack must still be intact when the pop arrives, which is
+// why the only thing that happens before back() is the double-tap guard.
+//
+// `closing` is that guard, and it replaces the old subPushed flag: the stack
+// cannot be popped early (see above), so a second fast tap needs something
+// else to find spent. Cleared by onPopState when the pop actually lands.
+let closingSub = false;
 function closeSettingsSub() {
-  if (settingsSub === null || !subPushed) return;
-  subPushed = false;   // second tap finds nothing to pop, so it cannot eat the settings entry
+  if (settingsSubs.length === 0 || closingSub) return;
+  closingSub = true;   // a second tap finds nothing to do, so it cannot eat the entry underneath
   history.back();
 }
 
 function renderSettingsSub(key) {
+  // 'root' is loaded, not rendered: openRootEditor fetches its children first
+  // and renders when they land. Re-rendering here on a back gesture would
+  // wipe unsaved ticks.
+  if (key === 'root') { renderRootEditor(); return; }
+  if (key === 'update') { renderUpdate(); return; }
+  // pendingRemoval is cleared on OPEN: a confirmation left hanging from a
+  // previous visit must not be the first thing the screen shows.
+  if (key === 'shared') { pendingRemoval = null; renderSharedScreen(); return; }
+  if (key === 'passcode') { resetPasscodeForm(); return; }
   if (key === 'see') { renderSections(document.getElementById('see-sections')); return; }
   if (key === 'about') { renderAbout(); return; }
   if (key === 'agent') { renderAgentStatus(); return; }
   // 'reset' is static markup - its only moving part is the button.
+}
+
+// ---------------------------------------------------------------------------
+// Change passcode (Lane 7). Three fields, each with its own reveal, and a
+// success that signs this device out along with every other one.
+// ---------------------------------------------------------------------------
+
+// In the artifact's order. This list is the contract between the markup, the
+// eye toggles and the submit - a field added to one and not the others is the
+// bug this constant exists to make impossible.
+const PW_FIELDS = ['pw-current', 'pw-new', 'pw-confirm'];
+
+let pwInFlight = false;
+
+/** Pure: the button is live only when all three fields hold six digits. */
+function pwReady(values) {
+  return values.length === PW_FIELDS.length && values.every((v) => /^[0-9]{6}$/.test(v));
+}
+
+function pwValues() {
+  return PW_FIELDS.map((id) => document.getElementById(id).value);
+}
+
+function updatePwEnabled() {
+  document.getElementById('pw-go').disabled = !pwReady(pwValues());
+}
+
+// Empty AND re-masked. Called on every open, so re-entering the screen never
+// shows what the last visit typed, and a wrong CURRENT clears all three the
+// same way the gate does - keeping the first entry and re-asking only the
+// second is how a typo gets saved.
+function resetPasscodeForm() {
+  for (const id of PW_FIELDS) {
+    document.getElementById(id).value = '';
+    setPinRevealed(id, false);
+  }
+  document.getElementById('pw-msg').textContent = '';
+  updatePwEnabled();
+}
+
+async function onChangePasscode(ev) {
+  ev.preventDefault();
+  // A double tap on a phone is ordinary, and without this the second one
+  // sends the old current passcode against the passcode the first just
+  // changed - a wrong-passcode failure the owner did nothing to earn.
+  if (pwInFlight) return;
+  pwInFlight = true;
+  document.getElementById('pw-go').disabled = true;
+
+  const [current, next, confirm] = pwValues();
+  const res = await changePasscode(current, next, confirm);
+  pwInFlight = false;
+
+  if (res.ok) {
+    // The agent has already dropped every token, this device's included, so
+    // the app IS signed out - lockNow is what makes the screen agree with
+    // that, and it owns the history unwind so the back gesture cannot walk
+    // into a screen that now sits behind the new passcode.
+    lockNow();
+    return;
+  }
+
+  resetPasscodeForm();
+  document.getElementById('pw-msg').textContent = messageFor(res.code, res.status, res.data);
 }
 
 function renderAbout() {
@@ -2159,11 +2457,72 @@ function renderAbout() {
   // REPO_URL is one constant because T62 and T83 point at the same repo and
   // it does not exist yet. Rows that would open a dead link are omitted
   // rather than drawn - the artifact's Contact me screen is a real screen and
-  // gets built with the repo, not faked with a href to nowhere.
-  const rows = [{
+  // gets built with the repo, not faked with a href to nowhere. The update
+  // screen's "Full release notes" row is omitted for the same reason: it
+  // links to the repo's releases page.
+  const rows = [];
+  // Lane 5: the ONE row on this screen that carries a dot, so the news stands
+  // out against plain rows. Absent entirely when there is nothing waiting -
+  // a row saying "you are up to date" is a row that is never worth a tap.
+  if (updateAvailable(SHELL_VERSION, state.status)) {
+    rows.push({
+      id: 'update', icon: 'i-dl', name: `Version ${state.status.version} available`,
+      state: 'see what changed', enterable: true, dot: true, accent: true,
+    });
+  }
+  rows.push({
     id: 'see', icon: 'i-eye', name: 'What this app can see', state: '', enterable: true,
-  }];
+  });
   for (const row of rows) listEl.appendChild(buildSettingsRow(row));
+}
+
+// ---------------------------------------------------------------------------
+// Lane 5 - updates. The quiet route: a dot on the gear, the news in About,
+// and nothing that interrupts the project list or a running session.
+//
+// "Update available" means the phone's cached shell is older than the agent,
+// decided LOCALLY from two facts the app already holds. Nothing here polls
+// anything - see update-ui.js.
+// ---------------------------------------------------------------------------
+
+function renderUpdateDot() {
+  document.getElementById('update-dot').hidden = !updateAvailable(SHELL_VERSION, state.status);
+}
+
+function renderUpdate() {
+  const release = releaseOf(state.status);
+  const host = document.getElementById('update-notes');
+  host.innerHTML = '';
+  // The agent knows its version but may have no readable release-notes.json.
+  // The screen then says what it can - which version is ready - rather than
+  // drawing an empty "What changed" list under a confident heading.
+  document.getElementById('update-ready').textContent = release
+    ? readyLine(release, SHELL_VERSION)
+    : `Version ${state.status && state.status.version} is ready. You are on ${SHELL_VERSION}.`;
+
+  for (const line of releaseLines(release ? release.notes : [])) {
+    const row = document.createElement('div');
+    row.className = 'note';
+    const mark = document.createElement('span');
+    mark.className = `note-mark ${line.mark === '~' ? 'chg' : 'add'}`;
+    mark.textContent = line.mark;
+    const text = document.createElement('span');
+    text.textContent = line.text;
+    row.appendChild(mark);
+    row.appendChild(text);
+    host.appendChild(row);
+  }
+}
+
+/**
+ * UPDATE NOW and RESET are the same mechanism, which is why the artifact
+ * makes Reset "also install a waiting update" and why this calls straight
+ * into it: clearing the cached shell IS what makes the next load fetch the
+ * current one. Two buttons, one implementation - a second copy here would be
+ * the one that quietly stops matching.
+ */
+function installUpdate() {
+  resetApp();
 }
 
 function renderAgentStatus() {
@@ -2193,7 +2552,7 @@ function renderAgentStatus() {
 async function refreshAgentStatus() {
   const res = await getStatus();
   state.status = res.ok ? res.data : null;
-  if (settingsSub === 'agent') renderAgentStatus();
+  if (currentSub() === 'agent') renderAgentStatus();
 }
 
 // Ends the session on THIS device. The token is memory-only by design (see
@@ -2204,10 +2563,10 @@ function lockNow() {
   // Counted BEFORE the flags are cleared. Written the other way round first,
   // where the ternary read the value it had just nulled and the traversal was
   // always one entry short.
-  const depth = (subPushed ? 1 : 0) + (settingsPushed ? 1 : 0);
+  const depth = settingsSubs.length + (settingsPushed ? 1 : 0);
   setToken(null);
-  settingsSub = null;
-  subPushed = false;
+  settingsSubs.length = 0;
+  closingSub = false;
   settingsPushed = false;
   // Every settings entry comes off in one traversal, the same discipline
   // goHome uses, so the back gesture after locking cannot walk back into a
@@ -2241,20 +2600,333 @@ async function resetApp() {
 
 // One picker, two doors, ONE implementation of the door.
 // THE ORDER IS LOAD-BEARING, but not for the reason it first looks. Swapped,
-// closeSettings()'s showScreen('list') would run AFTER showScreen('folders')
+// leaving Settings would run showScreen('list') AFTER showScreen('folders')
 // and hide the picker outright the moment it opened.
-// What it does NOT do is keep Settings' entry away from onFoldersPop:
-// history.back() is queued, not synchronous, so the picker registers
-// onFoldersPop in the same task and that listener DOES receive Settings' pop.
-// It is harmless only because share.pushed is clamped at 0 at the drive list,
-// so the pop costs one redundant GET /api/drives and nothing else.
-// T78 KEPT THIS BODY. There is no separate Shared Folders screen - the row
-// goes straight into the picker, whose SELECTED zone already shows what is
-// shared. onChooseFolders stays the ONLY way in, so a second door cannot
-// route around the unknown-set guard. Do not reorder these two calls and do
-// not add a third call into showFolders.
-function openSharedFolders() {
-  closeSettings();
+// What it does NOT do is keep Settings' entries away from onFoldersPop: the
+// traversal is queued, not synchronous, so the picker registers onFoldersPop
+// in the same task and that listener DOES receive Settings' pop. It is
+// harmless only because share.pushed is clamped at 0 at the drive list, so
+// the pop costs one redundant GET /api/drives and nothing else.
+// CORRECTED 2026-08-29. This block previously ended "There is no separate
+// Shared Folders screen - the row goes straight into the picker", which was
+// true for T78 and is now the opposite of what ships: Lane 3's screen sits
+// between them, and ADD A FOLDER on it is the door. onChooseFolders is still
+// the ONLY way in, so no door can route around the unknown-set guard - do not
+// add a third call into showFolders.
+// ---------------------------------------------------------------------------
+// Shared folders (Lane 3). The settings row used to jump straight into the
+// picker; this is the screen the artifact puts between them - what is shared
+// now, a way to stop sharing one, and one button into the picker.
+//
+// ADD A FOLDER re-enters the SAME picker first run uses ("one picker, two
+// entry points", Decided). It does not open a second one.
+// ---------------------------------------------------------------------------
+
+// The root awaiting a STOP SHARING confirmation, or null. One at a time: the
+// panel is a single node for the whole screen, and two pending removals would
+// race the same PUT.
+let pendingRemoval = null;
+
+function renderSharedScreen() {
+  const rows = sharedFolderRows(state.shared, state.projects);
+  const host = document.getElementById('shared-rows');
+  host.innerHTML = '';
+
+  // Lane 4: name the missing ones above the list, so the dim rows below have
+  // an explanation rather than just looking broken.
+  const gone = rows.filter((r) => r.missing);
+  const goneEl = document.getElementById('shared-gone');
+  goneEl.hidden = gone.length === 0;
+  if (gone.length > 0) {
+    goneEl.textContent = gone.length === 1
+      ? `${gone[0].path} is no longer there. It was moved, renamed or deleted.`
+      : `${gone.length} shared folders are no longer there. They were moved, renamed or deleted.`;
+  }
+
+  if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'msg';
+    empty.textContent = state.shared === null
+      ? 'Not known yet - the agent has not answered.'
+      : 'Nothing shared yet.';
+    host.appendChild(empty);
+  }
+
+  for (const row of rows) host.appendChild(buildSharedRow(row));
+  renderRemovalConfirm(rows);
+}
+
+// Row anatomy, unchanged from the rest of the app: icon left, name and state
+// stacked, controls right. A live root is TAPPABLE - it opens Lane 3's
+// "Editing one" - and carries the remove X beside it; a MISSING one carries
+// only the X, because there is nothing on disk left to edit and a row that
+// offered it would be the dead control this app keeps refusing to ship.
+function buildSharedRow(row) {
+  const el = document.createElement('div');
+  el.className = row.missing ? 'row folder set-row shared-gone-row' : 'row folder set-row';
+
+  // The folder icon on EVERY row, missing ones included - Lane 4 draws a gone
+  // root as a dimmed folder row, not as a warning glyph. The warning lives in
+  // the banner above the list, once, rather than being repeated per row; and
+  // an #i-warn here inherits .set-ico's accent green, which is the one colour
+  // a broken row must not be.
+  const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  ico.querySelector('use').setAttribute('href', '#i-folder');
+  el.appendChild(ico);
+
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const name = document.createElement('span');
+  name.className = 'row-name';
+  name.textContent = row.name;
+  const sub = document.createElement('span');
+  sub.className = 'row-status';
+  sub.textContent = row.state;
+  main.appendChild(name);
+  main.appendChild(sub);
+  el.appendChild(main);
+
+  if (!row.missing) {
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'shared-open';
+    open.dataset.sharedOpen = row.path;
+    open.setAttribute('aria-label', `Edit which projects in ${row.name} are shared`);
+    const chev = document.createElement('span');
+    chev.className = 'folder-chev';   // reused wholesale, adds no new rule
+    chev.setAttribute('aria-hidden', 'true');
+    chev.textContent = '>';
+    open.appendChild(chev);
+    el.appendChild(open);
+  }
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'shared-remove';
+  remove.dataset.sharedRemove = row.path;
+  remove.setAttribute('aria-label', `Stop sharing ${row.name}`);
+  const x = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  x.querySelector('use').setAttribute('href', '#i-x');
+  remove.appendChild(x);
+  el.appendChild(remove);
+  return el;
+}
+
+function renderRemovalConfirm(rows) {
+  const panel = document.getElementById('shared-confirm');
+  const row = rows.find((r) => r.path === pendingRemoval) || null;
+  panel.hidden = row === null;
+  if (row) document.getElementById('shared-confirm-text').textContent = stopSharingPrompt(row);
+}
+
+function askStopSharing(path) {
+  pendingRemoval = path;
+  document.getElementById('shared-msg').textContent = '';
+  renderSharedScreen();
+}
+
+function cancelStopSharing() {
+  pendingRemoval = null;
+  renderSharedScreen();
+}
+
+/**
+ * Writes the shared set MINUS one root. withoutRoot preserves every other
+ * root byte for byte, so a removal cannot quietly rewrite a sibling's mode or
+ * drop its excludes - the whole reason it exists rather than a filter here.
+ */
+async function confirmStopSharing() {
+  if (pendingRemoval === null) return;
+  const btn = document.getElementById('shared-stop');
+  btn.disabled = true;
+  const res = await removeRoot(pendingRemoval);
+  btn.disabled = false;
+  if (res === null) return;   // a write was already in flight
+
+  if (!res.ok) {
+    // 401 has already re-locked via api.js and there is no screen left to
+    // write on; anything else is the agent refusing, and the owner needs the
+    // words for it HERE, not on the project list behind this screen.
+    if (res.status !== 401) {
+      document.getElementById('shared-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
+    }
+    return;
+  }
+
+  pendingRemoval = null;
+  document.getElementById('shared-msg').textContent = '';
+  renderSharedScreen();
+  renderSettings();  // the settings root's own row carries the count
+  load();            // the project list loses that root's projects
+}
+
+// ---------------------------------------------------------------------------
+// Lane 3, step 2 - editing one shared folder.
+//
+// The child list comes from GET /api/folders, not from state.projects: an
+// EXCLUDED child never appears in the projects list, so a screen built from
+// that could show you what is on but never what you had switched off.
+// ---------------------------------------------------------------------------
+
+// The root being edited: { path, name, rows } while it is open, else null.
+// `rows` is the working copy - the ticks in it are unsaved until SAVE.
+let rootEdit = null;
+
+/** The names of projects with a live session, for the "running" marks. */
+function runningProjectNames() {
+  return (state.sessions || [])
+    .filter((s) => s.status !== 'ended')
+    .map((s) => s.project);
+}
+
+async function openRootEditor(rootPath) {
+  const row = sharedFolderRows(state.shared, state.projects).find((r) => r.path === rootPath);
+  if (!row) return;
+  // Opened BEFORE the fetch so the screen and its history entry exist while
+  // the listing is in flight - the same shape openSettingsSub gives every
+  // other sub-screen, rather than a blank frame appearing later.
+  rootEdit = { path: rootPath, name: row.name, rows: null };
+  openSettingsSub('root');
+  document.getElementById('root-msg').textContent = 'Reading the folder...';
+
+  const res = await getFolders(rootPath);
+  // The owner may have left while it was loading; anything rendered now would
+  // land on a screen they are no longer on.
+  if (rootEdit === null || rootEdit.path !== rootPath) return;
+
+  if (!res.ok) {
+    if (res.status !== 401) {
+      document.getElementById('root-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
+    }
+    return;
+  }
+  const shared = (state.shared || []).find((r) => r.path === rootPath);
+  rootEdit.rows = rootEditRows(res.data.folders, shared ? shared.excludes : [], runningProjectNames());
+  document.getElementById('root-msg').textContent = '';
+  renderRootEditor();
+}
+
+function renderRootEditor() {
+  if (rootEdit === null) return;
+  document.getElementById('root-label').textContent = rootEdit.name.toUpperCase();
+  const host = document.getElementById('root-rows');
+  host.innerHTML = '';
+
+  const warn = document.getElementById('root-warn');
+  const words = orphanWarning(rootEdit.rows);
+  warn.hidden = words === null;
+  if (words !== null) warn.textContent = words;
+
+  // SAVE is live only once the listing has landed: saving from an empty
+  // working copy would write excludes for every child at once.
+  document.getElementById('root-save').disabled = rootEdit.rows === null;
+  if (rootEdit.rows === null) return;
+
+  for (const row of rootEdit.rows) host.appendChild(buildRootRow(row));
+}
+
+// Tick, name, and - when there is one - the fact that a session is live in
+// there. NO chevron and no drill button: the artifact's "Editing one" is a
+// flat list of the folder's children, and there is nowhere deeper to go from
+// it. Built here rather than through buildTickableRow, which always draws the
+// drill control the picker needs and this screen must not have.
+function buildRootRow(row) {
+  const el = document.createElement('div');
+  el.className = 'share-row';
+
+  const label = document.createElement('label');
+  label.className = 'share-tick';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  // Its own attribute, not the picker's data-tick: the two screens have one
+  // delegated handler each and must not answer for each other's rows.
+  input.dataset.rootTick = row.name;
+  input.checked = row.ticked;
+  if (!row.readable) input.disabled = true;
+  label.appendChild(input);
+  label.appendChild(buildChk());
+  el.appendChild(label);
+
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = row.name;
+  main.appendChild(nameEl);
+  if (!row.readable) {
+    const sub = document.createElement('span');
+    sub.className = 'row-status';
+    sub.textContent = 'no permission to open this folder';
+    main.appendChild(sub);
+  }
+  el.appendChild(main);
+
+  if (row.running) {
+    const live = document.createElement('span');
+    live.className = 'root-live';
+    live.textContent = 'session running';
+    el.appendChild(live);
+  }
+  return el;
+}
+
+function toggleRootTick(name, ticked) {
+  if (rootEdit === null || rootEdit.rows === null) return;
+  const row = rootEdit.rows.find((r) => r.name === name);
+  if (!row) return;
+  row.ticked = ticked;
+  // Re-rendered rather than left alone: the orphan warning above the list is
+  // derived from these ticks and has to follow them.
+  renderRootEditor();
+}
+
+async function saveRootEdit() {
+  if (rootEdit === null || rootEdit.rows === null) return;
+  const btn = document.getElementById('root-save');
+  btn.disabled = true;
+  const body = withRootExcludes(state.shared, rootEdit.path, excludesFrom(rootEdit.rows));
+  const res = await putShared(body);
+  btn.disabled = false;
+
+  if (!res.ok) {
+    if (res.status !== 401) {
+      document.getElementById('root-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
+    }
+    return;
+  }
+  state.shared = res.data.shared_folders;
+  document.getElementById('root-msg').textContent = '';
+  closeSettingsSub();   // saved, so the screen has nothing left to say
+  load();               // the project list gains or loses those children
+}
+
+// STOP SHARING THIS FOLDER, from inside the folder. Hands off to the same
+// confirmation the X on the Shared folders screen raises, rather than
+// carrying a second copy of that question and its wording.
+function stopSharingFromEditor() {
+  if (rootEdit === null) return;
+  const path = rootEdit.path;
+  closeSettingsSub();
+  askStopSharing(path);
+}
+
+// The door out of this screen and into the picker. Settings is left first: the picker is a top-level
+// screen, not a settings sub-screen, so Settings' history entries have to come
+// off before the picker pushes its own.
+// Both settings entries come off in ONE traversal, the same discipline
+// goHome's sub-screen branch uses - the picker is a top-level screen, not a
+// settings sub-screen, so neither entry may be left underneath it.
+// Counted BEFORE the flags are cleared: written the other way round, the
+// ternary reads the value it has just nulled and the traversal is one entry
+// short. That exact bug has been fixed twice in this file already.
+function openPickerFromShared() {
+  const depth = settingsSubs.length + (settingsPushed ? 1 : 0);
+  settingsSubs.length = 0;
+  closingSub = false;
+  settingsPushed = false;
+  showScreen('list');
+  render();
+  if (depth > 0) history.go(-depth);
   onChooseFolders();
 }
 
@@ -2274,10 +2946,10 @@ function openSharedFolders() {
 // never launch). A disabled-looking row that still answers a tap is what this
 // avoids.
 function buildSettingsRow({
-  id, icon, name, state: stateText, enterable, fact = false,
+  id, icon, name, state: stateText, enterable, fact = false, dot = false, accent = false,
 }) {
   const el = document.createElement(enterable ? 'button' : 'div');
-  el.className = 'row folder set-row';
+  el.className = accent ? 'row folder set-row has-update' : 'row folder set-row';
   if (enterable) {
     el.type = 'button';
     el.dataset.settings = id;
@@ -2293,6 +2965,15 @@ function buildSettingsRow({
   const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
   ico.querySelector('use').setAttribute('href', `#${icon}`);
   el.appendChild(ico);
+
+  // Lane 5: "the marker repeats on the row that holds the news, so the trail
+  // never breaks". Same dot as the one on the gear, and the same decision
+  // about it - no animation.
+  if (dot) {
+    const marker = document.createElement('span');
+    marker.className = 'updot';
+    el.appendChild(marker);
+  }
 
   const main = document.createElement('span');
   main.className = 'row-main';
@@ -2346,6 +3027,7 @@ function buildSettingsRow({
  */
 function settingsGroups(facts) {
   const shared = sharedRowState(state.shared);
+  const about = aboutRowState(SHELL_VERSION, state.status);
   return [
     {
       heading: 'FOLDERS',
@@ -2357,6 +3039,14 @@ function settingsGroups(facts) {
     {
       heading: 'SECURITY',
       rows: [
+        // First in the group, and on i-lock - which Lane 6 also gives to
+        // 'Lock now'. Two rows sharing an icon is what the artifact draws;
+        // picking a different one here to make them distinguishable would be
+        // inventing a screen it does not.
+        {
+          id: 'passcode', icon: 'i-lock', name: 'Change passcode',
+          state: '', enterable: true,
+        },
         {
           id: 'see', icon: 'i-eye', name: 'What this app can see',
           state: '', enterable: true,
@@ -2383,9 +3073,11 @@ function settingsGroups(facts) {
           id: 'reset', icon: 'i-rot', name: 'Reset the app',
           state: 'clears cache, gets the latest', enterable: true,
         },
+        // Lane 5, step 2: Settings carries the dot down to the row that
+        // holds the news, and the sub-line names the waiting version.
         {
           id: 'about', icon: 'i-info', name: 'About',
-          state: SHELL_VERSION, enterable: true,
+          state: about.text, enterable: true, dot: about.update, accent: about.update,
         },
       ],
     },
@@ -2594,7 +3286,6 @@ function wireEvents() {
     const row = e.target.closest('[data-settings]');
     if (!row) return;
     const id = row.dataset.settings;
-    if (id === 'shared') { openSharedFolders(); return; }
     if (id === 'lock') { lockNow(); return; }
     if (SETTINGS_SUBS.has(id)) {
       openSettingsSub(id);
@@ -2623,6 +3314,41 @@ function wireEvents() {
   // Every sub-screen's back control, and the two buttons on Reset.
   for (const el of document.querySelectorAll('[data-set-back]')) {
     el.addEventListener('click', closeSettingsSub);
+  }
+  // Shared folders (Lane 3). The remove X is delegated because its rows are
+  // rebuilt on every render; the three fixed buttons are wired once.
+  document.getElementById('shared-rows').addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-shared-remove]');
+    if (remove) { askStopSharing(remove.dataset.sharedRemove); return; }
+    const open = e.target.closest('[data-shared-open]');
+    if (open) openRootEditor(open.dataset.sharedOpen);
+  });
+  // Lane 3, step 2. Scoped to this screen's own list, never the document: the
+  // picker's rows carry their own data-tick and must not answer here.
+  document.getElementById('root-rows').addEventListener('change', (e) => {
+    const box = e.target.closest('[data-root-tick]');
+    if (box) toggleRootTick(box.dataset.rootTick, box.checked);
+  });
+  document.getElementById('root-save').addEventListener('click', saveRootEdit);
+  document.getElementById('root-stop').addEventListener('click', stopSharingFromEditor);
+  document.getElementById('update-go').addEventListener('click', installUpdate);
+  document.getElementById('shared-add').addEventListener('click', openPickerFromShared);
+  document.getElementById('shared-stop').addEventListener('click', confirmStopSharing);
+  document.getElementById('shared-cancel').addEventListener('click', cancelStopSharing);
+  document.getElementById('pw-form').addEventListener('submit', onChangePasscode);
+  for (const id of PW_FIELDS) {
+    document.getElementById(id).addEventListener('input', updatePwEnabled);
+  }
+  // One handler, three eyes: the toggle is per FIELD, as Lane 7 specifies,
+  // never one switch for the form. Scoped to #set-passcode: the gate's two
+  // eyes are wired by lock.js, which owns that screen, and an unscoped
+  // selector would put a SECOND listener on them - two toggles per tap, which
+  // cancel out and look like a dead control.
+  for (const id of PW_FIELDS) {
+    const btn = document.getElementById(`${id}-eye`);
+    btn.addEventListener('click', () => {
+      setPinRevealed(id, btn.getAttribute('aria-pressed') !== 'true');
+    });
   }
   document.getElementById('reset-cancel').addEventListener('click', closeSettingsSub);
   document.getElementById('reset-go').addEventListener('click', resetApp);

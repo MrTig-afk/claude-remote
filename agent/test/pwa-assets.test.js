@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { readServiceWorker } from '../static.js';
 import * as folders from '../public/folders-ui.js';
 import * as copy from '../public/copy.js';
+import * as update from '../public/update-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -660,7 +661,16 @@ test('a list row folds its elapsed time into the status line, so the removed idl
 
 // --- STOP / confirm / watch loop ---
 
-test('the danger tokens appear only in stop/confirm rules, never on a banner', () => {
+// The rule is "var(--danger) means THIS ENDS SOMETHING", not "danger belongs
+// to the session tiles". Lane 3 and Lane 8 of the artifact put red on the
+// shared-folder remove and its confirmation in exactly those words -
+// "destructive, so it asks; red is this palette's one danger colour and
+// appears nowhere else" - so those selectors are on the list below. It stays
+// an ALLOWLIST: a new red thing must be added here on purpose, and the two
+// base banner rules must stay neutral whatever else does.
+const DANGER_SELECTORS = /tile-stop|tile-confirm|shared-remove|set-danger|set-gone|set-btn-danger/;
+
+test('the danger tokens appear only on controls that end something, never on a plain banner', () => {
   const css = read('app.css');
   const blocks = css.split('}').filter((chunk) => chunk.includes('{'));
   for (const chunk of blocks) {
@@ -669,8 +679,8 @@ test('the danger tokens appear only in stop/confirm rules, never on a banner', (
     if (/var\(--danger(?:-2)?\)/.test(body)) {
       assert.match(
         selector,
-        /tile-stop|tile-confirm/,
-        `selector "${selector.trim()}" carries a danger colour but is not a stop/confirm rule`,
+        DANGER_SELECTORS,
+        `selector "${selector.trim()}" carries a danger colour but is not a destructive control`,
       );
     }
   }
@@ -1513,6 +1523,9 @@ function makeRenderProjectsIntegration(stubs) {
     'document', 'state', 'buildTile', 'buildRow', 'renderBackBar',
     'listZoneState', 'missingRoots', 'buildEmptyState', 'buildGoneNotice', 'crumbSegments',
     'SHARED_UNKNOWN', 'NOTHING_SHARED', 'ALL_ROOTS_GONE', 'EMPTY_DAY_ONE_BODY', 'emptyDayOneTitle',
+    // Lane 9's grouping runs inside renderProjects now, so the row zone's own
+    // dependency comes in here too.
+    'projectSections',
     src + '; return renderProjects;',
   )(
     stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar,
@@ -1526,6 +1539,7 @@ function makeRenderProjectsIntegration(stubs) {
     stubs.ALL_ROOTS_GONE || copy.ALL_ROOTS_GONE,
     stubs.EMPTY_DAY_ONE_BODY || copy.EMPTY_DAY_ONE_BODY,
     stubs.emptyDayOneTitle || copy.emptyDayOneTitle,
+    stubs.projectSections || folders.projectSections,
   );
 }
 
@@ -1550,7 +1564,7 @@ test('renderProjects: with a folder open, only that folder\'s children render an
     ],
     launching: new Set(), stopping: new Set(), results: new Map(), confirmName: null, focusName: null,
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const rowsSeen = [];
   const tilesSeen = [];
@@ -1573,10 +1587,12 @@ test('renderProjects: with a folder open, only that folder\'s children render an
 function makePopState(state, historyStub) {
   const js = read('app.js');
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
+  // The settings stack is EMPTY in these tests: they exercise the drill/confirm
+  // branches, which sit below the settings branch and must be unaffected by it.
   return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
-    'settingsSub', 'SETTINGS_SUBS', 'renderSettings',
+    'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
     src + '; return onPopState;')(state, historyStub, () => {}, true, true, false, () => {},
-    null, new Set(['see', 'agent', 'reset', 'about']), () => {});
+    [], () => null, false, new Set(['see', 'agent', 'reset', 'about', 'update']), () => {}, () => {});
 }
 
 test('back with only the drill-in open returns to the list', () => {
@@ -1793,7 +1809,7 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
     ],
     launching: new Set(), stopping: new Set(), results: new Map(),
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const seen = [];
   const buildRow = (p) => { seen.push(p); return { tag: 'ROW' }; };
@@ -1868,7 +1884,12 @@ function baseEmptyListState(overrides) {
 }
 
 function makeProjectsEls() {
-  return { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  return {
+    tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
+    // Lane 9's row zone renames or hides the ALL PROJECTS header depending on
+    // how many shared folders there are, so these three are read every render.
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(),
+  };
 }
 
 // getElementById off the persistent `els` map, PLUS a real createElement -
@@ -2462,9 +2483,14 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
 // Two slices of app.js, concatenated - function declarations hoist across
 // the whole `new Function` body, so order does not matter. The second slice
 // is exactly loadPicker's own slice (it already carries showFolders,
-// finishFolders, onSave, closeSettings, openSharedFolders, renderSettings
+// finishFolders, onSave, closeSettings, openPickerFromShared, renderSettings
 // and buildSettingsRow); the first adds onChooseFolders, the ONLY way in for
-// either door. openSettings (inside the second slice) references
+// either door.
+// The Settings door is now two screens: the row opens Lane 3's Shared
+// folders screen, and ADD A FOLDER there is what reaches the picker. That
+// button's handler is openPickerFromShared, so it is the door these tests
+// drive - every assertion below is about what the picker does once opened,
+// which is unchanged. openSettings (inside the second slice) references
 // cancelOpenConfirm, which is NOT injected - no test here calls it.
 function loadDoor({
   getDrives, getFolders, putShared, load,
@@ -2500,11 +2526,11 @@ function loadDoor({
     'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
     'sharedToTicks', 'sharedRowState',
     'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
-    'SHELL_VERSION', 'agentStateLine',
+    'SHELL_VERSION', 'agentStateLine', 'aboutRowState',
     'state', 'render', 'load',
     `${onChooseSrc}
 ${pickerSrc}
-return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListChange, onShareListClick, onSharePickedClick, onSkipClick, onSave, finishFolders, toggleTick, onChooseFolders, openSharedFolders, closeSettings, renderSettings, buildSettingsRow };`,
+return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListChange, onShareListClick, onSharePickedClick, onSkipClick, onSave, finishFolders, toggleTick, onChooseFolders, openPickerFromShared, closeSettings, renderSettings, buildSettingsRow };`,
   );
 
   const door = fn(
@@ -2518,7 +2544,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     copy.PICKER_SKIP, copy.PICKER_CANCEL, showScreenSpy,
     // settingsGroups reads both: the About row's sub-line is the shell
     // version, and the Agent status row's is the connection state.
-    '0.1.0', (r) => (r === true ? 'reachable' : 'checking'),
+    '0.1.0', (r) => (r === true ? 'reachable' : 'checking'), update.aboutRowState,
     state, render, loadSpy,
   );
   door.document = doc;
@@ -2871,27 +2897,31 @@ test('D10 - the SKIP/CANCEL label depends on whether anything is already shared'
 
 // --- T78: the shared folders door - pins the composite path end to end -----
 
-test('F1 - the Settings row is wired to openSharedFolders, and nothing else calls it', () => {
+test("F1 - the Settings row leads to Lane 3's screen, and one place reaches the picker from it", () => {
   // RED WHEN: the row renders with a chevron and answers a tap with nothing -
   // the dead control the whole enterable/inert split exists to prevent.
-  // Nothing pins this wire today.
+  // 'shared' used to be an ACTION that jumped straight into the picker; Lane 3
+  // makes it a screen, so what this pins is that it is a real destination and
+  // that exactly one control still reaches the picker from there.
   const js = read('app.js').replace(/\r/g, '');
-  // The handler moved from #settings-list to a delegated document listener
-  // when Lane 7 landed: About repeats the 'What this app can see' row, and a
-  // row must behave identically wherever it is drawn. The assertion below is
-  // unchanged in substance - the id still routes to openSharedFolders and
-  // nothing else calls it.
-  const marker = "const id = row.dataset.settings;";
+  const declStart = js.indexOf('const SETTINGS_SUBS');
+  const decl = js.slice(declStart, js.indexOf(';', declStart));
+  assert.match(decl, /'shared'/, "'shared' must be a settings sub-screen, not a dead id");
+
+  const marker = 'const id = row.dataset.settings;';
   const start = js.indexOf(marker);
   assert.ok(start !== -1, 'wireEvents must delegate settings-row clicks');
   const body = js.slice(start, js.indexOf('});', start));
-  assert.match(body, /openSharedFolders\(\)/);
+  assert.ok(
+    !/openSharedFolders\(\)/.test(body),
+    'the row must not jump straight into the picker any more - that is what Lane 3 replaced',
+  );
 
-  const callSites = [...js.matchAll(/openSharedFolders\(\)/g)].filter((m) => {
+  const callSites = [...js.matchAll(/openPickerFromShared\b/g)].filter((m) => {
     const before = js.slice(Math.max(0, m.index - 9), m.index);
     return before !== 'function ';
   });
-  assert.equal(callSites.length, 1, 'openSharedFolders() must be called from exactly one place');
+  assert.equal(callSites.length, 1, 'exactly one control may reach the picker from Shared folders');
 });
 
 test('F2 - re-entry seeds the ticks, so the Settings door never opens blank', async () => {
@@ -2903,7 +2933,7 @@ test('F2 - re-entry seeds the ticks, so the Settings door never opens blank', as
     path: 'F:\\Dev\\Projects', mode: 'container', excludes: ['Archive'], new_folders: 'show',
   }];
 
-  door.openSharedFolders();
+  door.openPickerFromShared();
   await flush();
 
   assert.equal(door.document.getElementById('folders').hidden, false);
@@ -2943,7 +2973,7 @@ test('F3 - an unknown shared set cannot enter the picker from the Settings door'
   // #folders ships with the `hidden` attribute in index.html; the stub
   // element defaults to unhidden, so set it explicitly to model that.
   door.document.getElementById('folders').hidden = true;
-  door.openSharedFolders();
+  door.openPickerFromShared();
   assert.equal(door.document.getElementById('folders').hidden, true);
   assert.deepEqual(door.share.ticks, []);
   assert.equal(door.puts.length, 0);
@@ -2963,7 +2993,7 @@ test('F4 - SAVE writes the right PUT body, and the list reload runs only after t
     path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
   }];
 
-  door.openSharedFolders();
+  door.openPickerFromShared();
   await flush();
 
   await door.openPath('F:\\Dev\\Projects', { push: true });
@@ -3005,7 +3035,7 @@ test('F5 - CANCEL changes nothing: no write, state.shared untouched, the list is
   const door = loadDoor({});
   door.state.shared = sharedBefore;
 
-  door.openSharedFolders();
+  door.openPickerFromShared();
   await flush();
 
   door.document.getElementById('share-skip').fire('click');
@@ -3032,7 +3062,7 @@ test('F6 - Settings\' queued pop lands under the fresh picker: one redundant GET
     path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
   }];
 
-  door.openSharedFolders();
+  door.openPickerFromShared();
   await flush();
   assert.equal(drivesCalls, 1);
 
@@ -3059,7 +3089,7 @@ test('F7 - a gone root re-entered: a rejected SAVE marks the row and keeps every
     path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
   }];
 
-  door.openSharedFolders();
+  door.openPickerFromShared();
   await flush();
 
   door.document.getElementById('share-save').fire('click');
@@ -3103,7 +3133,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
     path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
   }];
 
-  door.openSharedFolders(); // Settings row -> the picker, seeded with F:\Dev\Projects
+  door.openPickerFromShared(); // Settings row -> the picker, seeded with F:\Dev\Projects
   await flush();
 
   door.toggleTick('F:\\Dev\\Projects', false); // untick the wrong root
@@ -3128,6 +3158,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
   const rowsSeen = [];
   const els = {
     tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(),
   };
   const projDocument = {
     getElementById: (id) => els[id],
@@ -3391,4 +3422,35 @@ test('E9 - a disabled consent checkbox does not swallow the tap', () => {
     /\.accept-consent\s+input:disabled\s*\{[^}]*pointer-events:\s*none/,
     'the disabled consent checkbox must let the tap fall through to its label',
   );
+});
+
+// The eye toggle is an app-wide rule, not a per-screen one: the artifact
+// draws it on the gate (Lane 1, Lane 2) and on Change passcode (Lane 7).
+test('every passcode field carries its own eye, found by the <input id>-eye convention', () => {
+  // RED WHEN: a field is added without an eye, or an eye is added with an id
+  // that setPinRevealed cannot derive - it looks the button up as
+  // `${inputId}-eye` and would throw on the tap.
+  const html = read('index.html');
+  const inputIds = [...html.matchAll(/<input class="pin" id="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(inputIds.length >= 5, `expected the gate's two and Change passcode's three, got ${inputIds.length}`);
+  for (const id of inputIds) {
+    assert.match(
+      html,
+      new RegExp(`<button class="pin-eye" id="${id}-eye"[^>]*data-pin-name="`),
+      `#${id} must have a #${id}-eye button carrying data-pin-name`,
+    );
+  }
+});
+
+test('no passcode field group is a <label>, or tapping its eye types into the field', () => {
+  // RED WHEN: the old <label class="gate-field"> wrapper comes back. A click
+  // on a button inside a <label> is forwarded to the labelled control, so the
+  // reveal would also move the caret into the field.
+  const html = read('index.html');
+  assert.ok(
+    !/<label[^>]*class="gate-field"/.test(html),
+    'a field group holding a button must be a <div>, with the label associated by `for`',
+  );
+  const groups = [...html.matchAll(/<div class="gate-field"[^>]*>/g)];
+  assert.ok(groups.length >= 5, `expected five field groups, got ${groups.length}`);
 });
