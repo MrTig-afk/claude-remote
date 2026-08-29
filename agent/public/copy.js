@@ -97,7 +97,7 @@ export function renderSections(host) {
 
 // Below: the empty/broken project list (T100) - state 1 (nothing shared),
 // state 2 (a shared root gone), and state 4 (shared, empty on day one).
-// T78's Shared Folders screen reuses CHOOSE_FOLDERS_BUTTON.
+// T78 added no screen and no words: the Settings row re-enters this same picker.
 
 export const CHOOSE_FOLDERS_BUTTON = 'CHOOSE FOLDERS';
 export const PICKER_SKIP = 'SKIP FOR NOW';

@@ -45,7 +45,7 @@ const state = {
 const reported = new Set();
 
 // The whole routing table. One <main> per screen, exactly one visible at a
-// time. T78-T85 add a key and a <main> here and inherit showScreen, goHome
+// time. T79-T85 add a key and a <main> here and inherit showScreen, goHome
 // and the back handling with no further wiring.
 const SCREEN_MAIN = {
   gate: 'gate',
@@ -2011,10 +2011,6 @@ function showFolders(initial) {
 // rows, and nowhere else to go but the home control in the shared header.
 // ============================================================================
 
-function hideSettings() {
-  document.getElementById('settings').hidden = true;
-}
-
 // Same shape as confirmPushed/folderPushed: true exactly while Settings'
 // history entry is on the stack and this session is the one that pushed it.
 let settingsPushed = false;
@@ -2051,8 +2047,11 @@ function closeSettings() {
 // onFoldersPop in the same task and that listener DOES receive Settings' pop.
 // It is harmless only because share.pushed is clamped at 0 at the drive list,
 // so the pop costs one redundant GET /api/drives and nothing else.
-// T78 replaces this body with its own screen and keeps onChooseFolders as the
-// only way in - and inherits this ordering, so do not reorder it there either.
+// T78 KEPT THIS BODY. There is no separate Shared Folders screen - the row
+// goes straight into the picker, whose SELECTED zone already shows what is
+// shared. onChooseFolders stays the ONLY way in, so a second door cannot
+// route around the unknown-set guard. Do not reorder these two calls and do
+// not add a third call into showFolders.
 function openSharedFolders() {
   closeSettings();
   onChooseFolders();

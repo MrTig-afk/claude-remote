@@ -773,11 +773,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v25', () => {
+test('sw.js CACHE is claude-remote-shell-v26', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v25');
+  assert.equal(match[1], 'claude-remote-shell-v26');
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -2370,6 +2370,76 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
   return picker;
 }
 
+// --- the shared-folders door (T78) ------------------------------------------
+
+// Two slices of app.js, concatenated - function declarations hoist across
+// the whole `new Function` body, so order does not matter. The second slice
+// is exactly loadPicker's own slice (it already carries showFolders,
+// finishFolders, onSave, closeSettings, openSharedFolders, renderSettings
+// and buildSettingsRow); the first adds onChooseFolders, the ONLY way in for
+// either door. openSettings (inside the second slice) references
+// cancelOpenConfirm, which is NOT injected - no test here calls it.
+function loadDoor({
+  getDrives, getFolders, putShared, load,
+} = {}) {
+  const js = read('app.js').replace(/\r/g, '');
+  const onChooseSrc = js.slice(
+    js.indexOf('async function onChooseFolders('),
+    js.indexOf('// Guarded against a double tap the same way onSave is'),
+  );
+  const pickerSrc = js.slice(js.indexOf('const share = {'), js.indexOf('function screenAfterUnlock('));
+  const doc = fakeDocument();
+  const win = fakeWindow();
+  const hist = fakeHistory();
+  const state = { shared: null };
+  const screens = [];
+  const showScreenSpy = (name) => { screens.push(name); };
+  const puts = [];
+  async function putSharedSpy(body) {
+    puts.push(body);
+    return (putShared || (async () => ({ ok: true, status: 200, data: {} })))(body);
+  }
+  let loadCalls = 0;
+  async function loadSpy() {
+    loadCalls += 1;
+    if (load) await load();
+  }
+  const render = () => {};
+
+  const fn = new Function(
+    'document', 'window', 'history',
+    'getDrives', 'getFolders', 'putShared',
+    'crumbSegments', 'sharedBody', 'coverageOf', 'driveRowState',
+    'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
+    'sharedToTicks', 'sharedRowState',
+    'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
+    'state', 'render', 'load',
+    `${onChooseSrc}
+${pickerSrc}
+return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListChange, onShareListClick, onSharePickedClick, onSkipClick, onSave, finishFolders, toggleTick, onChooseFolders, openSharedFolders, closeSettings, renderSettings, buildSettingsRow };`,
+  );
+
+  const door = fn(
+    doc, win, hist,
+    getDrives || (async () => ({ ok: true, status: 200, data: { drives: [] } })),
+    getFolders || (async () => ({ ok: true, status: 200, data: { path: 'F:', parent: null, folders: [], total: 0 } })),
+    putSharedSpy,
+    folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
+    folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
+    folders.sharedToTicks, folders.sharedRowState,
+    copy.PICKER_SKIP, copy.PICKER_CANCEL, showScreenSpy,
+    state, render, loadSpy,
+  );
+  door.document = doc;
+  door.window = win;
+  door.history = hist;
+  door.state = state;
+  door.screens = screens;
+  door.puts = puts;
+  Object.defineProperty(door, 'loadCalls', { get: () => loadCalls });
+  return door;
+}
+
 test('A6 - buildDriveRow: a blocked drive carries no data-open, no data-tick and no <button>', () => {
   const { buildDriveRow } = loadRowBuilders();
   const row = buildDriveRow({
@@ -2706,6 +2776,285 @@ test('D10 - the SKIP/CANCEL label depends on whether anything is already shared'
   picker2.showFolders([{ path: 'F:\\Dev', name: 'Dev', newFolders: 'show' }]);
   await flush();
   assert.equal(picker2.document.getElementById('share-skip').textContent, copy.PICKER_CANCEL);
+});
+
+// --- T78: the shared folders door - pins the composite path end to end -----
+
+test('F1 - the Settings row is wired to openSharedFolders, and nothing else calls it', () => {
+  // RED WHEN: the row renders with a chevron and answers a tap with nothing -
+  // the dead control the whole enterable/inert split exists to prevent.
+  // Nothing pins this wire today.
+  const js = read('app.js').replace(/\r/g, '');
+  const marker = "document.getElementById('settings-list').addEventListener('click', (e) => {";
+  const start = js.indexOf(marker);
+  assert.ok(start !== -1, 'wireEvents must wire #settings-list');
+  const body = js.slice(start, js.indexOf('});', start));
+  assert.match(body, /openSharedFolders\(\)/);
+
+  const callSites = [...js.matchAll(/openSharedFolders\(\)/g)].filter((m) => {
+    const before = js.slice(Math.max(0, m.index - 9), m.index);
+    return before !== 'function ';
+  });
+  assert.equal(callSites.length, 1, 'openSharedFolders() must be called from exactly one place');
+});
+
+test('F2 - re-entry seeds the ticks, so the Settings door never opens blank', async () => {
+  // RED WHEN: the Settings door opens the picker EMPTY - the owner sees none
+  // of his folders, and one tap on SAVE writes {shared_folders:[]} and wipes
+  // them all with no error.
+  const door = loadDoor({});
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: ['Archive'], new_folders: 'show',
+  }];
+
+  door.openSharedFolders();
+  await flush();
+
+  assert.equal(door.document.getElementById('folders').hidden, false);
+  assert.deepEqual(door.screens, ['list', 'folders']);
+  assert.deepEqual(door.share.ticks, [{
+    path: 'F:\\Dev\\Projects', name: 'Projects', newFolders: 'show', mode: 'container', excludes: ['Archive'],
+  }]);
+  assert.equal(door.document.getElementById('share-picked-count').textContent, '1');
+  const picked = door.document.getElementById('share-picked');
+  const statuses = collectByClass(picked, 'row-status');
+  assert.ok(statuses.some((s) => s.textContent === 'F:\\Dev\\Projects'), 'a .row-status under #share-picked must hold the full path');
+  assert.equal(door.document.getElementById('share-skip').textContent, copy.PICKER_CANCEL);
+  assert.equal(door.document.getElementById('share-save').disabled, false);
+});
+
+test('F3 - an unknown shared set cannot enter the picker from the Settings door', () => {
+  // RED WHEN: either guard layer is bypassed by the second door. This is the
+  // merge gate T100's review set.
+  const door = loadDoor({});
+  door.state.shared = null;
+
+  door.renderSettings();
+  const row = findByDataset(door.document.getElementById('settings-list'), 'settings');
+  assert.equal(row, null, 'the row must carry no data-settings when the set is unknown');
+
+  // #folders ships with the `hidden` attribute in index.html; the stub
+  // element defaults to unhidden, so set it explicitly to model that.
+  door.document.getElementById('folders').hidden = true;
+  door.openSharedFolders();
+  assert.equal(door.document.getElementById('folders').hidden, true);
+  assert.deepEqual(door.share.ticks, []);
+  assert.equal(door.puts.length, 0);
+});
+
+test('F4 - SAVE writes the right PUT body, and the list reload runs only after the PUT resolves', async () => {
+  // RED WHEN: the body rewrites a `single` root as `container` or drops
+  // excludes; or the app never reloads and the list keeps showing the old
+  // root's children.
+  const getFolders = async (p) => (p === 'F:\\Dev\\Projects'
+    ? { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Repos', readable: true }], total: 1 } }
+    : { ok: true, status: 200, data: { path: p, parent: null, folders: [], total: 0 } });
+  let resolvePut;
+  const putShared = () => new Promise((resolve) => { resolvePut = () => resolve({ ok: true, status: 200, data: {} }); });
+  const door = loadDoor({ getFolders, putShared });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openSharedFolders();
+  await flush();
+
+  await door.openPath('F:\\Dev\\Projects', { push: true });
+
+  const untick = findByDataset(door.document.getElementById('share-picked'), 'untick');
+  assert.ok(untick, 'the SELECTED row must carry the x control');
+  door.onSharePickedClick({ target: untick });
+
+  const tick = findByDataset(door.document.getElementById('share-list'), 'tick');
+  assert.ok(tick, 'the folder listing must carry Repos\'s checkbox');
+  tick.checked = true;
+  door.onShareListChange({ target: tick });
+
+  door.document.getElementById('share-save').fire('click');
+  await flush();
+
+  assert.deepEqual(door.puts.at(-1), {
+    shared_folders: [{
+      path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show',
+    }],
+  });
+  assert.equal(door.loadCalls, 0, 'the reload must not run before the PUT resolves');
+
+  resolvePut();
+  await flush();
+  await flush();
+
+  assert.equal(door.document.getElementById('folders').hidden, true);
+  assert.equal(door.screens.at(-1), 'list');
+  assert.equal(door.loadCalls, 1, 'the reload must run exactly once, after the PUT resolved');
+});
+
+test('F5 - CANCEL changes nothing: no write, state.shared untouched, the list is still reloaded', async () => {
+  // RED WHEN: a cancel path grows a write, or the picker leaves the app on a
+  // hidden screen with no <main> revealed.
+  const sharedBefore = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+  const door = loadDoor({});
+  door.state.shared = sharedBefore;
+
+  door.openSharedFolders();
+  await flush();
+
+  door.document.getElementById('share-skip').fire('click');
+  await flush();
+  await flush();
+
+  assert.equal(door.puts.length, 0, 'CANCEL must never call putShared');
+  assert.equal(door.state.shared, sharedBefore, 'the same object, unmutated - the agent still decides');
+  assert.equal(door.document.getElementById('folders').hidden, true);
+  assert.equal(door.screens.at(-1), 'list');
+  assert.equal(door.loadCalls, 1);
+});
+
+test('F6 - Settings\' queued pop lands under the fresh picker: one redundant GET, nothing lost', async () => {
+  // RED WHEN: the pop eats a level, drives share.pushed negative, or clears
+  // the seeded ticks - after which a SAVE writes an empty set.
+  let drivesCalls = 0;
+  const getDrives = async () => {
+    drivesCalls += 1;
+    return { ok: true, status: 200, data: { drives: [] } };
+  };
+  const door = loadDoor({ getDrives });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openSharedFolders();
+  await flush();
+  assert.equal(drivesCalls, 1);
+
+  door.history.state = null;
+  door.onFoldersPop();
+  await flush();
+
+  assert.equal(door.share.pushed, 0, 'must never go negative');
+  assert.deepEqual(door.share.ticks, [{
+    path: 'F:\\Dev\\Projects', name: 'Projects', newFolders: 'show', mode: 'container', excludes: [],
+  }]);
+  assert.equal(door.share.path, null);
+  assert.equal(drivesCalls, 2, 'exactly one redundant GET, nothing more');
+});
+
+test('F7 - a gone root re-entered: a rejected SAVE marks the row and keeps everything picked', async () => {
+  // RED WHEN: a rejected SAVE clears the tick set (losing everything he
+  // picked) or fails silently with no row marked.
+  const putShared = async () => ({
+    ok: false, status: 400, code: 'not_found', data: { index: 0 },
+  });
+  const door = loadDoor({ putShared });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openSharedFolders();
+  await flush();
+
+  door.document.getElementById('share-save').fire('click');
+  await flush();
+  await flush();
+
+  assert.equal(door.document.getElementById('folders').hidden, false, 'the picker must stay open on a rejected SAVE');
+  assert.deepEqual(door.share.ticks, [{
+    path: 'F:\\Dev\\Projects', name: 'Projects', newFolders: 'show', mode: 'container', excludes: [],
+  }]);
+  assert.equal(door.share.errorIndex, 0);
+  const picked = door.document.getElementById('share-picked');
+  const badRow = picked.children.find((c) => c.className.includes('share-bad'));
+  assert.ok(badRow, 'the picked row must carry share-bad');
+  assert.match(door.document.getElementById('share-msg').textContent, /Projects/);
+});
+
+test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from Settings, list proves it', async () => {
+  // RED WHEN: he picks the wrong folder, and the only fix is someone editing
+  // config.json by hand. This test is the feature.
+  const getDrives = async () => ({ ok: true, status: 200, data: { drives: [{ letter: 'F:', label: 'Data', blocked: false }] } });
+  const getFolders = async (p) => {
+    if (p === 'F:\\') return { ok: true, status: 200, data: { path: 'F:\\', parent: null, folders: [{ name: 'Dev', readable: true }], total: 1 } };
+    if (p === 'F:\\Dev') return { ok: true, status: 200, data: { path: 'F:\\Dev', parent: 'F:\\', folders: [{ name: 'Projects', readable: true }], total: 1 } };
+    if (p === 'F:\\Dev\\Projects') return { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Repos', readable: true }], total: 1 } };
+    return { ok: true, status: 200, data: { path: p, parent: null, folders: [], total: 0 } };
+  };
+  const putShared = async () => ({ ok: true, status: 200, data: {} });
+  const reposChildren = [
+    { name: 'Vercel', path: 'F:\\Dev\\Projects\\Repos\\Vercel' },
+    { name: 'Sherlock', path: 'F:\\Dev\\Projects\\Repos\\Sherlock' },
+  ];
+  let projectsFromAgent = null;
+  const door = loadDoor({
+    getDrives,
+    getFolders,
+    putShared,
+    load: async () => { projectsFromAgent = reposChildren; },
+  });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openSharedFolders(); // Settings row -> the picker, seeded with F:\Dev\Projects
+  await flush();
+
+  door.toggleTick('F:\\Dev\\Projects', false); // untick the wrong root
+
+  await door.openPath('F:\\', { push: true });
+  await door.openPath('F:\\Dev', { push: true });
+  await door.openPath('F:\\Dev\\Projects', { push: true });
+  door.toggleTick('F:\\Dev\\Projects\\Repos', true); // tick the right one
+
+  door.document.getElementById('share-save').fire('click');
+  await flush();
+  await flush();
+
+  assert.deepEqual(door.puts.at(-1), {
+    shared_folders: [{
+      path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show',
+    }],
+  }, 'the PUT body must name only Repos');
+  assert.equal(door.loadCalls, 1);
+  assert.ok(projectsFromAgent, 'load must have run and fetched the new root\'s children');
+
+  const rowsSeen = [];
+  const els = {
+    tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
+  };
+  const projDocument = {
+    getElementById: (id) => els[id],
+    // renderProjects builds the "nothing running" tile placeholder directly
+    // with document.createElement when no session is running - loadPicker's
+    // fakeDocument is not reused here since this is a different function's
+    // stub document, scoped to just what renderProjects touches.
+    createElement: () => {
+      const el = { className: '', textContent: '', children: [] };
+      el.append = (...kids) => { el.children.push(...kids); };
+      el.appendChild = (c) => { el.children.push(c); return c; };
+      return el;
+    },
+  };
+  const projState = {
+    projects: projectsFromAgent,
+    openFolder: null,
+    sessions: [],
+    launching: new Set(),
+    stopping: new Set(),
+    results: new Map(),
+    confirmName: null,
+    focusName: null,
+  };
+  const renderProjects = makeRenderProjectsIntegration({
+    document: projDocument,
+    state: projState,
+    buildTile: () => ({ tag: 'TILE' }),
+    buildRow: (p) => { rowsSeen.push(p.name); return { tag: 'ROW' }; },
+    renderBackBar: () => {},
+  });
+  renderProjects();
+
+  assert.deepEqual(rowsSeen.sort(), ['Sherlock', 'Vercel'], 'the reloaded list must show Repos\'s children, not the old root\'s');
 });
 
 test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {
