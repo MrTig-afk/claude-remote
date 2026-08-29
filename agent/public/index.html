@@ -61,6 +61,12 @@
     <symbol id="i-act" viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></symbol>
   </svg>
 
+  <!-- buildSettingsRow clones this instead of calling createElementNS, which
+       would put an absolute namespace URL in a shipped asset and trip
+       the no-egress test. That test is the checkable half of "nothing leaves
+       this machine"; keeping it strict is worth one line of markup. -->
+  <template id="tpl-row-ico"><svg class="ico set-ico" width="15" height="15" aria-hidden="true"><use href=""/></svg></template>
+
   <!-- Visible before any script runs, and deliberately NOT marked hidden:
        installed to the home screen this window has no browser chrome, so a
        blank moment while the app boots reads as a crash. app.js drops it the
@@ -189,7 +195,7 @@
 
         <div class="accept-note" id="accept-note"></div>
 
-        <button class="accept-go" id="accept-go" type="button" disabled></button>
+        <button class="accept-go ripples" id="accept-go" type="button" disabled></button>
         <div class="accept-msg" id="accept-msg" role="status" aria-live="polite" hidden></div>
       </div>
     </main>
@@ -265,13 +271,100 @@
          destination that already exists. -->
     <main id="settings" hidden>
       <div class="set-head"><div class="set-label">SETTINGS</div></div>
+      <!-- Group headers and rows are both built by renderSettings from one
+           table, so the artifact's grouping lives in exactly one place. It
+           shipped once as a single hard-coded FOLDERS section holding one
+           row; Lane 6 of the userflow artifact draws four groups. -->
+      <div id="settings-list"></div>
+      <div class="spacer"></div>
+    </main>
 
-      <section class="zone">
-        <div class="allhdr"><span>FOLDERS</span></div>
-        <div class="rule"></div>
-        <div class="list" id="settings-list"></div>
-      </section>
+    <!-- Lane 7 destinations. Every settings row leads to one of these, or to
+         an action; there are no rows that answer a tap with nothing. Each is
+         its own <main> and is listed in SCREEN_MAIN, so they inherit
+         showScreen, goHome and the Android back handling for free. -->
 
+    <main id="set-see" hidden>
+      <div class="set-head">
+        <!-- The crumb from Lane 7: every sub-screen names the screen it
+             returns to. data-set-back is what wires it, so a screen added
+             later gets the behaviour by copying the markup. -->
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">WHAT THIS APP CAN SEE</div>
+      </div>
+      <!-- Same four sections as the first-run accept screen, from copy.js,
+           read only and with no checkbox - so the words a person agreed to
+           and the words they can re-read are the same words, forever. -->
+      <div class="set-body"><div class="accept-sections" id="see-sections"></div></div>
+      <div class="spacer"></div>
+    </main>
+
+    <main id="set-agent" hidden>
+      <div class="set-head">
+        <!-- The crumb from Lane 7: every sub-screen names the screen it
+             returns to. data-set-back is what wires it, so a screen added
+             later gets the behaviour by copying the markup. -->
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">AGENT STATUS</div>
+      </div>
+      <div class="set-body">
+        <div id="agent-facts"></div>
+        <button class="set-btn ripples" id="agent-recheck" type="button">TEST CONNECTION</button>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
+    <main id="set-reset" hidden>
+      <div class="set-head">
+        <!-- The crumb from Lane 7: every sub-screen names the screen it
+             returns to. data-set-back is what wires it, so a screen added
+             later gets the behaviour by copying the markup. -->
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">RESET THE APP</div>
+      </div>
+      <div class="set-body">
+        <div class="set-mid">
+          <svg class="ico set-glyph" width="30" height="30" aria-hidden="true"><use href="#i-rot"/></svg>
+          <div class="set-q">Reset the app?</div>
+          <div class="set-p">Clears this phone's copy and loads it fresh.</div>
+          <div class="set-p set-good">If an update is waiting, this installs it too.</div>
+        </div>
+        <!-- Says what is NOT touched, because that is the question someone
+             actually has before tapping a button called RESET. -->
+        <div class="banner set-safe">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-check"/></svg>
+          <span>Your folders, your passcode and any running session are untouched.</span>
+        </div>
+        <button class="set-btn set-btn-solid ripples" id="reset-go" type="button">RESET</button>
+        <button class="set-btn" id="reset-cancel" type="button">CANCEL</button>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
+    <main id="set-about" hidden>
+      <div class="set-head">
+        <!-- The crumb from Lane 7: every sub-screen names the screen it
+             returns to. data-set-back is what wires it, so a screen added
+             later gets the behaviour by copying the markup. -->
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">ABOUT</div>
+      </div>
+      <div class="set-body">
+        <div class="set-mid">
+          <svg class="about-mark" width="32" height="32" aria-hidden="true"><use href="#mark"/></svg>
+          <div class="about-name">claude‑remote</div>
+          <div class="about-ver" id="about-ver"></div>
+        </div>
+        <div id="about-list"></div>
+      </div>
       <div class="spacer"></div>
     </main>
   </div>

@@ -1,4 +1,4 @@
-import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, onAuthLost } from './api.js';
+import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, getStatus, setToken, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
 import {
   TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
@@ -31,6 +31,11 @@ const state = {
   // answer AND the reason was network/timeout, which is the one failure that
   // ends by itself when the PC finishes waking up. waitForAgent() owns it.
   reachable: null,
+  // GET /api/status's body, or null = not asked yet / it failed. Only the
+  // Agent status screen reads it, and it is fetched when that screen opens
+  // rather than on boot - the project list does not need it, and the first
+  // paint after unlocking is the one place worth not adding a request to.
+  status: null,
   waitTries: 0, // retries made in the current 'waiting' run, for the status line
   stopping: new Set(), // project names with an end POST in flight - CLIENT ONLY
   confirmName: null, // the ONE project whose tile is currently the question
@@ -58,16 +63,35 @@ const SCREEN_MAIN = {
   list: 'picker',      // #picker IS the project list - it predates the folder picker
   folders: 'folders',  // the folder picker (T97)
   settings: 'settings',
+  // Lane 7 destinations. Exactly one level below the settings root - the app
+  // is never three screens deep in Settings - which is what lets the history
+  // handling below stay a root flag plus one sub, rather than a stack.
+  see: 'set-see',
+  agent: 'set-agent',
+  reset: 'set-reset',
+  about: 'set-about',
 };
+
+// The screens that are BELOW the settings root. Membership is what tells
+// onPopState which of the two entries just popped, so a screen added to
+// SCREEN_MAIN above must be added here too or its back gesture will fall
+// through and close Settings entirely.
+const SETTINGS_SUBS = new Set(['see', 'agent', 'reset', 'about']);
 
 // The one place a screen changes. Sets `hidden` on every <main> in
 // SCREEN_MAIN so two of them can never render stacked (the failure the
 // hideAccept() comment in boot() describes), records which screen the app is
 // on, and keeps the two pieces of header chrome that depend on it honest.
-function showScreen(name) {
+function showScreen(name, direction = null) {
   state.screen = name;
   for (const [screen, id] of Object.entries(SCREEN_MAIN)) {
-    document.getElementById(id).hidden = screen !== name;
+    const el = document.getElementById(id);
+    el.hidden = screen !== name;
+    // Both classes come off every screen every time, so a screen entered
+    // twice re-triggers its animation instead of silently keeping the class
+    // from last time and playing nothing.
+    el.classList.remove('nav-deeper', 'nav-back');
+    if (screen === name && direction !== null) el.classList.add(`nav-${direction}`);
   }
   // The gate and the acknowledgement warning each have exactly ONE way out
   // and home is not it. Inert rather than hidden: design/tokens.md puts the
@@ -1275,6 +1299,20 @@ function goHome() {
   // Leaving the picker by the mark is a CANCEL, never a save - finishFolders
   // never calls putShared, and it is what SKIP/CANCEL already does.
   if (state.screen === 'folders') { finishFolders(); return; }
+  // The mark returns to the project list from EVERY screen (the artifact's
+  // Decided table), so from a settings sub-screen it leaves Settings
+  // altogether rather than stepping back one level - that is what the back
+  // control in the sub-screen's own header is for. Both entries come off in
+  // one traversal.
+  if (settingsSub !== null) {
+    const depth = 1 + (settingsPushed ? 1 : 0);
+    settingsSub = null;
+    settingsPushed = false;
+    showScreen('list');
+    render();
+    history.go(-depth);
+    return;
+  }
   if (state.screen === 'settings') { closeSettings(); return; }
   // On the project list, home means the TOP of the project list. Both of the
   // app's own entries come off in one guarded traversal, the same discipline
@@ -1312,6 +1350,17 @@ function onPopState() {
   // early return leaves the confirm/drill reconciliation below untouched -
   // including a {drill} entry still sitting underneath, which is why
   // state.openFolder is not cleared here.
+  // A settings SUB-screen's entry is above the settings entry, so it pops
+  // first and lands back on the root rather than leaving Settings. Checked
+  // before the root case: both are true while a sub-screen is open, and the
+  // root's branch would close Settings outright and leave settingsSub set,
+  // which is a screen the app thinks it is on and isn't.
+  if (settingsSub !== null && SETTINGS_SUBS.has(state.screen)) {
+    settingsSub = null;
+    showScreen('settings');
+    renderSettings();
+    return;
+  }
   if (state.screen === 'settings') {
     settingsPushed = false;
     showScreen('list');
@@ -2026,7 +2075,7 @@ let settingsPushed = false;
 // the top one".
 function openSettings() {
   if (cancelOpenConfirm()) return;
-  showScreen('settings');
+  showScreen('settings', 'deeper');
   renderSettings();
   if (!settingsPushed) {
     history.pushState({ screen: 'settings' }, '');   // Android back = leave Settings
@@ -2038,9 +2087,139 @@ function openSettings() {
 // synchronously, then a guarded history.back(), so a double tap can never pop
 // the app's own base entry and close the PWA.
 function closeSettings() {
-  showScreen('list');
+  showScreen('list', 'back');
   render();
   if (settingsPushed) { settingsPushed = false; history.back(); }
+}
+
+// ---------------------------------------------------------------------------
+// Lane 7: the screens below the settings root.
+//
+// One level deep, never two, so this is a single nullable rather than a stack.
+// The moment a sub-screen needs its own sub-screen (About -> Contact me is the
+// one the artifact draws), this becomes an array - do not bolt a second flag
+// on beside it.
+// ---------------------------------------------------------------------------
+let settingsSub = null;
+
+/** Pure, so the wording can be tested without a DOM. */
+function agentStateLine(reachable) {
+  if (reachable === true) return 'reachable';
+  if (reachable === false) return 'not answering';
+  return 'checking';
+}
+
+function openSettingsSub(key) {
+  if (!SETTINGS_SUBS.has(key)) return;
+  settingsSub = key;
+  showScreen(key, 'deeper');
+  renderSettingsSub(key);
+  history.pushState({ screen: key }, '');
+}
+
+// Mutate and render synchronously, then a guarded history.back() - the same
+// double-tap discipline as closeSettings and closeFolderScreen, so two fast
+// taps cannot pop the settings entry underneath and strand the app on the
+// project list with settingsPushed still true.
+function closeSettingsSub() {
+  if (settingsSub === null) return;
+  settingsSub = null;
+  showScreen('settings', 'back');
+  renderSettings();
+  history.back();
+}
+
+function renderSettingsSub(key) {
+  if (key === 'see') { renderSections(document.getElementById('see-sections')); return; }
+  if (key === 'about') { renderAbout(); return; }
+  if (key === 'agent') { renderAgentStatus(); return; }
+  // 'reset' is static markup - its only moving part is the button.
+}
+
+function renderAbout() {
+  document.getElementById('about-ver').textContent = `${SHELL_VERSION} · MIT licence`;
+  const listEl = document.getElementById('about-list');
+  listEl.innerHTML = '';
+  // REPO_URL is one constant because T62 and T83 point at the same repo and
+  // it does not exist yet. Rows that would open a dead link are omitted
+  // rather than drawn - the artifact's Contact me screen is a real screen and
+  // gets built with the repo, not faked with a href to nowhere.
+  const rows = [{
+    id: 'see', icon: 'i-eye', name: 'What this app can see', state: '', enterable: true,
+  }];
+  for (const row of rows) listEl.appendChild(buildSettingsRow(row));
+}
+
+function renderAgentStatus() {
+  const host = document.getElementById('agent-facts');
+  host.innerHTML = '';
+  const facts = [
+    { icon: 'i-act', name: agentStateLine(state.reachable), state: `app v${SHELL_VERSION}` },
+  ];
+  // The agent's OWN version, which is the fact this screen exists for: a
+  // mismatch between the cached shell and the agent is the first support
+  // question this repo will ever get. Absent until /api/status has answered,
+  // rather than guessed at.
+  if (state.status && typeof state.status.version === 'string') {
+    facts.push({ icon: 'i-info', name: `Agent ${state.status.version}`, state: 'on this PC' });
+  }
+  if (state.status && typeof state.status.shared_count === 'number') {
+    const n = state.status.shared_count;
+    facts.push({ icon: 'i-folder', name: n === 1 ? '1 folder shared' : `${n} folders shared`, state: '' });
+  }
+  for (const f of facts) {
+    host.appendChild(buildSettingsRow({
+      id: '', icon: f.icon, name: f.name, state: f.state, enterable: false, fact: true,
+    }));
+  }
+}
+
+async function refreshAgentStatus() {
+  const res = await getStatus();
+  state.status = res.ok ? res.data : null;
+  if (settingsSub === 'agent') renderAgentStatus();
+}
+
+// Ends the session on THIS device. The token is memory-only by design (see
+// api.js), so dropping it and showing the gate IS the lock - there is no
+// server-side session to end, and claiming to sign other devices out would be
+// a lie this screen cannot back up.
+function lockNow() {
+  // Counted BEFORE the flags are cleared. Written the other way round first,
+  // where the ternary read the value it had just nulled and the traversal was
+  // always one entry short.
+  const depth = (settingsSub !== null ? 1 : 0) + (settingsPushed ? 1 : 0);
+  setToken(null);
+  settingsSub = null;
+  settingsPushed = false;
+  // Every settings entry comes off in one traversal, the same discipline
+  // goHome uses, so the back gesture after locking cannot walk back into a
+  // screen that now sits behind a passcode.
+  if (depth > 0) history.go(-depth);
+  // The reload is what actually re-locks: the token lives in memory, so a
+  // fresh document has none and boot() shows the gate. Clearing the variable
+  // alone would leave every already-rendered screen on display.
+  location.reload();
+}
+
+// Reset and update are the same mechanism, which is why the artifact makes
+// them one button: clearing the shell cache is exactly what makes the next
+// load fetch the current one.
+async function resetApp() {
+  // One turn while the work runs, per design/motion.md. Started before the
+  // awaits so it covers them, and never awaited itself - the reset must not
+  // wait on an animation, and under prefers-reduced-motion there is
+  // effectively none to wait on.
+  document.querySelector('#set-reset .set-glyph').classList.add('spinning');
+  if ('serviceWorker' in navigator) {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map((r) => r.unregister()));
+  }
+  if ('caches' in window) {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((k) => caches.delete(k)));
+  }
+  location.replace('/');
 }
 
 // One picker, two doors, ONE implementation of the door.
@@ -2062,25 +2241,41 @@ function openSharedFolders() {
   onChooseFolders();
 }
 
-// A settings row IS a folder row: empty left slot, name and state stacked in
-// the middle, chevron on the right. The empty left slot is deliberate - see
-// buildRow's comment on why a folder row appends no dot, and never fix the
-// alignment with padding.
+// A settings row carries an ICON on the left, name and state stacked in the
+// middle, chevron on the right. Lane 7 of the userflow artifact states the
+// rule and leaves no room in it: "icon or control on the LEFT, name and state
+// stacked in the middle, chevron on the right. No exceptions anywhere in the
+// app."
+//
+// This shipped once with a deliberately EMPTY left slot and a comment arguing
+// that the emptiness was correct. It was not - it was a rule invented here
+// that contradicted the confirmed flow. Do not take the icon back out.
+//
 // `enterable === false` means the row carries NO data-settings attribute at
 // all: structurally untappable, the same guarantee buildInertRow gives a
 // blocked drive and buildRow gives a container (no data-project, so it can
 // never launch). A disabled-looking row that still answers a tap is what this
 // avoids.
 function buildSettingsRow({
-  id, name, state: stateText, enterable,
+  id, icon, name, state: stateText, enterable, fact = false,
 }) {
   const el = document.createElement(enterable ? 'button' : 'div');
-  el.className = 'row folder';
+  el.className = 'row folder set-row';
   if (enterable) {
     el.type = 'button';
     el.dataset.settings = id;
   }
-  el.setAttribute('aria-label', `${name}, ${stateText}`);
+  el.setAttribute('aria-label', stateText ? `${name}, ${stateText}` : name);
+
+  // Cloned from a <template> rather than built with createElementNS, which
+  // would put the SVG namespace URL - an absolute one - in a shipped asset.
+  // That is a namespace identifier and not egress, but the no-absolute-URL
+  // test is the machine-checkable half of "nothing leaves this machine" and
+  // is worth more than the convenience of one constructor. The HTML parser
+  // puts template content in the SVG namespace for free.
+  const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  ico.querySelector('use').setAttribute('href', `#${icon}`);
+  el.appendChild(ico);
 
   const main = document.createElement('span');
   main.className = 'row-main';
@@ -2088,10 +2283,15 @@ function buildSettingsRow({
   nameEl.className = 'row-name';
   nameEl.textContent = name;
   main.appendChild(nameEl);
-  const statusEl = document.createElement('span');
-  statusEl.className = 'row-status';
-  statusEl.textContent = stateText;
-  main.appendChild(statusEl);
+  // A sub-line only when there is a fact to put in it. The artifact's own
+  // note: "the sub-line means you rarely have to open one to answer a
+  // question" - so an empty one would be furniture, not an answer.
+  if (stateText) {
+    const statusEl = document.createElement('span');
+    statusEl.className = 'row-status';
+    statusEl.textContent = stateText;
+    main.appendChild(statusEl);
+  }
   el.appendChild(main);
 
   // The chevron is the promise that this row goes somewhere. A row that
@@ -2103,23 +2303,101 @@ function buildSettingsRow({
   if (enterable) {
     const chev = document.createElement('span');
     chev.className = 'folder-chev';
-    chev.setAttribute('aria-hidden', 'true'); // the aria-label already says it
+    chev.setAttribute('aria-hidden', 'true');
     chev.textContent = '>';
     el.appendChild(chev);
   } else {
-    el.className += ' set-off';
+    // Two different kinds of chevron-less row, deliberately two classes: a
+    // FACT was never a destination, an unenterable row is one you cannot
+    // reach right now. Only the second is muted.
+    el.className += fact ? ' set-fact' : ' set-off';
   }
 
   return el;
 }
 
+/**
+ * Lane 6 of the userflow artifact, as data. Groups and their order come
+ * straight off the drawn frame; the only departure is the ALERTS group, whose
+ * single row is Notifications - cut from v1 by the artifact's own Decided
+ * table ("Web Push and VAPID are cut from v1 entirely"). A group with no rows
+ * renders nothing, so restoring it is one entry here.
+ *
+ * `state(facts)` returns the sub-line, or '' for a row that has no fact worth
+ * showing. Keeping it a function rather than a string is what lets the sub-
+ * line be live - "reachable", "1 folder shared" - instead of decoration.
+ */
+function settingsGroups(facts) {
+  const shared = sharedRowState(state.shared);
+  return [
+    {
+      heading: 'FOLDERS',
+      rows: [{
+        id: 'shared', icon: 'i-folder', name: 'Shared folders',
+        state: shared.text, enterable: shared.enterable,
+      }],
+    },
+    {
+      heading: 'SECURITY',
+      rows: [
+        {
+          id: 'see', icon: 'i-eye', name: 'What this app can see',
+          state: '', enterable: true,
+        },
+        // Ends the session on THIS device only, which is why it says nothing
+        // about other devices - it cannot honestly promise anything there.
+        {
+          id: 'lock', icon: 'i-lock', name: 'Lock now',
+          state: '', enterable: true,
+        },
+      ],
+    },
+    {
+      heading: 'THIS APP',
+      rows: [
+        // Three-way, not two: `null` and 'waiting' mean the app has not
+        // finished asking. Reporting "not answering" there would accuse the
+        // PC of being down during the second it takes to reply.
+        {
+          id: 'agent', icon: 'i-act', name: 'Agent status',
+          state: agentStateLine(facts.reachable), enterable: true,
+        },
+        {
+          id: 'reset', icon: 'i-rot', name: 'Reset the app',
+          state: 'clears cache, gets the latest', enterable: true,
+        },
+        {
+          id: 'about', icon: 'i-info', name: 'About',
+          state: SHELL_VERSION, enterable: true,
+        },
+      ],
+    },
+  ];
+}
+
 function renderSettings() {
   const listEl = document.getElementById('settings-list');
   listEl.innerHTML = '';
-  const shared = sharedRowState(state.shared);
-  listEl.appendChild(buildSettingsRow({
-    id: 'shared', name: 'Shared folders', state: shared.text, enterable: shared.enterable,
-  }));
+  const facts = { reachable: state.reachable };
+  for (const group of settingsGroups(facts)) {
+    if (group.rows.length === 0) continue;
+    const section = document.createElement('section');
+    section.className = 'zone';
+    const head = document.createElement('div');
+    head.className = 'allhdr';
+    const label = document.createElement('span');
+    label.textContent = group.heading;
+    head.appendChild(label);
+    section.appendChild(head);
+    const rule = document.createElement('div');
+    rule.className = 'rule';
+    section.appendChild(rule);
+    const list = document.createElement('div');
+    list.className = 'list';
+    for (const row of group.rows) list.appendChild(buildSettingsRow(row));
+    section.appendChild(list);
+    listEl.appendChild(section);
+  }
 }
 
 /**
@@ -2291,10 +2569,47 @@ function wireEvents() {
   });
   document.getElementById('home').addEventListener('click', goHome);
   document.getElementById('settings-open').addEventListener('click', openSettings);
-  document.getElementById('settings-list').addEventListener('click', (e) => {
+  // One delegated handler for the settings root AND for the row lists inside
+  // sub-screens (About repeats "What this app can see"), so a row behaves the
+  // same wherever it is drawn. buildSettingsRow gives an unenterable row no
+  // data-settings attribute at all, so it cannot reach this.
+  document.addEventListener('click', (e) => {
     const row = e.target.closest('[data-settings]');
-    if (row && row.dataset.settings === 'shared') openSharedFolders();
+    if (!row) return;
+    const id = row.dataset.settings;
+    if (id === 'shared') { openSharedFolders(); return; }
+    if (id === 'lock') { lockNow(); return; }
+    if (SETTINGS_SUBS.has(id)) {
+      openSettingsSub(id);
+      // Fetched on open, not on boot: this is the only screen that reads it.
+      if (id === 'agent') refreshAgentStatus();
+    }
   });
+  // The ripple, per design/motion.md: ONCE, from the touch point. pointerdown
+  // rather than click so the ink starts under the finger at the moment of
+  // contact - on click it would begin after the press had already ended, and
+  // a ripple that starts late reads as lag rather than as feedback.
+  // Self-removing on animationend, so a page tapped fifty times holds fifty
+  // detached nodes for 480ms, not forever.
+  document.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('.ripples');
+    if (!btn) return;
+    const box = btn.getBoundingClientRect();
+    const ink = document.createElement('span');
+    ink.className = 'ripple-ink';
+    ink.style.left = `${e.clientX - box.left}px`;
+    ink.style.top = `${e.clientY - box.top}px`;
+    ink.addEventListener('animationend', () => ink.remove());
+    btn.appendChild(ink);
+  });
+
+  // Every sub-screen's back control, and the two buttons on Reset.
+  for (const el of document.querySelectorAll('[data-set-back]')) {
+    el.addEventListener('click', closeSettingsSub);
+  }
+  document.getElementById('reset-cancel').addEventListener('click', closeSettingsSub);
+  document.getElementById('reset-go').addEventListener('click', resetApp);
+  document.getElementById('agent-recheck').addEventListener('click', refreshAgentStatus);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') load();
   });

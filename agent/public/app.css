@@ -1,8 +1,41 @@
+/* ===========================================================================
+   COLOUR TOKENS - the only place a hex literal may appear in this file.
+
+   Names are the userflow artifact's, values are design/tokens.md's, so the
+   stylesheet and the drawn frames share one vocabulary. Every colour below
+   this block is a var(); pwa-assets.test.js enforces that, so a raw hex
+   anywhere else is a test failure rather than a thing someone notices later.
+
+   --warn is the ONE value not in design/tokens.md. Lane 7's "Reset the app"
+   screen needs a caution colour and tokens.md has none; this is the
+   artifact's own amber. It is caution, NOT danger - tokens.md reserves
+   --danger for "this ends something", and clearing a cache is not that.
+   Recorded in design/tokens.md rather than left as a local invention.
+   =========================================================================== */
+:root {
+  --bg: #0a0d0a;         /* page background */
+  --raised: #0f150f;     /* elevated row / card background */
+  --text: #eafbea;       /* primary text */
+  --text-2: #c9d1c9;     /* secondary text */
+  --muted: #9aab9a;      /* muted text, and every header control */
+  --muted-2: #6b7a6b;    /* muted text, one step down */
+  --dim: #4a5a4a;        /* dim / disabled text */
+  --edge: #3d4a3d;       /* button borders, the outlined idle dot */
+  --faint: #2a332a;      /* faint dividers and footer text */
+  --line: #1b231b;       /* rules and separators */
+  --accent: #7ee787;     /* THE accent: active / running, nothing else */
+  --accent-2: #5fae6f;   /* accent, dimmer: secondary active text and row icons */
+  --accent-ink: #08170c; /* text ON an accent fill; never a background itself */
+  --warn: #e3b341;       /* caution, not danger - see the note below */
+  --danger: #ff7b72;     /* this ends something */
+  --danger-2: #e5534b;   /* danger, pressed / darker */
+}
+
 /* claude-remote PWA - shipped source of truth for the palette
    (design/ is gitignored, so design/tokens.md is not in the repo).
    Token set - do not introduce any colour outside this list:
-   #0a0d0a #0f150f #eafbea #c9d1c9 #9aab9a #4a5a4a #3d4a3d #2a332a
-   #7ee787 #5fae6f #1b231b #6b7a6b #ff7b72 #e5534b */
+   var(--bg) var(--raised) var(--text) var(--text-2) var(--muted) var(--dim) var(--edge) var(--faint)
+   var(--accent) var(--accent-2) var(--line) var(--muted-2) var(--danger) var(--danger-2) */
 
 * { box-sizing: border-box; }
 
@@ -20,8 +53,8 @@
 [hidden] { display: none !important; }
 
 body {
-  background: #0a0d0a;
-  color: #c9d1c9;
+  background: var(--bg);
+  color: var(--text-2);
   margin: 0;
   color-scheme: dark;
   font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Consolas, monospace;
@@ -45,13 +78,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-bottom: 1px solid #1b231b;
+  border-bottom: 1px solid var(--line);
 }
 .hdr-top { display: flex; align-items: baseline; }
-.title { font-size: 19px; font-weight: 700; letter-spacing: 0.02em; color: #eafbea; }
+.title { font-size: 19px; font-weight: 700; letter-spacing: 0.02em; color: var(--text); }
 /* margin-left:auto rather than justify-content:space-between, which with the
    mark added would strand the wordmark in the middle of the row. */
-.ver { font-size: 11px; color: #4a5a4a; margin-left: auto; }
+.ver { font-size: 11px; color: var(--dim); margin-left: auto; }
 
 /* The mark costs zero vertical height by construction: the negative block
    margins collapse its margin box to nothing, so the row is still sized by
@@ -66,8 +99,8 @@ body {
    phone. One line of status, or it overflows visibly - never four rows of
    chrome above the first project. */
 .conn { display: flex; align-items: center; gap: 8px; font-size: 12px; letter-spacing: 0.03em; white-space: nowrap; }
-.conn-text { color: #9aab9a; }
-.conn-text.reachable { color: #7ee787; }
+.conn-text { color: var(--muted); }
+.conn-text.reachable { color: var(--accent); }
 
 /* The mark and the wordmark are one control on every screen. The vertical
    padding is the 44px tap floor and the equal negative margin gives it back,
@@ -106,8 +139,8 @@ body {
 }
 
 /* The gear, per Lane 6 of the userflow artifact. This shipped once as the
-   word SETTINGS at #4a5a4a - the same colour as .ver beside it - and the
-   owner could not find it on his phone. #9aab9a is what the artifact paints
+   word SETTINGS at var(--dim) - the same colour as .ver beside it - and the
+   owner could not find it on his phone. var(--muted) is what the artifact paints
    header actions (--muted). Do not dim it back to match .ver: a control and
    a version label are not the same kind of thing.
    Tap target measured at 390px, not assumed: 18px glyph + 13px top and
@@ -121,7 +154,7 @@ body {
      box sits its baseline below the wordmark's and grows the header row.
      Centring keeps the row at 22px with the tap target still exactly 44. */
   align-self: center;
-  color: #9aab9a;
+  color: var(--muted);
   padding: 13px 0 13px 26px;
   margin-block: -13px;
   background: none;
@@ -139,27 +172,27 @@ body {
   position: fixed;
   inset: 0;
   z-index: 1;
-  background: #0a0d0a;
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 14px;
 }
-.splash-status { font-size: 11px; letter-spacing: 0.08em; color: #4a5a4a; }
+.splash-status { font-size: 11px; letter-spacing: 0.08em; color: var(--dim); }
 
 /* Banner */
 .banner {
   margin: 12px 12px 0;
   padding: 10px 12px;
-  background: #0f150f;
+  background: var(--raised);
   border-radius: 4px;
   font-size: 11px;
   line-height: 1.5;
-  color: #c9d1c9;
+  color: var(--text-2);
 }
-.banner b { color: #eafbea; font-weight: 500; }
-.banner.error { color: #eafbea; }
+.banner b { color: var(--text); font-weight: 500; }
+.banner.error { color: var(--text); }
 
 .zone { display: flex; flex-direction: column; }
 
@@ -168,11 +201,11 @@ body {
   padding: 11px 13px 6px;
   font-size: 9px;
   letter-spacing: 0.09em;
-  color: #5fae6f;
+  color: var(--accent-2);
   display: flex;
   justify-content: space-between;
 }
-.runhdr .count { color: #5fae6f; }
+.runhdr .count { color: var(--accent-2); }
 
 .tiles {
   display: grid;
@@ -186,10 +219,10 @@ body {
 .tiles-placeholder {
   margin: 8px;
   padding: 14px 12px;
-  border: 1px dashed #3d4a3d;
+  border: 1px dashed var(--edge);
   border-radius: 5px;
   font-size: 10px;
-  color: #4a5a4a;
+  color: var(--dim);
   text-align: center;
   line-height: 1.6;
 }
@@ -198,7 +231,7 @@ body {
   border-radius: 5px;
   padding: 10px;
   min-height: 60px;
-  background: #0f150f;
+  background: var(--raised);
   border: 0;
   display: flex;
   flex-direction: column;
@@ -214,7 +247,7 @@ body {
 .tile-name {
   font-size: 12px;
   font-weight: 500;
-  color: #eafbea;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -232,7 +265,7 @@ body {
 .tile-eyebrow {
   font-size: 8px;
   letter-spacing: 0.09em;
-  color: #4a5a4a;
+  color: var(--dim);
   text-transform: uppercase;
   margin-bottom: -4px;
   overflow: hidden;
@@ -241,11 +274,11 @@ body {
 }
 .tile-status {
   font-size: 9px;
-  color: #5fae6f;
+  color: var(--accent-2);
   font-variant-numeric: tabular-nums;
 }
 
-/* STOP - the one destructive control. `#e5534b` at rest, `#ff7b72` on press:
+/* STOP - the one destructive control. `var(--danger-2)` at rest, `var(--danger)` on press:
    the app's one danger colour, narrower than its one accent colour - it
    means "this ends something" and is never used for a warning, an error or a
    banner. The word STOP carries the meaning on its own; the colour only
@@ -259,14 +292,14 @@ body {
   font: inherit;
   font-size: 10px;
   letter-spacing: 0.08em;
-  color: #e5534b;
+  color: var(--danger-2);
   background: none;
   border: 0;
   appearance: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.tile-stop:active { color: #ff7b72; }
+.tile-stop:active { color: var(--danger); }
 
 /* ONE running session: the tile is full-width, so STOP is a corner chip. The
    tap band is the full 48px, not the ~38px of visible glyph, and the name and
@@ -309,26 +342,26 @@ body {
   letter-spacing: 0.06em;
   line-height: 1.2;
   background: none;
-  border: 1px solid #3d4a3d;
+  border: 1px solid var(--edge);
   border-radius: 4px;
   appearance: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.tile-stop-cancel { color: #9aab9a; }
-.tile-stop-go { color: #ff7b72; border-color: #e5534b; }
+.tile-stop-cancel { color: var(--muted); }
+.tile-stop-go { color: var(--danger); border-color: var(--danger-2); }
 
 /* Zone 2 - ALL PROJECTS (list) */
 .allhdr {
   padding: 11px 13px 6px;
   font-size: 9px;
   letter-spacing: 0.09em;
-  color: #4a5a4a;
+  color: var(--dim);
   display: flex;
   justify-content: space-between;
 }
-.allhdr .count { color: #4a5a4a; }
-.rule { height: 1px; background: #1b231b; margin: 0 13px; }
+.allhdr .count { color: var(--dim); }
+.rule { height: 1px; background: var(--line); margin: 0 13px; }
 
 .list {
   display: flex;
@@ -360,7 +393,7 @@ body {
 }
 .row .dot { flex-shrink: 0; }
 .row-main { display: flex; flex-direction: column; gap: 5px; flex-grow: 1; min-width: 0; }
-.row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: #9aab9a; }
+.row-name { font-size: 14px; font-weight: 500; overflow-wrap: anywhere; color: var(--muted); }
 /* Only informative states draw a status line, so on most rows this rule is
    unused and the row collapses to the 44px tap-target floor. A folder row is
    the exception: it always draws one ("N projects"). The right-hand idle
@@ -368,7 +401,7 @@ body {
    running, so it could only ever draw an em-dash. The chevron came back for
    folder rows ONLY (.folder-chev below): on those it is not decoration, it is
    the one mark saying this row opens a list instead of starting a session. */
-.row-status { font-size: 11px; color: #9aab9a; }
+.row-status { font-size: 11px; color: var(--muted); }
 
 /* A container folder. No dot rule here on purpose: buildRow appends no dot
    element for a folder row, and the missing element is what pulls the name
@@ -376,14 +409,14 @@ body {
    deliberate break in the left edge - never re-create it with padding or
    margin here, and never restore the dot, because a folder has no session
    state and a hollow ring would state something false. */
-.row.folder .row-name { color: #c9d1c9; }
-.row.folder .row-status { color: #4a5a4a; }
-.folder-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
+.row.folder .row-name { color: var(--text-2); }
+.row.folder .row-status { color: var(--dim); }
+.folder-chev { flex-shrink: 0; color: var(--accent-2); font-size: 14px; }
 
 /* The drill-in back bar. Named `backbar`, not `folderbar`: the folder-row
    test in agent/test/pwa-assets.test.js scans every selector containing
    "folder" for padding/margin - a folderbar rule would match it. Same card
-   language as .banner (bg #0f150f, 4px radius, 12px inset) so it reads as
+   language as .banner (bg var(--raised), 4px radius, 12px inset) so it reads as
    chrome, never as a project row, and the whole bar is the control - a 44px
    floor, full width, because on a phone in standalone mode it is the only
    way back to the list. */
@@ -395,7 +428,7 @@ body {
   margin: 12px 12px 0;
   padding: 10px 12px;
   min-height: 44px;
-  background: #0f150f;
+  background: var(--raised);
   border: 0;
   border-radius: 4px;
   font: inherit;
@@ -405,12 +438,12 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.backbar-chev { flex-shrink: 0; color: #5fae6f; font-size: 14px; }
+.backbar-chev { flex-shrink: 0; color: var(--accent-2); font-size: 14px; }
 .backbar-main { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.backbar-name { font-size: 14px; font-weight: 500; color: #eafbea; }
-.backbar-path { font-size: 10px; color: #4a5a4a; overflow-wrap: anywhere; }
+.backbar-name { font-size: 14px; font-weight: 500; color: var(--text); }
+.backbar-path { font-size: 10px; color: var(--dim); overflow-wrap: anywhere; }
 
-.msg { padding: 14px 8px; font-size: 11px; color: #9aab9a; }
+.msg { padding: 14px 8px; font-size: 11px; color: var(--muted); }
 
 /* T100 - the way out of an empty or broken project list. The empty-state
    zone must always say what to do, never render as an empty box. Same
@@ -422,40 +455,40 @@ body {
   gap: 10px;
   align-items: flex-start;
 }
-.empty-title { font-size: 13px; font-weight: 500; color: #eafbea; }
-.empty-body { font-size: 11px; line-height: 1.5; color: #9aab9a; }
+.empty-title { font-size: 13px; font-weight: 500; color: var(--text); }
+.empty-body { font-size: 11px; line-height: 1.5; color: var(--muted); }
 
 /* A gone root's notice - additive, above the rows it never blanks. Same card
-   language as .banner (bg #0f150f, 4px radius, 12px inset) so it reads as
+   language as .banner (bg var(--raised), 4px radius, 12px inset) so it reads as
    chrome and never as a project row - but no HORIZONTAL margin: unlike
    .banner (outside .list), this sits inside .list, which already carries its
    own 12px horizontal padding. No danger colour: REMOVE here unshares a
    folder, it deletes nothing and ends no session - a missing folder is a
    state, not a destructive action. */
 .gone {
-  background: #0f150f;
+  background: var(--raised);
   border-radius: 4px;
   margin: 12px 0 0;
   padding: 12px;
 }
-.gone-title { font-size: 12px; font-weight: 500; color: #eafbea; }
-.gone-path { font-size: 10px; color: #4a5a4a; overflow-wrap: anywhere; }
-.gone-body { font-size: 11px; color: #9aab9a; }
+.gone-title { font-size: 12px; font-weight: 500; color: var(--text); }
+.gone-path { font-size: 10px; color: var(--dim); overflow-wrap: anywhere; }
+.gone-body { font-size: 11px; color: var(--muted); }
 
 /* New-project panel - opened by the + button. Same card language as .banner
-   (bg #0f150f, 4px radius); no new colour outside the token list above. */
+   (bg var(--raised), 4px radius); no new colour outside the token list above. */
 .newproj-panel {
   margin: 12px 12px 0;
   padding: 12px;
-  background: #0f150f;
-  border: 1px solid #1b231b;
+  background: var(--raised);
+  border: 1px solid var(--line);
   border-radius: 4px;
 }
 .newproj-panel label {
   display: block;
   font-size: 11px;
   letter-spacing: 0.05em;
-  color: #9aab9a;
+  color: var(--muted);
   margin-bottom: 8px;
 }
 .newproj-panel input {
@@ -464,23 +497,23 @@ body {
   padding: 10px;
   font: inherit;
   font-size: 14px;
-  color: #eafbea;
-  background: #0a0d0a;
-  border: 1px solid #3d4a3d;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--edge);
   border-radius: 4px;
   appearance: none;
 }
 .newproj-target {
   margin-top: 8px;
   font-size: 11px;
-  color: #6b7a6b;
+  color: var(--muted-2);
   overflow-wrap: anywhere;
   min-height: 14px;
 }
 .newproj-error {
   margin-top: 8px;
   font-size: 11px;
-  color: #eafbea;
+  color: var(--text);
 }
 .newproj-actions { display: flex; gap: 8px; margin-top: 12px; }
 .newproj-actions button {
@@ -490,15 +523,15 @@ body {
   font-size: 11px;
   letter-spacing: 0.06em;
   background: none;
-  border: 1px solid #3d4a3d;
+  border: 1px solid var(--edge);
   border-radius: 4px;
   cursor: pointer;
   appearance: none;
   -webkit-tap-highlight-color: transparent;
 }
-#newproj-cancel { color: #4a5a4a; }
-#newproj-create { color: #7ee787; border-color: #5fae6f; }
-#newproj-create:disabled { color: #4a5a4a; border-color: #3d4a3d; cursor: default; }
+#newproj-cancel { color: var(--dim); }
+#newproj-create { color: var(--accent); border-color: var(--accent-2); }
+#newproj-create:disabled { color: var(--dim); border-color: var(--edge); cursor: default; }
 
 /* Floating new-project button - visual box under the 44px floor, hit area
    padded out to it (transparent padding, not a bigger visible box).
@@ -534,9 +567,9 @@ body {
   width: 32px;
   height: 32px;
   border-radius: 6px;
-  border: 1px solid #3d4a3d;
-  background: #0a0d0a;
-  color: #7ee787;
+  border: 1px solid var(--edge);
+  background: var(--bg);
+  color: var(--accent);
   font-size: 19px;
   line-height: 1;
   display: flex;
@@ -553,14 +586,14 @@ body {
   font: inherit;
   font-size: 11px;
   letter-spacing: 0.08em;
-  color: #4a5a4a;
+  color: var(--dim);
   background: none;
   border: 0;
   appearance: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.refresh:active { color: #9aab9a; }
+.refresh:active { color: var(--muted); }
 
 .footer {
   /* 22px of footer inset, then 57px more: the band the fixed + button
@@ -570,12 +603,12 @@ body {
      bottom padding did when the button floated mid-list. */
   padding: 14px 20px calc(22px + 57px + env(safe-area-inset-bottom));
   font-size: 10px;
-  color: #2a332a;
+  color: var(--faint);
   text-align: center;
   letter-spacing: 0.05em;
 }
 
-:focus-visible { outline: 1px solid #5fae6f; outline-offset: 2px; }
+:focus-visible { outline: 1px solid var(--accent-2); outline-offset: 2px; }
 
 /* --- Passcode screens (lock + first-run set) --- */
 
@@ -587,7 +620,79 @@ body {
 #settings { display: flex; flex-direction: column; flex-grow: 1; }
 
 .set-head  { padding: 12px 20px 0; }
-.set-label { font-size: 9px; letter-spacing: 0.09em; color: #4a5a4a; }
+.set-label { font-size: 9px; letter-spacing: 0.09em; color: var(--dim); }
+
+/* Lane 7 sub-screens ------------------------------------------------------
+   The crumb: 'Settings' with a back chevron, naming the screen it returns
+   to. A 44px tap floor with the padding pulled back so it costs the header
+   no vertical space, the same trick .settings-open uses. */
+.set-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  margin: -13px 0 0 -6px;
+  padding: 13px 10px 13px 6px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.set-body { padding: 4px 12px 0; }
+
+/* The icon in a settings row's left slot. var(--accent-2), not the full accent:
+   design/tokens.md reserves var(--accent) for active/running, and a static row is
+   neither - it is the same shade the artifact paints these. */
+.set-ico { color: var(--accent-2); }
+/* A FACT row - the readouts on Agent status - is inert for a different
+   reason than an unenterable one, and must not borrow its colour. .set-off
+   means 'there is somewhere to go and you cannot go there', so it is muted
+   to --dim. A fact was never going anywhere, so it stays readable at
+   --text-2. Reusing .set-off here dimmed the Agent status readouts AND
+   brightened the unenterable Shared folders row - one class, both meanings,
+   both wrong. A test caught it; the browser would have shown it later. */
+.row.folder.set-row.set-fact .row-name { color: var(--text-2); }
+
+.set-mid { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 20px 0 14px; }
+.set-glyph { color: var(--warn); }
+.set-q { font-size: 13px; font-weight: 600; margin-top: 12px; color: var(--text); }
+.set-p { font-size: 11px; line-height: 1.7; color: var(--muted); margin-top: 10px; max-width: 30ch; }
+.set-good { color: var(--accent); }
+/* The one banner that says what is SAFE rather than what is at risk, so it
+   takes the accent rather than the warning amber. */
+.banner.set-safe { display: flex; align-items: flex-start; gap: 9px; margin: 16px 0 0; color: var(--muted); }
+.banner.set-safe .ico { color: var(--accent); margin-top: 2px; }
+
+.set-btn {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  appearance: none;
+  cursor: pointer;
+}
+/* RESET is the destructive one on its screen, but it is NOT the danger
+   colour: it destroys a cache, not a session or a folder. tokens.md keeps
+   var(--danger) for 'this ends something'. */
+.set-btn-solid { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+
+.about-mark  { color: var(--accent); }
+.about-name  { font-size: 13px; font-weight: 700; margin-top: 9px; color: var(--text); }
+.about-ver   { font-size: 10px; color: var(--dim); margin-top: 5px; }
 
 #gate { display: flex; flex-direction: column; flex-grow: 1; }
 
@@ -602,11 +707,11 @@ body {
                                 jumps when the phone keyboard opens */
 }
 
-.gate-label      { font-size: 11px; letter-spacing: 0.08em; color: #4a5a4a; }
-.gate-title      { font-size: 14px; font-weight: 500; color: #eafbea; }
-.gate-sub        { font-size: 11px; line-height: 1.5; color: #9aab9a; margin-top: -8px; }
+.gate-label      { font-size: 11px; letter-spacing: 0.08em; color: var(--dim); }
+.gate-title      { font-size: 14px; font-weight: 500; color: var(--text); }
+.gate-sub        { font-size: 11px; line-height: 1.5; color: var(--muted); margin-top: -8px; }
 .gate-field      { display: flex; flex-direction: column; gap: 5px; }
-.gate-fieldlabel { font-size: 11px; letter-spacing: 0.08em; color: #4a5a4a; }
+.gate-fieldlabel { font-size: 11px; letter-spacing: 0.08em; color: var(--dim); }
 
 /* Fallback if a device ignores inputmode on a password field: swap
    type="password" for type="text" and add -webkit-text-security: disc.
@@ -615,19 +720,19 @@ body {
   width: 100%;
   min-height: 44px;
   padding: 12px 14px;
-  background: #0f150f;
-  border: 1px solid #1b231b;
+  background: var(--raised);
+  border: 1px solid var(--line);
   border-radius: 4px;
-  color: #eafbea;
+  color: var(--text);
   font: inherit;
   font-size: 19px;
   letter-spacing: 0.35em;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  caret-color: #7ee787;
+  caret-color: var(--accent);
   appearance: none;
 }
-.pin:focus { border-color: #3d4a3d; outline: none; }
+.pin:focus { border-color: var(--edge); outline: none; }
 
 .gate-go, .accept-go, .share-save {
   width: 100%;
@@ -636,20 +741,20 @@ body {
   font: inherit;
   font-size: 11px;
   letter-spacing: 0.08em;
-  color: #7ee787;
+  color: var(--accent);
   background: none;
-  border: 1px solid #3d4a3d;
+  border: 1px solid var(--edge);
   border-radius: 4px;
   appearance: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.gate-go[disabled], .accept-go[disabled], .share-save[disabled] { color: #4a5a4a; border-color: #1b231b; cursor: default; }
+.gate-go[disabled], .accept-go[disabled], .share-save[disabled] { color: var(--dim); border-color: var(--line); cursor: default; }
 
 .gate-msg {
   font-size: 11px;
   line-height: 1.5;
-  color: #c9d1c9;
+  color: var(--text-2);
   min-height: 33px;   /* two lines reserved so the form never jumps */
 }
 
@@ -675,14 +780,14 @@ body {
 
 .accept-head { display: flex; align-items: center; gap: 9px; }
 .accept-warn { flex-shrink: 0; }
-.accept-title { font-size: 14px; font-weight: 500; color: #eafbea; }
+.accept-title { font-size: 14px; font-weight: 500; color: var(--text); }
 
 /* 12px, one step up from the 11px body: this is the paragraph that has to be
    read, so it is not the smallest text on the screen. */
-.accept-lede { margin: 0; font-size: 12px; line-height: 1.55; color: #9aab9a; }
+.accept-lede { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted); }
 /* The one sentence the screen exists for, in primary text. Same treatment
    .banner b gets, and for the same reason - it is the part that must land. */
-.accept-strong { color: #eafbea; }
+.accept-strong { color: var(--text); }
 
 .accept-sections { display: flex; flex-direction: column; gap: 12px; }
 
@@ -694,13 +799,13 @@ body {
    says this is tappable, so it is kept: no list-style:none, and the summary
    keeps display:list-item, because Chrome drops the marker the moment it is
    given display:flex or block. The 44px floor comes from min-height. */
-.accept-more { border-top: 1px solid #1b231b; border-bottom: 1px solid #1b231b; }
+.accept-more { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .accept-more > summary {
   min-height: 44px;
   padding: 12px 0;
   font-size: 12px;
   line-height: 1.5;
-  color: #c9d1c9;
+  color: var(--text-2);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -709,8 +814,8 @@ body {
 
 /* Same type as .allhdr's section label - this app has one section-heading
    voice and these are section headings. */
-.copy-heading { font-size: 9px; letter-spacing: 0.09em; color: #4a5a4a; margin-bottom: 5px; }
-.copy-item { font-size: 11px; line-height: 1.5; color: #9aab9a; }
+.copy-heading { font-size: 9px; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 5px; }
+.copy-item { font-size: 11px; line-height: 1.5; color: var(--muted); }
 .copy-item + .copy-item { margin-top: 3px; }
 
 /* The whole row is the tap target, not the 18px box - a control that looks
@@ -729,16 +834,16 @@ body {
   min-height: 44px;
   cursor: pointer;
   font-size: 12px;
-  color: #c9d1c9;
+  color: var(--text-2);
   -webkit-tap-highlight-color: transparent;
 }
 /* Native checkbox, recoloured in one line rather than rebuilt out of a span -
    it keeps the platform's own focus ring, keyboard behaviour and hit testing. */
-.accept-consent input { width: 18px; height: 18px; flex-shrink: 0; accent-color: #7ee787; margin: 0; }
+.accept-consent input { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); margin: 0; }
 
-.accept-note { font-size: 10px; line-height: 1.5; color: #4a5a4a; }
+.accept-note { font-size: 10px; line-height: 1.5; color: var(--dim); }
 
-.accept-msg { font-size: 11px; line-height: 1.5; color: #eafbea; }
+.accept-msg { font-size: 11px; line-height: 1.5; color: var(--text); }
 
 /* --- Folder picker (T97) --- */
 
@@ -747,8 +852,8 @@ body {
 #folders { display: flex; flex-direction: column; flex-grow: 1; }
 
 .share-head { padding: 12px 20px 0; }
-.share-label { font-size: 9px; letter-spacing: 0.09em; color: #4a5a4a; }
-.share-crumb { margin-top: 6px; font-size: 11px; color: #9aab9a; overflow-wrap: anywhere; }
+.share-label { font-size: 9px; letter-spacing: 0.09em; color: var(--dim); }
+.share-crumb { margin-top: 6px; font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
 
 /* Deliberately NOT `.row` - `.row`'s 14px vertical padding plus a 44px inner
    control gives a 72px row. */
@@ -764,7 +869,7 @@ body {
 }
 /* Same accent T96's .accept-consent input uses - the same control in the
    same app. */
-.share-tick input { width: 18px; height: 18px; accent-color: #7ee787; margin: 0; }
+.share-tick input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
 .share-open {
   flex-grow: 1;
   display: flex;
@@ -794,12 +899,12 @@ body {
    those rows are `share-row share-off` and have no `.row.folder` to outrank.
    Shipped once without the prefix; it was dead, and a comment claimed it
    worked. Do not shorten it back. */
-.row.folder.set-off .row-name { color: #4a5a4a; }
+.row.folder.set-off .row-name { color: var(--dim); }
 .share-off { padding-left: 44px; }
-.share-off .row-name { color: #4a5a4a; }
-/* The error mark. No danger colour - #ff7b72/#e5534b mean "this ends
+.share-off .row-name { color: var(--dim); }
+/* The error mark. No danger colour - var(--danger)/var(--danger-2) mean "this ends
    something" and an error is not that. */
-.share-bad .row-name { color: #eafbea; }
+.share-bad .row-name { color: var(--text); }
 
 .share-new, .share-remove, .share-skip, .empty-action {
   min-height: 44px;
@@ -807,9 +912,9 @@ body {
   font: inherit;
   font-size: 10px;
   letter-spacing: 0.06em;
-  color: #9aab9a;
+  color: var(--muted);
   background: none;
-  border: 1px solid #3d4a3d;
+  border: 1px solid var(--edge);
   border-radius: 4px;
   cursor: pointer;
   appearance: none;
@@ -822,7 +927,7 @@ body {
    not a notice - the owner would have to scroll past all of them to read it.
    Padding flips top<->bottom so the spacing lands the same way now that it
    sits above its neighbour instead of below it. */
-.share-note { padding: 0 13px 8px; font-size: 10px; line-height: 1.5; color: #4a5a4a; }
+.share-note { padding: 0 13px 8px; font-size: 10px; line-height: 1.5; color: var(--dim); }
 
 /* Sticky is the fix for "SAVE below a 500-row list". Opaque background
    because it floats over content, the same reason .newproj-box is opaque. */
@@ -832,11 +937,84 @@ body {
   position: sticky;
   bottom: 0;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-  background: #0a0d0a;
-  border-top: 1px solid #1b231b;
+  background: var(--bg);
+  border-top: 1px solid var(--line);
 }
 .share-save { flex-grow: 1; }
 
 /* At 320px the toggle drops to a second line instead of crushing the name -
    scoped to the SELECTED row only, so a plain tickable row never wraps. */
 .share-picked-row { flex-wrap: wrap; }
+
+/* ===========================================================================
+   MOTION - design/motion.md, which is the artifact's "What moves" table.
+   All CSS, no framework: the artifact is explicit that React and shadcn were
+   the reference for the FEEL, not the implementation, and that this app keeps
+   its zero dependencies.
+   =========================================================================== */
+
+/* "Scales up from 0.4 with a slight overshoot, 160ms. The box fills at the
+   same time." The fill is accent-color on a native checkbox, which the
+   browser paints the instant :checked applies - so the two are simultaneous
+   for free. The overshoot peaks at 1.12 and settles, which is the "slight"
+   in the note; a bigger one reads as a bounce.
+   CEILING, stated rather than hidden: this scales the whole control, because
+   the tick GLYPH inside a native <input> cannot be animated. The artifact
+   draws a custom .chk span with its own SVG check, which would animate the
+   glyph exactly as written. Swapping the picker's native input for that is a
+   real change with real accessibility consequences, so it is not smuggled in
+   here - see design/motion.md. */
+@keyframes tick-pop {
+  0%   { transform: scale(0.4); }
+  70%  { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+.share-tick input:checked { animation: tick-pop 160ms cubic-bezier(0.2, 0.8, 0.3, 1); }
+
+/* "Ripple expanding from centre, 2.4s loop in this mockup; on a real tap it
+   fires once from the touch point." Both halves matter: ONCE, and from where
+   the finger actually landed. The 2.4s loop exists so a still mockup shows
+   the effect - looping it on a real button would be a nag. */
+@keyframes ripple-out {
+  from { transform: translate(-50%, -50%) scale(0); opacity: 0.28; }
+  to   { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+.ripples { position: relative; overflow: hidden; }
+.ripple-ink {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: currentColor;
+  pointer-events: none;   /* never eat the tap it is decorating */
+  animation: ripple-out 480ms ease-out forwards;
+}
+
+/* "One 360 degree turn while the reset runs." One turn, not a spinner: the
+   reset finishes in well under a second, and a looping spinner would outlive
+   the work it describes. */
+@keyframes rot-once { to { transform: rotate(360deg); } }
+.set-glyph.spinning { animation: rot-once 620ms ease-in-out; }
+
+/* "Slide in from the right going deeper, out to the right coming back,
+   matching the chevron direction." The chevron points right, so going deeper
+   arrives FROM the right and coming back leaves TO the right. Reversing
+   either one makes the chevron a lie. */
+@keyframes screen-deeper { from { transform: translateX(18px); opacity: 0; } }
+@keyframes screen-back   { from { transform: translateX(-18px); opacity: 0; } }
+main.nav-deeper { animation: screen-deeper 180ms ease-out; }
+main.nav-back   { animation: screen-back 180ms ease-out; }
+
+/* "Every one of the above is off under prefers-reduced-motion." Listed in the
+   artifact at the same level as the other five rules, not as a nicety. The
+   near-zero duration rather than `none` is deliberate: animationend still
+   fires, so any JS waiting on it cannot hang. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

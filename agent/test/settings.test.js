@@ -29,6 +29,15 @@ function makeEl(tag) {
     attrs: {},
     _text: '',
     appendChild(child) { this.children.push(child); return child; },
+    // buildSettingsRow clones an <svg> out of a <template> and points its
+    // <use> at the icon id. Both live on the CLONE, never on the row, so a
+    // row assertion is unaffected by them.
+    cloneNode() { return makeEl(this.tag); },
+    // showScreen adds/removes the nav-direction class that drives the
+    // page-transition animation. A no-op set is enough: these tests assert
+    // which screen is revealed, never how it got there.
+    classList: { add() {}, remove() {} },
+    querySelector() { return this._use || (this._use = makeEl('use')); },
     setAttribute(k, v) { this.attrs[k] = v; },
     get textContent() { return this._text; },
     set textContent(v) { this._text = v; this.children = []; },
@@ -39,6 +48,13 @@ function makeEl(tag) {
 
 function fakeDocument(byId = {}) {
   const registry = new Map(Object.entries(byId));
+  // #tpl-row-ico is the <template> buildSettingsRow clones the row icon from.
+  // Registered by default so every harness gets it without knowing about it.
+  if (!registry.has('tpl-row-ico')) {
+    const tpl = makeEl('template');
+    tpl.content = { firstElementChild: makeEl('svg') };
+    registry.set('tpl-row-ico', tpl);
+  }
   return {
     createElement: (tag) => makeEl(tag),
     getElementById(id) {
@@ -57,12 +73,16 @@ function readScreenMain() {
   return new Function(`${js.slice(start, end)}; return SCREEN_MAIN;`)();
 }
 
-test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are exactly the five screens', () => {
+test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the nine screens', () => {
   // RED WHEN: a screen is added to the map with no <main>, or a <main> is
   // renamed - the router would then hide nothing and two screens stack.
-  // Also covers the screens T78-T85 add.
+  // The four Lane 7 destinations are here now; a fifth (Change passcode)
+  // lands with its agent route.
   const SCREEN_MAIN = readScreenMain();
-  assert.deepEqual(Object.keys(SCREEN_MAIN).sort(), ['accept', 'folders', 'gate', 'list', 'settings']);
+  assert.deepEqual(
+    Object.keys(SCREEN_MAIN).sort(),
+    ['about', 'accept', 'agent', 'folders', 'gate', 'list', 'reset', 'see', 'settings'],
+  );
   const html = read('index.html');
   for (const id of Object.values(SCREEN_MAIN)) {
     assert.match(html, new RegExp(`<main id="${id}"`), `index.html must contain <main id="${id}">`);
@@ -107,14 +127,20 @@ test('S3 - state.screen = appears in app.js exactly once, inside showScreen', ()
 
 // --- S4 - onPopState's new branch ------------------------------------------
 
-function makePopState(state, historyStub, showScreenSpy = () => {}) {
+function makePopState(state, historyStub, showScreenSpy = () => {}, sub = null) {
   const js = read('app.js');
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
+    'settingsSub', 'SETTINGS_SUBS', 'renderSettings',
     `${src}; return onPopState;`,
   );
-  return fn(state, historyStub, () => {}, true, true, true, showScreenSpy);
+  // settingsSub defaults to null: the sub-screen branch is opt-in per test,
+  // so every existing case still exercises the root/drill paths unchanged.
+  return fn(
+    state, historyStub, () => {}, true, true, true, showScreenSpy,
+    sub, new Set(['see', 'agent', 'reset', 'about']), () => {},
+  );
 }
 
 test('S4 - onPopState on the settings screen returns to the list without touching a drill entry underneath', () => {
@@ -202,17 +228,21 @@ test('S7 - closeSettings called twice fires exactly one history.back()', () => {
 
 // --- S8 - goHome, one exit per screen --------------------------------------
 
-function loadGoHome({ screen, confirmPushed = false, folderPushed = false }) {
+function loadGoHome({
+  screen, confirmPushed = false, folderPushed = false,
+  settingsSub = null, settingsPushed = false,
+}) {
   const js = read('app.js');
   const start = js.indexOf('function goHome(');
   const end = js.indexOf('// Extracted to a named function');
   const src = js.slice(start, end);
   const state = { screen, confirmName: confirmPushed ? 'X' : null, openFolder: folderPushed ? 'Y' : null };
   const calls = {
-    render: 0, historyGo: [], finishFolders: 0, closeSettings: 0,
+    render: 0, historyGo: [], finishFolders: 0, closeSettings: 0, showScreen: [],
   };
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'finishFolders', 'closeSettings',
+    'settingsSub', 'settingsPushed', 'showScreen',
     `${src}; return goHome;`,
   );
   const goHome = fn(
@@ -223,6 +253,9 @@ function loadGoHome({ screen, confirmPushed = false, folderPushed = false }) {
     folderPushed,
     () => { calls.finishFolders += 1; },
     () => { calls.closeSettings += 1; },
+    settingsSub,
+    settingsPushed,
+    (name) => { calls.showScreen.push(name); },
   );
   return {
     goHome, state, calls,
@@ -338,55 +371,117 @@ test('S11 - buildSettingsRow: enterable carries data-settings; not enterable car
   });
   assert.equal(on.tag, 'button');
   assert.equal(on.dataset.settings, 'shared');
-  assert.equal(on.children[0].children[0].textContent, 'Shared folders');
-  assert.equal(on.children[0].children[1].textContent, '3 folders shared');
+  // children[0] is the ICON. Lane 7 of the artifact: 'icon or control on
+  // the LEFT, name and state stacked in the middle, chevron on the right.
+  // No exceptions anywhere in the app.' This shipped once with an empty
+  // left slot and a comment defending it - the index is pinned here so
+  // removing the icon again is a test failure, not a style opinion.
+  assert.equal(on.children[0].tag, 'svg', 'a settings row must lead with its icon');
+  assert.equal(on.children[1].children[0].textContent, 'Shared folders');
+  assert.equal(on.children[1].children[1].textContent, '3 folders shared');
 
   const off = buildSettingsRow({
     id: 'shared', name: 'Shared folders', state: 'not known yet', enterable: false,
   });
   assert.equal(off.tag, 'div');
   assert.equal(off.dataset.settings, undefined, 'an unenterable row must carry no data-settings attribute at all');
-  assert.equal(off.children[0].children[0].textContent, 'Shared folders');
-  assert.equal(off.children[0].children[1].textContent, 'not known yet');
+  assert.equal(off.children[0].tag, 'svg');
+  assert.equal(off.children[1].children[0].textContent, 'Shared folders');
+  assert.equal(off.children[1].children[1].textContent, 'not known yet');
   // A row that cannot be entered must not promise it can. `shared === null`
   // is the daily case here - a sleeping PC, a dropped link - so a bright
   // name and an accent chevron over a row that ignores the tap is a dead
-  // control someone meets often.
-  assert.equal(off.children.length, 1, 'an unenterable row must draw no chevron');
+  // control someone meets often. Two children: the icon and the stack, and
+  // no third one, because the third would be the chevron.
+  assert.equal(off.children.length, 2, 'an unenterable row must draw no chevron');
   assert.ok(off.className.includes('set-off'), 'an unenterable row must be muted like .share-off');
-  assert.equal(on.children.length, 2, 'an enterable row still draws its chevron');
+  assert.equal(on.children.length, 3, 'an enterable row draws icon, stack and chevron');
 });
 
-// --- S12 - renderSettings, the one row it draws today -----------------------
+// --- S12 - renderSettings, the grouped root --------------------------------
 
 function loadRenderSettings(state, buildSettingsRowImpl) {
   const js = read('app.js');
-  const start = js.indexOf('function renderSettings(');
+  const start = js.indexOf('function settingsGroups(');
   const end = js.indexOf('function screenAfterUnlock(');
   const src = js.slice(start, end);
   const listEl = makeEl('div');
-  const doc = { getElementById: (id) => (id === 'settings-list' ? listEl : makeEl('div')) };
+  const doc = fakeDocument({ 'settings-list': listEl });
   const fn = new Function(
-    'document', 'state', 'sharedRowState', 'buildSettingsRow',
+    'document', 'state', 'sharedRowState', 'buildSettingsRow', 'agentStateLine', 'SHELL_VERSION',
     `${src}; return renderSettings;`,
   );
-  const renderSettings = fn(doc, state, folders.sharedRowState, buildSettingsRowImpl);
+  const renderSettings = fn(
+    doc, state, folders.sharedRowState, buildSettingsRowImpl,
+    (r) => (r === true ? 'reachable' : 'checking'), '0.1.0',
+  );
   return { renderSettings, listEl };
 }
 
-test('S12 - renderSettings appends exactly one row to #settings-list, carrying data-settings="shared"', () => {
-  // RED WHEN: a row is added for a destination whose screen does not exist yet.
-  const state = { shared: [{ path: 'F:\\A' }] };
-  const { renderSettings, listEl } = loadRenderSettings(state, (opts) => {
-    const el = makeEl(opts.enterable ? 'button' : 'div');
-    if (opts.enterable) el.dataset.settings = opts.id;
-    return el;
-  });
+function renderedRows(listEl) {
+  // Each group is a <section> holding [header, rule, list]; the rows are in
+  // the third child. Flattened so a test can assert the row ORDER across
+  // groups, which is what the artifact actually fixes.
+  const out = [];
+  for (const section of listEl.children) out.push(...section.children[2].children);
+  return out;
+}
+
+const stubRow = (opts) => {
+  const el = makeEl(opts.enterable ? 'button' : 'div');
+  if (opts.enterable) el.dataset.settings = opts.id;
+  el.attrs.icon = opts.icon;
+  el.attrs.name = opts.name;
+  return el;
+};
+
+test('S12 - renderSettings draws the groups Lane 6 names, in order, each with an icon', () => {
+  // RED WHEN: the root goes back to one hard-coded FOLDERS section holding a
+  // single row. That is what shipped, and it is the deviation from Lane 6
+  // that started this rebuild - so the shape is pinned, not just described.
+  const state = { shared: [{ path: 'F:\\A' }], reachable: true };
+  const { renderSettings, listEl } = loadRenderSettings(state, stubRow);
   renderSettings();
-  assert.equal(listEl.children.length, 1);
-  assert.equal(listEl.children[0].dataset.settings, 'shared');
+
+  const headings = [...listEl.children].map((sec) => sec.children[0].children[0].textContent);
+  assert.deepEqual(headings, ['FOLDERS', 'SECURITY', 'THIS APP']);
+
+  const rows = renderedRows(listEl);
+  assert.deepEqual(
+    rows.map((r) => r.dataset.settings),
+    ['shared', 'see', 'lock', 'agent', 'reset', 'about'],
+  );
+  // Lane 7: 'No exceptions anywhere in the app.'
+  for (const row of rows) {
+    assert.ok(row.attrs.icon, `${row.attrs.name} must carry an icon`);
+  }
 });
 
+test('S12b - every enterable settings row has somewhere to go', () => {
+  // RED WHEN: a row is added to settingsGroups before its destination exists,
+  // which is a dead control - the thing the ABSENT-not-disabled rule was
+  // trying to avoid, reintroduced from the other side.
+  const state = { shared: [{ path: 'F:\\A' }], reachable: true };
+  const { renderSettings, listEl } = loadRenderSettings(state, stubRow);
+  renderSettings();
+
+  const js = read('app.js');
+  const declStart = js.indexOf('const SETTINGS_SUBS');
+  const decl = js.slice(declStart, js.indexOf(';', declStart));
+  const subs = new Set([...decl.matchAll(/'([a-z]+)'/g)].map((m) => m[1]));
+  assert.ok(subs.size > 0, 'SETTINGS_SUBS must name at least one screen');
+  // The two ids that are ACTIONS rather than screens, handled in the click
+  // delegate: one opens the picker, one drops the token.
+  const actions = new Set(['shared', 'lock']);
+  for (const row of renderedRows(listEl)) {
+    const id = row.dataset.settings;
+    if (id === undefined) continue;
+    assert.ok(
+      subs.has(id) || actions.has(id),
+      `settings row '${id}' leads nowhere: it is neither a SETTINGS_SUBS screen nor a wired action`,
+    );
+  }
+});
 // --- S13 - the one door, order-checked ---------------------------------------
 
 function loadOpenSharedFolders(closeSettingsSpy, onChooseFoldersSpy) {
@@ -460,7 +555,7 @@ test('S16 - app.css: #settings is a flex column with flex-grow: 1, and .title st
   assert.match(css, /#settings\s*\{[^}]*flex-grow:\s*1[^}]*\}/);
   const titleRule = css.match(/\.title\s*\{[^}]*\}/);
   assert.ok(titleRule, '.title must have its own rule');
-  assert.match(titleRule[0], /color:\s*#eafbea/);
+  assert.match(titleRule[0], /color:\s*var\(--text\)/);
 });
 
 test('S17 - the inert-row muting rule outranks .row.folder, or it does nothing at all', () => {
@@ -478,13 +573,16 @@ test('S17 - the inert-row muting rule outranks .row.folder, or it does nothing a
   const match = css.match(/^([^\n{]*\.set-off[^\n{]*)\{/m);
   assert.ok(match, 'the inert settings row must have a muting rule');
   const selector = match[1].trim();
+  // Must still START with .row.folder so it outranks `.row.folder
+  // .row-name` (0,3,0); extra classes after that only raise specificity
+  // further, so the prefix is the real assertion and not the exact string.
   assert.ok(
-    selector.startsWith('.row.folder.set-off'),
+    selector.startsWith('.row.folder') && selector.includes('.set-off'),
     `the muting rule must outrank .row.folder .row-name; found "${selector}"`,
   );
   // The selector alone is not the whole claim: keeping it while changing the
   // colour back to the enterable one would leave this green and the row bright
   // again. Pin the value too. A source scan still cannot prove the CASCADE -
   // only a browser can, which is why a colour claim gets measured at review.
-  assert.match(match[0] + css.slice(css.indexOf(match[0]) + match[0].length, css.indexOf(match[0]) + match[0].length + 40), /#4a5a4a/);
+  assert.match(match[0] + css.slice(css.indexOf(match[0]) + match[0].length, css.indexOf(match[0]) + match[0].length + 40), /var\(--dim\)/);
 });

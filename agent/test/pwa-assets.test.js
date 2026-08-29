@@ -182,6 +182,15 @@ const TOKEN_SET = new Set([
   '0a0d0a', '0f150f', 'eafbea', 'c9d1c9', '9aab9a', '4a5a4a',
   '3d4a3d', '2a332a', '7ee787', '5fae6f', '1b231b', '6b7a6b',
   'ff7b72', 'e5534b',
+  // Added with Lane 7's "Reset the app" screen, which needs a CAUTION colour.
+  // design/tokens.md had none - it has an accent and a danger and nothing
+  // between them - so this is the userflow artifact's own amber, now recorded
+  // in tokens.md as well. Caution is not danger: --danger stays reserved for
+  // "this ends something", which clearing a cache is not.
+  'e3b341',
+  // Text drawn ON an accent fill. Not a background and not a text colour in
+  // its own right - it exists only so the solid button has legible ink.
+  '08170c',
 ]);
 
 function assertOnlyTokenColours(source, label) {
@@ -201,8 +210,26 @@ function assertOnlyTokenColours(source, label) {
   }
 }
 
-test('app.css uses only tokenized colours', () => {
-  assertOnlyTokenColours(read('app.css'), 'app.css');
+// app.css is held to a STRICTER rule than the other three: not merely "every
+// hex is a token" but "no hex outside the :root block at all". The weaker
+// rule let a correct-but-hard-coded colour spread through 128 declarations,
+// so changing one meant finding all of them. These two tests are what make
+// the token block the single point of change rather than a convention.
+test('app.css declares every colour ONCE, in :root', () => {
+  const css = read('app.css');
+  const rootEnd = css.indexOf('}', css.indexOf(':root {'));
+  assert.ok(rootEnd > 0, 'app.css must open with a :root token block');
+  const body = css.slice(rootEnd);
+  const strays = [...body.matchAll(/#[0-9a-fA-F]{3,8}/g)]
+    .filter((m) => !/[a-zA-Z]/.test(body[m.index + m[0].length] || ''))
+    .map((m) => m[0]);
+  assert.deepEqual(strays, [], 'colours below :root must be var(--token), not hex literals');
+});
+
+test('every colour in app.css :root is a design token', () => {
+  const css = read('app.css');
+  const root = css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {')));
+  assertOnlyTokenColours(root, 'app.css :root');
 });
 
 test('index.html uses only tokenized colours', () => {
@@ -633,13 +660,13 @@ test('a list row folds its elapsed time into the status line, so the removed idl
 
 // --- STOP / confirm / watch loop ---
 
-test('the danger colours (#ff7b72, #e5534b) appear only in stop/confirm rules, never on a banner', () => {
+test('the danger tokens appear only in stop/confirm rules, never on a banner', () => {
   const css = read('app.css');
   const blocks = css.split('}').filter((chunk) => chunk.includes('{'));
   for (const chunk of blocks) {
     const selector = chunk.slice(0, chunk.indexOf('{'));
     const body = chunk.slice(chunk.indexOf('{') + 1);
-    if (/#ff7b72|#e5534b/i.test(body)) {
+    if (/var\(--danger(?:-2)?\)/.test(body)) {
       assert.match(
         selector,
         /tile-stop|tile-confirm/,
@@ -652,8 +679,8 @@ test('the danger colours (#ff7b72, #e5534b) appear only in stop/confirm rules, n
   const bannerErrorRule = css.match(/\.banner\.error\s*\{[^}]*\}/);
   assert.ok(bannerRule, 'app.css must carry a .banner rule');
   assert.ok(bannerErrorRule, 'app.css must carry a .banner.error rule');
-  assert.ok(!/#ff7b72|#e5534b/i.test(bannerRule[0]), '.banner must not use a danger colour');
-  assert.ok(!/#ff7b72|#e5534b/i.test(bannerErrorRule[0]), '.banner.error must not use a danger colour');
+  assert.ok(!/var\(--danger(?:-2)?\)/.test(bannerRule[0]), '.banner must not use a danger colour');
+  assert.ok(!/var\(--danger(?:-2)?\)/.test(bannerErrorRule[0]), '.banner.error must not use a danger colour');
 });
 
 test('anyWatchable is true for running/handoff/starting, and the watch loop is a bounded 5s poll gated on visibility', () => {
@@ -1261,9 +1288,9 @@ test("the folder row's left-edge break comes from the missing dot, not a nudge",
 
 test('the folder row uses the three tokenized colours the design names', () => {
   const css = read('app.css');
-  assert.match(css, /\.row\.folder \.row-name\s*\{[^}]*#c9d1c9/);
-  assert.match(css, /\.row\.folder \.row-status\s*\{[^}]*#4a5a4a/);
-  assert.match(css, /\.folder-chev\s*\{[^}]*#5fae6f/);
+  assert.match(css, /\.row\.folder \.row-name\s*\{[^}]*var\(--text-2\)/);
+  assert.match(css, /\.row\.folder \.row-status\s*\{[^}]*var\(--dim\)/);
+  assert.match(css, /\.folder-chev\s*\{[^}]*var\(--accent-2\)/);
 });
 
 test('TOTAL counts what can be started - a container\'s children, not the container', () => {
@@ -1547,7 +1574,9 @@ function makePopState(state, historyStub) {
   const js = read('app.js');
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
   return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
-    src + '; return onPopState;')(state, historyStub, () => {}, true, true, false, () => {});
+    'settingsSub', 'SETTINGS_SUBS', 'renderSettings',
+    src + '; return onPopState;')(state, historyStub, () => {}, true, true, false, () => {},
+    null, new Set(['see', 'agent', 'reset', 'about']), () => {});
 }
 
 test('back with only the drill-in open returns to the list', () => {
@@ -1994,7 +2023,7 @@ test('the eyebrow is the dimmest token, clamps to one line, and clears the corne
   const css = read('app.css');
   const rule = css.match(/\.tile-eyebrow\s*\{([^}]*)\}/);
   assert.ok(rule, 'app.css must carry a .tile-eyebrow rule');
-  assert.match(rule[0], /#4a5a4a/);
+  assert.match(rule[0], /var\(--dim\)/);
   assert.match(rule[0], /font-size:\s*8px/);
   assert.match(rule[0], /text-transform:\s*uppercase/);
   assert.match(rule[0], /white-space:\s*nowrap/);
@@ -2265,6 +2294,11 @@ function makeShareStubEl(tag) {
       this.children.push(child);
       return child;
     },
+    // buildSettingsRow clones an <svg> out of #tpl-row-ico and points its
+    // <use> at an icon id. Both happen on the CLONE, so no row assertion
+    // anywhere in this file is affected by them.
+    cloneNode() { return makeShareStubEl(tag); },
+    querySelector() { return el._use || (el._use = makeShareStubEl('use')); },
     setAttribute(k, v) { this[`attr_${k}`] = v; },
     get textContent() { return this._text; },
     set textContent(v) { this._text = v; this.children = []; },
@@ -2298,6 +2332,11 @@ function makeShareStubEl(tag) {
 
 function fakeDocument() {
   const registry = new Map(); // id -> element, one persistent stub per id
+  // The icon <template> buildSettingsRow clones from. Registered up front so
+  // every door/picker harness gets it without needing to know it exists.
+  const tpl = makeShareStubEl('template');
+  tpl.content = { firstElementChild: makeShareStubEl('svg') };
+  registry.set('tpl-row-ico', tpl);
   return {
     createElement: (tag) => makeShareStubEl(tag),
     createTextNode: (text) => { const n = makeShareStubEl('#text'); n.textContent = text; return n; },
@@ -2461,6 +2500,7 @@ function loadDoor({
     'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
     'sharedToTicks', 'sharedRowState',
     'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
+    'SHELL_VERSION', 'agentStateLine',
     'state', 'render', 'load',
     `${onChooseSrc}
 ${pickerSrc}
@@ -2476,6 +2516,9 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
     folders.sharedToTicks, folders.sharedRowState,
     copy.PICKER_SKIP, copy.PICKER_CANCEL, showScreenSpy,
+    // settingsGroups reads both: the About row's sub-line is the shell
+    // version, and the Agent status row's is the connection state.
+    '0.1.0', (r) => (r === true ? 'reachable' : 'checking'),
     state, render, loadSpy,
   );
   door.document = doc;
@@ -2833,9 +2876,14 @@ test('F1 - the Settings row is wired to openSharedFolders, and nothing else call
   // the dead control the whole enterable/inert split exists to prevent.
   // Nothing pins this wire today.
   const js = read('app.js').replace(/\r/g, '');
-  const marker = "document.getElementById('settings-list').addEventListener('click', (e) => {";
+  // The handler moved from #settings-list to a delegated document listener
+  // when Lane 7 landed: About repeats the 'What this app can see' row, and a
+  // row must behave identically wherever it is drawn. The assertion below is
+  // unchanged in substance - the id still routes to openSharedFolders and
+  // nothing else calls it.
+  const marker = "const id = row.dataset.settings;";
   const start = js.indexOf(marker);
-  assert.ok(start !== -1, 'wireEvents must wire #settings-list');
+  assert.ok(start !== -1, 'wireEvents must delegate settings-row clicks');
   const body = js.slice(start, js.indexOf('});', start));
   assert.match(body, /openSharedFolders\(\)/);
 
@@ -2878,8 +2926,19 @@ test('F3 - an unknown shared set cannot enter the picker from the Settings door'
   door.state.shared = null;
 
   door.renderSettings();
-  const row = findByDataset(door.document.getElementById('settings-list'), 'settings');
-  assert.equal(row, null, 'the row must carry no data-settings when the set is unknown');
+  // Named explicitly. findByDataset returns the FIRST tappable row in the
+  // tree, and since Lane 6 landed that is 'What this app can see' - a row
+  // that SHOULD be enterable. Asserting "no tappable row at all" would now be
+  // asserting the settings screen is broken, which is not this test's claim:
+  // the claim is that the SHARED row specifically refuses to open the picker
+  // when the agent has not said what is shared.
+  const rows = [];
+  (function walk(n) {
+    if (n.dataset && n.dataset.settings !== undefined) rows.push(n.dataset.settings);
+    for (const c of (n.children || [])) walk(c);
+  }(door.document.getElementById('settings-list')));
+  assert.ok(!rows.includes('shared'), 'no row may carry data-settings="shared" when the set is unknown');
+  assert.ok(rows.length > 0, 'the rest of the settings root must still render');
 
   // #folders ships with the `hidden` attribute in index.html; the stub
   // element defaults to unhidden, so set it explicitly to model that.
@@ -3107,7 +3166,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
 
 test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {
   const html = read('index.html');
-  const tag = html.match(/<button class="accept-go"[^>]*>/);
+  const tag = html.match(/<button [^>]*id="accept-go"[^>]*>/);
   assert.ok(tag, 'index.html must contain #accept-go');
   assert.match(tag[0], /\sdisabled[\s>]/, '#accept-go must ship disabled - the button ships unusable before any script runs');
 
