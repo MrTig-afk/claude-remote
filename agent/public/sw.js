@@ -3,9 +3,9 @@
 // HTTP on a Tailscale IP the origin is not a secure context and
 // registration throws there - the app must keep working with no cache.
 
-const CACHE = 'claude-remote-shell-v21'; // bump on any shell change
+const CACHE = 'claude-remote-shell-v22'; // bump on any shell change
 const PRECACHE = [
-  '/', '/index.html', '/app.css', '/app.js', '/api.js', '/lock.js', '/copy.js',
+  '/', '/index.html', '/app.css', '/app.js', '/api.js', '/lock.js', '/copy.js', '/folders-ui.js',
   '/manifest.webmanifest', '/icons/icon.svg',
   '/icons/icon-192.png', '/icons/icon-512.png',
 ];

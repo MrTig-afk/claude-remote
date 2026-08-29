@@ -5,6 +5,8 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
+import * as folders from '../public/folders-ui.js';
+
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
 
@@ -231,6 +233,10 @@ test('app.js never calls fetch() directly; api.js does', () => {
   assert.ok(read('api.js').includes('fetch('), 'api.js must be the one place fetch() is called');
 });
 
+test('folders-ui.js never calls fetch() directly - it is a pure shell module', () => {
+  assert.ok(!read('folders-ui.js').includes('fetch('), 'folders-ui.js must not call fetch() directly');
+});
+
 test('lock.js never calls fetch() directly - it only calls into api.js', () => {
   assert.ok(!read('lock.js').includes('fetch('), 'lock.js must not call fetch() directly');
 });
@@ -280,6 +286,14 @@ test('PRECACHE includes /copy.js', () => {
   assert.ok(precache.includes('/copy.js'), 'the accept screen cannot render offline without its words');
 });
 
+test('PRECACHE includes /folders-ui.js, and the file exists', () => {
+  const source = read('sw.js');
+  const match = source.match(/const PRECACHE = (\[[\s\S]*?\]);/);
+  const precache = new Function(`return ${match[1]};`)();
+  assert.ok(precache.includes('/folders-ui.js'), 'the picker cannot render offline without its shell module');
+  assert.ok(existsUnderPublic('/folders-ui.js'));
+});
+
 test('api.js carries the token header and never persists the token to the device', () => {
   const source = read('api.js');
   assert.ok(source.includes('X-Claude-Remote-Token'));
@@ -309,10 +323,10 @@ test('app.css force-hides [hidden] - the picker must not render behind the lock 
   // are in that state, so the guard is not silently protecting nothing.
   const hiddenIds = [...html.matchAll(/id="([A-Za-z0-9_-]+)"[^>]*\shidden[\s>]/g)].map((m) => m[1]);
   assert.ok(
-    hiddenIds.includes('picker') && hiddenIds.includes('gate') && hiddenIds.includes('accept'),
-    'all three wrappers must ship hidden',
+    hiddenIds.includes('picker') && hiddenIds.includes('gate') && hiddenIds.includes('accept') && hiddenIds.includes('folders'),
+    'all four wrappers must ship hidden',
   );
-  for (const id of ['picker', 'gate', 'accept']) {
+  for (const id of ['picker', 'gate', 'accept', 'folders']) {
     const rule = css.match(new RegExp(`#${id}\\s*\\{[^}]*\\}`));
     assert.ok(rule, `#${id} should have a rule`);
     assert.match(rule[0], /display:/, `#${id} sets display, which is what makes the guard load-bearing`);
@@ -758,11 +772,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v21', () => {
+test('sw.js CACHE is claude-remote-shell-v22', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v21');
+  assert.equal(match[1], 'claude-remote-shell-v22');
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -1894,6 +1908,485 @@ test('the accept path pushes no history entry, and onPopState is unchanged', () 
   assert.match(onPopState, /confirmPushed = false;/);
   assert.match(onPopState, /folderPushed = false;/);
   assert.ok(!onPopState.includes('accept'), 'onPopState must know nothing about the accept screen');
+});
+
+// --- the folder picker (T97) ------------------------------------------------
+
+test('A4 - in ensureAccepted, showFolders( runs after await showAccept() and before picker.hidden = false', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
+  const showAcceptIdx = fn.indexOf('await showAccept()');
+  const showFoldersIdx = fn.indexOf('showFolders(');
+  const revealIdx = fn.indexOf('picker.hidden = false');
+  assert.ok(showAcceptIdx !== -1 && showFoldersIdx !== -1 && revealIdx !== -1, 'ensureAccepted must carry all three markers');
+  assert.ok(showAcceptIdx < showFoldersIdx, 'the picker must not run ahead of the accept screen');
+  assert.ok(showFoldersIdx < revealIdx, 'the picker must run before the project list is revealed');
+});
+
+test('A5 - showFolders adds a popstate listener and the resolve path removes it; onPopState mentions neither folders nor share', () => {
+  // Normalised: the working tree can be CRLF even though the committed blob is
+  // LF, and a multi-line anchor never matches on CRLF - indexOf returns -1 and
+  // slice(start, -1) silently becomes "the rest of the file". Strip CR first
+  // and anchor on a single line, the same fix C8 in accept.test.js already uses.
+  const js = read('app.js').replace(/\r/g, '');
+  const showFolders = js.slice(js.indexOf('function showFolders('), js.indexOf('function screenAfterUnlock('));
+  assert.match(showFolders, /window\.addEventListener\('popstate', onFoldersPop\)/);
+  const finishFolders = js.slice(js.indexOf('function finishFolders('), js.indexOf('async function onSave('));
+  assert.match(finishFolders, /window\.removeEventListener\('popstate', onFoldersPop\)/);
+  const onPopState = js.slice(js.indexOf('function onPopState()'), js.indexOf('// A synthetic desk-subfolder tile'));
+  assert.ok(!onPopState.includes('folders'), 'onPopState must know nothing about the picker');
+  assert.ok(!onPopState.includes('share'), 'onPopState must know nothing about the picker\'s own state');
+});
+
+// A minimal DOM stub - createElement/appendChild/dataset for
+// buildDriveRow/buildFolderRow (loadRowBuilders), extended below with
+// getElementById (one persistent stub per id), addEventListener /
+// removeEventListener / listenerCount / fire (same shape lock.test.js's
+// makeEl already uses), closest(), innerHTML, hidden/disabled/checked and
+// createTextNode - enough for loadPicker() below to run the picker's real
+// wiring under a stub DOM and inspect it, not just its row builders.
+function makeShareStubEl(tag) {
+  const listeners = new Map(); // type -> Set<fn>
+  const el = {
+    tag,
+    className: '',
+    dataset: {},
+    children: [],
+    parent: null,
+    hidden: false,
+    disabled: false,
+    checked: false,
+    _text: '',
+    appendChild(child) {
+      child.parent = el;
+      this.children.push(child);
+      return child;
+    },
+    setAttribute(k, v) { this[`attr_${k}`] = v; },
+    get textContent() { return this._text; },
+    set textContent(v) { this._text = v; this.children = []; },
+    get innerHTML() { return this._text; },
+    set innerHTML(v) { this._text = v; this.children = []; },
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+    listenerCount(type) { return listeners.get(type)?.size ?? 0; },
+    fire(type, ev = {}) {
+      for (const fn of [...(listeners.get(type) ?? [])]) fn(ev);
+    },
+    // sel is always '[data-xxx]' - the five forms the picker's delegates
+    // use. Hand-rolled rather than a regex, so this stub needs no backslash.
+    closest(sel) {
+      if (sel.charAt(0) !== '[' || sel.slice(-1) !== ']') return null;
+      const parts = sel.slice(1, -1).split('-').slice(1); // drop 'data'
+      const key = parts.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join('');
+      let node = el;
+      while (node) {
+        if (node.dataset && node.dataset[key] !== undefined) return node;
+        node = node.parent;
+      }
+      return null;
+    },
+  };
+  return el;
+}
+
+function fakeDocument() {
+  const registry = new Map(); // id -> element, one persistent stub per id
+  return {
+    createElement: (tag) => makeShareStubEl(tag),
+    createTextNode: (text) => { const n = makeShareStubEl('#text'); n.textContent = text; return n; },
+    getElementById(id) {
+      if (!registry.has(id)) registry.set(id, makeShareStubEl('div'));
+      return registry.get(id);
+    },
+  };
+}
+
+function flatten(el) {
+  const out = [el];
+  for (const c of el.children) out.push(...flatten(c));
+  return out;
+}
+
+function loadRowBuilders() {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function joinShare('), js.indexOf('function buildPickedRow('));
+  return new Function(
+    'document', 'driveRowState', 'coverageOf',
+    `${src}; return { buildDriveRow, buildFolderRow };`,
+  )(fakeDocument(), folders.driveRowState, folders.coverageOf);
+}
+
+function fakeWindow() { return makeShareStubEl('window'); }
+
+function fakeHistory() {
+  return {
+    state: null,
+    pushState(state) { this.state = state; },
+    back() {},
+    go() {},
+  };
+}
+
+function flush() { return new Promise((r) => setImmediate(r)); }
+
+function findByDataset(root, key) {
+  const stack = [root];
+  while (stack.length) {
+    const n = stack.shift();
+    if (n.dataset && n.dataset[key] !== undefined) return n;
+    for (const c of (n.children || [])) stack.push(c);
+  }
+  return null;
+}
+
+function collectByClass(root, cls) {
+  const out = [];
+  const walk = (n) => {
+    if (n.className === cls) out.push(n);
+    for (const c of (n.children || [])) walk(c);
+  };
+  walk(root);
+  return out;
+}
+
+function hasUndefinedText(root) {
+  let found = false;
+  const walk = (n) => {
+    if (n.textContent === 'undefined') found = true;
+    for (const c of (n.children || [])) walk(c);
+  };
+  walk(root);
+  return found;
+}
+
+// Any node in the whole subtree currently carrying at least one live
+// listener of any type the picker actually registers.
+function anyActiveListener(node) {
+  if (!node.listenerCount) return false;
+  return ['change', 'click', 'popstate'].some((t) => node.listenerCount(t) > 0);
+}
+
+function hasListenedAncestor(node) {
+  let n = node.parent;
+  while (n) {
+    if (anyActiveListener(n)) return true;
+    n = n.parent;
+  }
+  return false;
+}
+
+// Runs the picker's real wiring under a stub DOM. Everything the block
+// touches that is not defined inside it - document, window, history, the
+// api calls and the folders-ui imports - is injected, so a mis-wired
+// listener or a stale render shows up as behaviour instead of as a
+// source-text match.
+function loadPicker({ getDrives, getFolders, putShared } = {}) {
+  const js = read('app.js').replace(/\r/g, '');
+  const src = js.slice(js.indexOf('const share = {'), js.indexOf('function screenAfterUnlock('));
+  const doc = fakeDocument();
+  const win = fakeWindow();
+  const hist = fakeHistory();
+  const fn = new Function(
+    'document', 'window', 'history',
+    'getDrives', 'getFolders', 'putShared',
+    'crumbSegments', 'sharedBody', 'coverageOf', 'driveRowState',
+    'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
+    `${src}
+return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListClick, onShareListChange, onSharePickedClick, finishFolders, toggleTick };`,
+  );
+  const picker = fn(
+    doc, win, hist,
+    getDrives || (async () => ({ ok: true, status: 200, data: { drives: [] } })),
+    getFolders || (async () => ({ ok: true, status: 200, data: { path: 'F:', parent: null, folders: [], total: 0 } })),
+    putShared || (async () => ({ ok: true, status: 200, data: {} })),
+    folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
+    folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
+  );
+  picker.document = doc;
+  picker.window = win;
+  picker.history = hist;
+  return picker;
+}
+
+test('A6 - buildDriveRow: a blocked drive carries no data-open, no data-tick and no <button>', () => {
+  const { buildDriveRow } = loadRowBuilders();
+  const row = buildDriveRow({
+    letter: 'C:', label: 'OS', blocked: true, reason: 'system',
+  }, []);
+  assert.match(row.className, /share-off/);
+  const nodes = flatten(row);
+  assert.ok(!nodes.some((n) => n.tag === 'button'), 'a blocked drive must carry no <button>');
+  assert.ok(!nodes.some((n) => n.tag === 'input'), 'a blocked drive must carry no <input>');
+  assert.ok(!nodes.some((n) => n.dataset.open !== undefined), 'a blocked drive must carry no data-open');
+  assert.ok(!nodes.some((n) => n.dataset.tick !== undefined), 'a blocked drive must carry no data-tick');
+});
+
+test('A7 - buildFolderRow: readable:false carries no data-open, no data-tick, and the honest status', () => {
+  const { buildFolderRow } = loadRowBuilders();
+  const row = buildFolderRow({ name: 'Locked', readable: false }, 'F:\\Dev', []);
+  assert.match(row.className, /share-off/);
+  const nodes = flatten(row);
+  assert.ok(!nodes.some((n) => n.tag === 'button'), 'an unreadable folder must carry no <button>');
+  assert.ok(!nodes.some((n) => n.tag === 'input'), 'an unreadable folder must carry no <input>');
+  assert.ok(!nodes.some((n) => n.dataset.open !== undefined));
+  assert.ok(!nodes.some((n) => n.dataset.tick !== undefined));
+  const status = nodes.find((n) => n.className === 'row-status');
+  assert.equal(status.textContent, 'no permission to open this folder');
+});
+
+test('A8 - buildFolderRow: a covered row disables the checkbox, keeps the name, and says why', () => {
+  const { buildFolderRow } = loadRowBuilders();
+  const ticks = [{ path: 'F:\\Dev', name: 'Dev' }];
+  const row = buildFolderRow({ name: 'Projects', readable: true }, 'F:\\Dev', ticks);
+  const nodes = flatten(row);
+  const input = nodes.find((n) => n.tag === 'input');
+  assert.ok(input, 'a coverable row must still carry its checkbox');
+  assert.equal(input.disabled, true);
+  const name = nodes.find((n) => n.className === 'row-name');
+  assert.equal(name.textContent, 'Projects', 'the name must be unchanged');
+  const status = nodes.find((n) => n.className === 'row-status');
+  assert.ok(status && status.textContent.includes('Dev'), 'the status must say which root already covers it');
+});
+
+test('A9 - the onAuthLost callback calls hideFolders() before showGate()', () => {
+  const js = read('app.js');
+  const match = js.match(/onAuthLost\(async \(\) => \{ ([^}]+) \}\);/);
+  assert.ok(match, 'boot() must register an onAuthLost callback');
+  const callback = match[1];
+  const hideIdx = callback.indexOf('hideFolders();');
+  const gateIdx = callback.indexOf('showGate()');
+  assert.ok(hideIdx !== -1, 'onAuthLost callback must call hideFolders()');
+  assert.ok(gateIdx !== -1, 'onAuthLost callback must call showGate()');
+  assert.ok(hideIdx < gateIdx, 'a token expiry mid-picker must hide it before the gate returns, or two <main>s stack');
+});
+
+test('A10 - every control the picker builds sits under a node the picker listens on', async () => {
+  let drivesOk = true;
+  const getDrives = async () => (drivesOk
+    ? { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }, { letter: 'Z:', label: 'Z:', blocked: true, reason: 'system' }] } }
+    : { ok: false, status: 503, code: 'drives_unavailable', data: {} });
+  const getFolders = async () => ({ ok: true, status: 200, data: { path: 'F:/Dev', parent: 'F:', folders: [{ name: 'Alpha', readable: true }], total: 1 } });
+  const putShared = async () => ({ ok: true, status: 200, data: {} });
+  const picker = loadPicker({ getDrives, getFolders, putShared });
+
+  const roots = () => ['share-up', 'share-msg', 'share-picked-zone', 'share-picked', 'share-hide-note', 'share-list', 'share-save']
+    .map((id) => picker.document.getElementById(id));
+
+  function assertAllControlsListened() {
+    for (const root of roots()) {
+      const stack = [root];
+      while (stack.length) {
+        const n = stack.pop();
+        if (n.dataset && Object.keys(n.dataset).length > 0) {
+          assert.ok(hasListenedAncestor(n), `a control with dataset ${JSON.stringify(n.dataset)} has no listened ancestor`);
+        }
+        for (const c of (n.children || [])) stack.push(c);
+      }
+    }
+  }
+
+  // State 1: drives listed.
+  picker.showFolders([]);
+  await flush();
+  assertAllControlsListened();
+
+  // State 2: drives failed with retry.
+  drivesOk = false;
+  picker.openDrives();
+  await flush();
+  assert.ok(picker.share.error && picker.share.error.retry);
+  assertAllControlsListened();
+
+  // State 3: a folder listing.
+  drivesOk = true;
+  picker.openPath('F:/Dev', { push: false });
+  await flush();
+  assertAllControlsListened();
+
+  // State 4: ticks present with errorIndex set.
+  picker.share.ticks = [{ path: 'F:/Dev/Alpha', name: 'Alpha', newFolders: 'show' }];
+  picker.share.errorIndex = 0;
+  picker.renderShare();
+  assertAllControlsListened();
+});
+
+test('A11 - tapping RETRY re-issues the failed request', async () => {
+  let calls = 0;
+  const getDrives = async () => {
+    calls += 1;
+    if (calls === 1) return { ok: false, status: 503, code: 'drives_unavailable', data: {} };
+    return { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } };
+  };
+  const picker = loadPicker({ getDrives });
+  picker.showFolders([]);
+  await flush();
+  assert.equal(calls, 1);
+  assert.ok(picker.share.error && picker.share.error.retry);
+
+  const list = picker.document.getElementById('share-list');
+  const retryNode = findByDataset(list, 'shareRetry');
+  assert.ok(retryNode, 'RETRY control must exist in #share-list');
+
+  picker.onShareListClick({ target: retryNode });
+  await flush();
+
+  assert.equal(calls, 2, 'RETRY must re-issue getDrives');
+  assert.equal(picker.share.error, null);
+  assert.equal(picker.share.rows.length, 1);
+});
+
+test('A12 - a pop from the first drill level renders zero rows until the drives answer', async () => {
+  let drivesCall = 0;
+  let resolveSecond;
+  const getDrives = async () => {
+    drivesCall += 1;
+    if (drivesCall === 1) return { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } };
+    return new Promise((resolve) => { resolveSecond = resolve; });
+  };
+  const getFolders = async () => ({ ok: true, status: 200, data: { path: 'F:', parent: null, folders: [{ name: 'Alpha', readable: true }], total: 1 } });
+  const picker = loadPicker({ getDrives, getFolders });
+
+  picker.showFolders([]);
+  await flush();
+
+  picker.openPath('F:', { push: true });
+  await flush();
+  assert.ok(picker.share.rows.length > 0, 'sanity: the folder listing has rows before the pop');
+
+  picker.history.state = null; // Android back lands on no {folders} entry -> the drive list
+  picker.onFoldersPop();
+
+  const list = picker.document.getElementById('share-list');
+  assert.equal(findByDataset(list, 'tick'), null, '#share-list must hold no [data-tick] node while loading');
+  assert.equal(findByDataset(list, 'open'), null, '#share-list must hold no [data-open] node while loading');
+  const msgNodes = collectByClass(list, 'msg');
+  assert.equal(msgNodes.length, 1);
+  assert.equal(msgNodes[0].textContent, 'Reading the drives on the PC.');
+  assert.equal(hasUndefinedText(list), false, 'no node text content may be the literal "undefined"');
+
+  resolveSecond({ ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } });
+  await flush();
+});
+
+test('A13 - an older response cannot repaint a newer level', async () => {
+  let resolveA;
+  const getFolders = async () => new Promise((resolve) => { resolveA = resolve; });
+  const getDrives = async () => ({ ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } });
+  const picker = loadPicker({ getDrives, getFolders });
+  picker.showFolders([]);
+  await flush();
+
+  picker.openPath('F:/Dev', { push: true }); // deferred - never resolved until after openDrives below
+  await flush();
+  await picker.openDrives();
+  await flush();
+
+  assert.equal(picker.share.path, null, 'the drive list must be showing');
+
+  resolveA({ ok: true, status: 200, data: { path: 'F:/Dev', parent: 'F:', folders: [{ name: 'X', readable: true }], total: 1 } });
+  await flush();
+
+  assert.equal(picker.share.path, null, 'an older openPath response must not repaint over the newer drive list');
+});
+
+test('A14 - a second showFolders while one is pending re-reveals the screen, adds no second listener, and keeps the ticks', async () => {
+  let drivesCalls = 0;
+  const getDrives = async () => {
+    drivesCalls += 1;
+    return { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } };
+  };
+  const picker = loadPicker({ getDrives });
+
+  const p1 = picker.showFolders([]);
+  await flush();
+  assert.equal(drivesCalls, 1);
+
+  picker.share.ticks = [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }];
+
+  const list = picker.document.getElementById('share-list');
+  const before = list.listenerCount('change') + list.listenerCount('click');
+
+  picker.document.getElementById('folders').hidden = true; // what hideFolders() does
+
+  const p2 = picker.showFolders(picker.share.ticks);
+
+  assert.equal(picker.document.getElementById('folders').hidden, false, 'the screen must be revealed again');
+  assert.equal(list.listenerCount('change') + list.listenerCount('click'), before, 'no second listener set may stack');
+  assert.deepEqual(picker.share.ticks, [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }], 'the ticks must survive');
+  assert.equal(p1, p2, 'the same promise must come back');
+
+  await flush();
+  assert.equal(drivesCalls, 2, 'the current level must be re-fetched on re-entry');
+});
+
+test('A15 - ensureAccepted re-opens the picker when a run is still pending', () => {
+  const js = read('app.js').replace(/\r/g, '');
+  const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
+  const condition = 'if (firstRun || pendingFolders) await showFolders(';
+  assert.ok(fn.includes(condition), 'the re-entrancy condition must be exactly this shape');
+  const gateLine = "if (screenAfterUnlock(res) === 'accept') await showAccept();";
+  assert.ok(fn.includes(gateLine), 'the acknowledgement gate line must still be present verbatim');
+  assert.ok(fn.indexOf(gateLine) < fn.indexOf(condition), 'the gate line must still come before the re-entrancy condition');
+});
+
+test('A16 - finishFolders removes all six listeners and nulls pendingFolders', async () => {
+  const getDrives = async () => ({ ok: true, status: 200, data: { drives: [] } });
+  const putShared = async () => ({ ok: true, status: 200, data: {} });
+  const picker = loadPicker({ getDrives, putShared });
+
+  picker.showFolders([]);
+  await flush();
+  picker.share.ticks = [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }];
+
+  const list = picker.document.getElementById('share-list');
+  const picked = picker.document.getElementById('share-picked');
+  const up = picker.document.getElementById('share-up');
+  const save = picker.document.getElementById('share-save');
+  const win = picker.window;
+
+  assert.equal(list.listenerCount('change'), 1);
+  assert.equal(list.listenerCount('click'), 1);
+  assert.equal(picked.listenerCount('click'), 1);
+  assert.equal(up.listenerCount('click'), 1);
+  assert.equal(save.listenerCount('click'), 1);
+  assert.equal(win.listenerCount('popstate'), 1);
+
+  save.fire('click');
+  await flush();
+
+  assert.equal(list.listenerCount('change'), 0);
+  assert.equal(list.listenerCount('click'), 0);
+  assert.equal(picked.listenerCount('click'), 0);
+  assert.equal(up.listenerCount('click'), 0);
+  assert.equal(save.listenerCount('click'), 0);
+  assert.equal(win.listenerCount('popstate'), 0);
+  assert.equal(picker.document.getElementById('folders').hidden, true);
+
+  picker.showFolders([]);
+  await flush();
+  assert.equal(list.listenerCount('click'), 1, 'a fresh showFolders after teardown must wire a fresh set - pendingFolders really is null');
+});
+
+test('A17 - an enterable drive row is disabled, not removed; a blocked drive still routes to buildInertRow', () => {
+  const { buildDriveRow } = loadRowBuilders();
+  const row = buildDriveRow({ letter: 'F:', label: 'Data', blocked: false }, []);
+  assert.doesNotMatch(row.className, /share-off/);
+  const nodes = flatten(row);
+  const openBtn = nodes.find((n) => n.dataset && n.dataset.open !== undefined);
+  assert.ok(openBtn, 'an enterable drive row must still carry data-open');
+  const input = nodes.find((n) => n.tag === 'input');
+  assert.ok(input, 'an enterable drive row must still carry its checkbox');
+  assert.equal(input.disabled, true, 'a drive root must never be tickable - PUT rejects it with 400 drive_root');
+  const status = nodes.find((n) => n.className === 'row-status');
+  assert.equal(status.textContent, 'F: - pick a folder inside it');
+
+  const blockedRow = buildDriveRow({ letter: 'Z:', label: 'System', blocked: true, reason: 'system' }, []);
+  assert.match(blockedRow.className, /share-off/);
+  assert.ok(!flatten(blockedRow).some((n) => n.tag === 'input'), 'a blocked drive must still carry no input (A6 unaffected)');
 });
 
 test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {

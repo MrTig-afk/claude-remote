@@ -531,7 +531,7 @@ body {
 }
 .pin:focus { border-color: #3d4a3d; outline: none; }
 
-.gate-go, .accept-go {
+.gate-go, .accept-go, .share-save {
   width: 100%;
   min-height: 44px;
   padding: 12px;
@@ -546,7 +546,7 @@ body {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.gate-go[disabled], .accept-go[disabled] { color: #4a5a4a; border-color: #1b231b; cursor: default; }
+.gate-go[disabled], .accept-go[disabled], .share-save[disabled] { color: #4a5a4a; border-color: #1b231b; cursor: default; }
 
 .gate-msg {
   font-size: 11px;
@@ -612,3 +612,85 @@ body {
 .accept-note { font-size: 10px; line-height: 1.5; color: #4a5a4a; }
 
 .accept-msg { font-size: 11px; line-height: 1.5; color: #eafbea; }
+
+/* --- Folder picker (T97) --- */
+
+/* Same reason #picker/#gate/#accept carry one: without a display here the
+   SECURITY rule at the top of this file has nothing to override. */
+#folders { display: flex; flex-direction: column; flex-grow: 1; }
+
+.share-head { padding: 12px 20px 0; }
+.share-label { font-size: 9px; letter-spacing: 0.09em; color: #4a5a4a; }
+.share-crumb { margin-top: 6px; font-size: 11px; color: #9aab9a; overflow-wrap: anywhere; }
+
+/* Deliberately NOT `.row` - `.row`'s 14px vertical padding plus a 44px inner
+   control gives a 72px row. */
+.share-row { display: flex; align-items: center; padding: 0 8px; min-height: 44px; border-radius: 4px; }
+.share-tick {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  min-height: 44px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Same accent T96's .accept-consent input uses - the same control in the
+   same app. */
+.share-tick input { width: 18px; height: 18px; accent-color: #7ee787; margin: 0; }
+.share-open {
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* An inert row (blocked drive, unreadable folder) carries no tick control at
+   all, so this padding is what keeps its name lined up with a tickable row's. */
+.share-off { padding-left: 44px; }
+.share-off .row-name { color: #4a5a4a; }
+/* The error mark. No danger colour - #ff7b72/#e5534b mean "this ends
+   something" and an error is not that. */
+.share-bad .row-name { color: #eafbea; }
+
+.share-new, .share-remove {
+  min-height: 44px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: #9aab9a;
+  background: none;
+  border: 1px solid #3d4a3d;
+  border-radius: 4px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.share-remove { width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
+
+.share-note { padding: 8px 13px 0; font-size: 10px; line-height: 1.5; color: #4a5a4a; }
+
+/* Sticky is the fix for "SAVE below a 500-row list". Opaque background
+   because it floats over content, the same reason .newproj-box is opaque. */
+.share-actions {
+  position: sticky;
+  bottom: 0;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: #0a0d0a;
+  border-top: 1px solid #1b231b;
+}
+
+/* At 320px the toggle drops to a second line instead of crushing the name -
+   scoped to the SELECTED row only, so a plain tickable row never wraps. */
+.share-picked-row { flex-wrap: wrap; }

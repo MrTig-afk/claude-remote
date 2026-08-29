@@ -227,6 +227,11 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, result.status, body);
         return;
       }
+      // The set every route reads is ctx.sharedFolders, not the file
+      // putSharedFolders just wrote - rootsFrom(ctx) never re-reads disk.
+      // ponytail: an agent restart is still needed if the file is ever
+      // hand-edited instead of written through this route - unchanged ceiling.
+      ctx.sharedFolders = result.shared_folders;
       sendJson(res, 200, { shared_folders: result.shared_folders });
       return;
     }

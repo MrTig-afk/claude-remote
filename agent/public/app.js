@@ -1,6 +1,7 @@
-import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, onAuthLost } from './api.js';
+import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
 import { TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, renderSections } from './copy.js';
+import { crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS } from './folders-ui.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
@@ -1250,6 +1251,519 @@ function onNewProject() {
   openNewProjectPanel();
 }
 
+// ============================================================================
+// The folder picker (T97). One screen, three steps: drive list -> drill-in ->
+// checkbox list. Its own state lives here, module-level but off `state` - the
+// screen is entirely expressed by `hidden` plus an awaited promise, the same
+// way the accept screen is, so no existing test that builds a `state` object
+// needs touching.
+// ============================================================================
+
+const share = {
+  ticks: [],        // [{ path, name, newFolders }] - client-side until SAVE
+  path: null,       // the folder being listed, or null = the drive list
+  parent: null,     // the agent's own answer for UP; null = the drive list
+  rows: [],         // drives, or folders, as returned
+  total: 0,
+  loading: false,   // a fetch for the current level is in flight - the list
+                     // zone draws one dim line and no rows while this is true
+  // ponytail: bumped by openDrives/openPath, compared after their await - a
+  // response whose token no longer matches share.nav is stale (an older
+  // request that lost a race with a newer one) and is dropped rather than
+  // repainted. Ceiling: per in-flight request only, never needs a reset.
+  nav: 0,
+  errorIndex: null, // the row a 400/409 named
+  error: null,      // { text, retry } | null - the one banner this screen owns
+  busy: false,      // a PUT is in flight
+  pushed: 0,        // history entries THIS run pushed
+};
+
+function hideFolders() {
+  document.getElementById('folders').hidden = true;
+}
+
+function shareEls() {
+  return {
+    up: document.getElementById('share-up'),
+    upName: document.getElementById('share-up-name'),
+    upPath: document.getElementById('share-up-path'),
+    crumb: document.getElementById('share-crumb'),
+    msg: document.getElementById('share-msg'),
+    pickedZone: document.getElementById('share-picked-zone'),
+    pickedCount: document.getElementById('share-picked-count'),
+    picked: document.getElementById('share-picked'),
+    hideNote: document.getElementById('share-hide-note'),
+    listLabel: document.getElementById('share-list-label'),
+    listCount: document.getElementById('share-list-count'),
+    list: document.getElementById('share-list'),
+    save: document.getElementById('share-save'),
+  };
+}
+
+// Windows join only - every base path here is the agent's own `resolved` or
+// `path`, already backslash-formed. A drive root already carries its
+// trailing separator (T92's normal form is "F:\"); a deeper folder does not.
+function joinShare(base, name) {
+  return base.endsWith('\\') ? `${base}${name}` : `${base}\\${name}`;
+}
+
+// The NAME of whichever ticked root covers `candidate`, or '' if none - a
+// single-element coverageOf call per tick, so this reuses the one segment-
+// aware comparison folders-ui.js already exports rather than re-implementing it.
+function coveringTickName(ticks, candidate) {
+  const hit = ticks.find((t) => coverageOf(candidate, [t.path]) === 'covered');
+  return hit ? hit.name : '';
+}
+
+// A blocked drive or an unreadable folder: no <button>, no <input>, no
+// data-open, no data-tick - structurally unenterable, not merely styled as
+// disabled, the same way a project-list folder row carries no data-project.
+function buildInertRow(name, status) {
+  const row = document.createElement('div');
+  row.className = 'share-row share-off';
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = name;
+  main.appendChild(nameEl);
+  const statusEl = document.createElement('span');
+  statusEl.className = 'row-status';
+  statusEl.textContent = status;
+  main.appendChild(statusEl);
+  row.appendChild(main);
+  return row;
+}
+
+// A drive or a folder that CAN be ticked/entered: two siblings, never nested
+// interactive elements - data-tick / data-open are the whole guarantee.
+// tickable defaults true; buildDriveRow passes false for an enterable drive -
+// PUT /api/shared rejects every drive root with 400 drive_root, so the
+// checkbox stays present (same alignment as a covered row) but disabled
+// rather than removed, which is buildInertRow's job.
+function buildTickableRow({
+  path, name, status, coverage, tickable = true,
+}) {
+  const row = document.createElement('div');
+  row.className = 'share-row';
+
+  const label = document.createElement('label');
+  label.className = 'share-tick';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.dataset.tick = path;
+  if (coverage === 'ticked') input.checked = true;
+  if (coverage === 'covered' || coverage === 'covers' || !tickable) input.disabled = true;
+  label.appendChild(input);
+  row.appendChild(label);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'share-open';
+  btn.dataset.open = path;
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = name;
+  main.appendChild(nameEl);
+  if (status) {
+    const statusEl = document.createElement('span');
+    statusEl.className = 'row-status';
+    statusEl.textContent = status;
+    main.appendChild(statusEl);
+  }
+  btn.appendChild(main);
+  const chev = document.createElement('span');
+  chev.className = 'folder-chev'; // reused wholesale, adds no new rule
+  chev.setAttribute('aria-hidden', 'true');
+  chev.textContent = '>';
+  btn.appendChild(chev);
+  row.appendChild(btn);
+
+  return row;
+}
+
+function buildDriveRow(drive, ticks) {
+  const rowState = driveRowState(drive);
+  if (!rowState.enabled) return buildInertRow(drive.label, rowState.note);
+  const driveRootPath = `${drive.letter}\\`;
+  const coverage = coverageOf(driveRootPath, ticks.map((t) => t.path));
+  const status = coverage === 'covered'
+    ? `already shared as part of ${coveringTickName(ticks, driveRootPath)}`
+    : coverage === 'covers'
+      ? 'contains a folder you already picked'
+      : `${drive.letter} - pick a folder inside it`;
+  return buildTickableRow({
+    path: driveRootPath, name: drive.label, status, coverage, tickable: false,
+  });
+}
+
+function buildFolderRow(folder, basePath, ticks) {
+  if (!folder.readable) return buildInertRow(folder.name, 'no permission to open this folder');
+  const childPath = joinShare(basePath, folder.name);
+  const coverage = coverageOf(childPath, ticks.map((t) => t.path));
+  const status = coverage === 'covered'
+    ? `already shared as part of ${coveringTickName(ticks, childPath)}`
+    : coverage === 'covers'
+      ? 'contains a folder you already picked'
+      : '';
+  return buildTickableRow({
+    path: childPath, name: folder.name, status, coverage,
+  });
+}
+
+function buildPickedRow(tick, index) {
+  const row = document.createElement('div');
+  row.className = index === share.errorIndex ? 'share-row share-picked-row share-bad' : 'share-row share-picked-row';
+
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const name = document.createElement('span');
+  name.className = 'row-name';
+  name.textContent = tick.name;
+  main.appendChild(name);
+  const status = document.createElement('span');
+  status.className = 'row-status';
+  status.textContent = tick.path;
+  main.appendChild(status);
+  row.appendChild(main);
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'share-new';
+  toggle.dataset.newfolders = tick.path;
+  toggle.textContent = tick.newFolders === 'hide' ? 'NEW FOLDERS: HIDE' : 'NEW FOLDERS: SHOW';
+  row.appendChild(toggle);
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'share-remove';
+  remove.dataset.untick = tick.path;
+  remove.setAttribute('aria-label', `Remove ${tick.name}`);
+  remove.textContent = '\u00d7';
+  row.appendChild(remove);
+
+  return row;
+}
+
+// Full rebuild, same posture as render() - no diffing.
+function renderShare() {
+  const el = shareEls();
+
+  el.crumb.textContent = crumbSegments(share.path).map((s) => s.label).join(' / ');
+  if (share.path === null) {
+    el.up.hidden = true;
+  } else {
+    const upSeg = crumbSegments(share.parent).at(-1);
+    el.upName.textContent = upSeg.label;
+    el.upPath.textContent = upSeg.path || '';
+    el.up.hidden = false;
+  }
+
+  if (share.error) {
+    el.msg.hidden = false;
+    el.msg.textContent = `! ${share.error.text}`;
+  } else {
+    el.msg.hidden = true;
+    el.msg.textContent = '';
+  }
+
+  el.picked.innerHTML = '';
+  el.pickedCount.textContent = String(share.ticks.length);
+  el.pickedZone.hidden = share.ticks.length === 0;
+  share.ticks.forEach((t, i) => el.picked.appendChild(buildPickedRow(t, i)));
+  const anyHide = share.ticks.some((t) => t.newFolders === 'hide');
+  el.hideNote.hidden = !anyHide;
+  if (anyHide) {
+    el.hideNote.textContent = 'HIDE is saved but not enforced yet - a folder added later still appears.';
+  }
+
+  el.listLabel.textContent = share.path === null ? 'DRIVES' : 'FOLDERS';
+  el.list.innerHTML = '';
+  if (share.loading) {
+    // The loading branch wins over everything else in the list zone: no
+    // rows, no "No folders in here.", no truncation note, count 0. No
+    // spinner - tokens.md defines no motion vocabulary, and this reuses the
+    // app's existing dim-.msg-line idiom for "nothing to act on yet".
+    el.listCount.textContent = '0';
+    const msg = document.createElement('div');
+    msg.className = 'msg';
+    msg.textContent = share.path === null ? 'Reading the drives on the PC.' : 'Reading that folder on the PC.';
+    el.list.appendChild(msg);
+  } else if (share.path === null) {
+    el.listCount.textContent = String(share.rows.length);
+    for (const d of share.rows) el.list.appendChild(buildDriveRow(d, share.ticks));
+    // RETRY lives here, not in #share-msg: onShareListClick's delegate is on
+    // #share-list, so this is the only subtree a tap on it is ever heard from.
+    if (share.error && share.error.retry) {
+      const row = document.createElement('div');
+      row.className = 'share-row';
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.className = 'share-new';
+      retry.dataset.shareRetry = '1';
+      retry.textContent = 'RETRY';
+      row.appendChild(retry);
+      el.list.appendChild(row);
+    }
+  } else {
+    el.listCount.textContent = String(share.rows.length);
+    if (share.rows.length === 0 && !share.error) {
+      const msg = document.createElement('div');
+      msg.className = 'msg';
+      msg.textContent = 'No folders in here.';
+      el.list.appendChild(msg);
+    }
+    for (const f of share.rows) el.list.appendChild(buildFolderRow(f, share.path, share.ticks));
+    const note = truncatedNote(share.total, share.rows.length);
+    if (note) {
+      const t = document.createElement('div');
+      t.className = 'share-note';
+      t.textContent = note;
+      el.list.appendChild(t);
+    }
+  }
+
+  el.save.disabled = share.ticks.length === 0 || share.busy;
+}
+
+// The folder/drive whose name a freshly-ticked path should carry - looked up
+// off whatever `share.rows` currently holds, since that is the only place
+// the display name exists before SAVE.
+function shareNameFor(path) {
+  if (share.path === null) {
+    const d = share.rows.find((x) => `${x.letter}\\` === path);
+    return d ? d.label : path;
+  }
+  const f = share.rows.find((x) => joinShare(share.path, x.name) === path);
+  return f ? f.name : path;
+}
+
+function toggleTick(path, checked) {
+  share.errorIndex = null;
+  if (checked) {
+    if (share.ticks.some((t) => t.path === path)) { renderShare(); return; }
+    if (share.ticks.length >= MAX_SHARED_ROOTS) {
+      // A silent refusal reads as a broken control, not a capped one.
+      share.error = { text: shareErrorMessage('too_many_roots', 400, null, share.ticks).text, retry: false };
+      renderShare();
+      return;
+    }
+    share.error = null;
+    share.ticks.push({ path, name: shareNameFor(path), newFolders: 'show' });
+  } else {
+    share.error = null;
+    share.ticks = share.ticks.filter((t) => t.path !== path);
+  }
+  renderShare();
+}
+
+function toggleNewFolders(path) {
+  const t = share.ticks.find((x) => x.path === path);
+  if (!t) return;
+  t.newFolders = t.newFolders === 'hide' ? 'show' : 'hide';
+  renderShare();
+}
+
+async function openDrives() {
+  const nav = ++share.nav; // ponytail: see share.nav's comment
+  share.path = null;
+  share.parent = null;
+  share.error = null;
+  share.rows = [];
+  share.total = 0;
+  share.loading = true;
+  renderShare();
+  const res = await getDrives();
+  if (nav !== share.nav) return; // a newer nav/openPath already repainted this level
+  if (shareAuthLost(res)) { share.loading = false; return; } // onAuthLost owns the recovery
+  if (!res.ok || res.data.error) {
+    share.loading = false;
+    share.rows = [];
+    share.error = { text: 'Could not read your drives.', retry: true };
+    renderShare();
+    return;
+  }
+  share.loading = false;
+  share.rows = res.data.drives;
+  renderShare();
+}
+
+// push:true is a real drill-in (a tap on a row); push:false is a popstate or
+// a retry replaying the same level without touching history.
+async function openPath(p, opts = {}) {
+  const push = opts.push !== false;
+  const nav = ++share.nav; // ponytail: see share.nav's comment
+  share.loading = true;
+  renderShare();
+  const res = await getFolders(p);
+  if (nav !== share.nav) return; // a newer nav/openDrives already repainted this level
+  if (shareAuthLost(res)) { share.loading = false; return; } // onAuthLost owns the recovery
+  if (!res.ok) {
+    // A failed drill-in returns the owner to the level he was on - share.rows
+    // and share.path are deliberately left untouched.
+    share.loading = false;
+    share.error = { text: shareErrorMessage(res.code, res.status, null, share.ticks).text, retry: false };
+    renderShare();
+    return;
+  }
+  share.loading = false;
+  share.path = res.data.path;
+  share.parent = res.data.parent;
+  share.rows = res.data.folders;
+  share.total = res.data.total;
+  share.error = null;
+  if (push) {
+    history.pushState({ folders: p }, '');
+    share.pushed += 1;
+  }
+  renderShare();
+}
+
+// api.js has already re-locked and onAuthLost will bring this screen back and
+// reload the level, so painting a refusal here would only leave a stale,
+// unactionable message behind the passcode gate.
+function shareAuthLost(res) { return !res.ok && res.status === 401; }
+
+// The current level, re-fetched. RETRY and the post-401 re-entry are the same
+// action: whatever level the screen is showing was never loaded.
+function reloadShareLevel() {
+  if (share.path === null) openDrives();
+  else openPath(share.path, { push: false });
+}
+
+// history.state after a pop is the state of the entry the browser landed ON -
+// same technique onPopState uses for the project list's two entry kinds.
+function onFoldersPop() {
+  share.pushed = Math.max(0, share.pushed - 1);
+  const st = history.state;
+  if (st && typeof st.folders === 'string') { openPath(st.folders, { push: false }); return; }
+  openDrives();
+}
+
+let resolveFolders = null;
+
+function finishFolders() {
+  const els = shareEls();
+  els.list.removeEventListener('change', onShareListChange);
+  els.list.removeEventListener('click', onShareListClick);
+  els.picked.removeEventListener('click', onSharePickedClick);
+  els.up.removeEventListener('click', onShareUpClick);
+  els.save.removeEventListener('click', onSave);
+  window.removeEventListener('popstate', onFoldersPop);
+  // Same double-tap discipline as cancelOpenConfirm: never more than one go().
+  if (share.pushed > 0) {
+    const n = share.pushed;
+    share.pushed = 0;
+    history.go(-n);
+  }
+  hideFolders();
+  const resolve = resolveFolders;
+  resolveFolders = null;
+  // Nulled HERE, synchronously with the rest of the teardown - not in a
+  // .finally on the pendingFolders promise. ensureAccepted's re-entrancy
+  // condition reads pendingFolders as "a run is live", so exactly one place
+  // may own its lifetime.
+  pendingFolders = null;
+  if (resolve) resolve();
+}
+
+async function onSave() {
+  if (share.busy) return;
+  share.error = null;
+  share.errorIndex = null;
+  share.busy = true;
+  shareEls().save.disabled = true;
+  const res = await putShared(sharedBody(share.ticks));
+  if (shareAuthLost(res)) { share.busy = false; return; } // onAuthLost owns the recovery
+  const result = applySaveResult(share, res);
+  share.busy = false;
+  if (result.done) {
+    finishFolders();
+    return;
+  }
+  // A failed SAVE never clears the tick set - result.ticks is share.ticks,
+  // untouched. Only the mark and the message change.
+  share.errorIndex = result.errorIndex;
+  share.error = { text: result.message, retry: false };
+  renderShare();
+}
+
+function onShareListChange(e) {
+  const box = e.target.closest('[data-tick]');
+  if (box) toggleTick(box.dataset.tick, box.checked);
+}
+
+function onShareListClick(e) {
+  const retry = e.target.closest('[data-share-retry]');
+  if (retry) { reloadShareLevel(); return; }
+  const open = e.target.closest('[data-open]');
+  if (open) openPath(open.dataset.open, { push: true });
+}
+
+function onSharePickedClick(e) {
+  const untick = e.target.closest('[data-untick]');
+  if (untick) { toggleTick(untick.dataset.untick, false); return; }
+  const nf = e.target.closest('[data-newfolders]');
+  if (nf) toggleNewFolders(nf.dataset.newfolders);
+}
+
+// Guarded the same way cancelOpenConfirm/closeFolderScreen guard their own
+// history.back() - #share-up is hidden at the drive list, where pushed is 0.
+function onShareUpClick() {
+  if (share.pushed > 0) history.back();
+}
+
+/**
+ * Reached only on first run, from ensureAccepted() below, AFTER the accept
+ * screen resolves. Same shape as showAccept(): put the screen up, resolve on
+ * a successful SAVE, remove every listener on the way out. Re-entrant on
+ * purpose (the `pendingFolders` guard) - api.js re-locks on a 401,
+ * onAuthLost re-runs ensureAccepted, and a second run would otherwise stack a
+ * second set of closures over the same nodes, the exact hazard lock.js's
+ * `pending` guard exists for. The reveal runs on EVERY call so the screen the
+ * gate hid comes back; the tick set survives because the in-flight run keeps
+ * owning it.
+ */
+let pendingFolders = null;
+
+function showFolders(initial) {
+  document.getElementById('folders').hidden = false;
+  // The fetch that 401'd is why the current level is empty - revealing it
+  // with no error and no RETRY would be the same dead end in a different
+  // costume, so a re-entrant call reloads before handing back the same promise.
+  if (pendingFolders) { reloadShareLevel(); return pendingFolders; }
+
+  share.ticks = (initial || []).map((t) => ({
+    path: t.path, name: t.name, newFolders: t.newFolders === 'hide' ? 'hide' : 'show',
+  }));
+  share.path = null;
+  share.parent = null;
+  share.rows = [];
+  share.total = 0;
+  share.errorIndex = null;
+  share.error = null;
+  share.busy = false;
+  share.pushed = 0;
+
+  const els = shareEls();
+  els.list.addEventListener('change', onShareListChange);
+  els.list.addEventListener('click', onShareListClick);
+  els.picked.addEventListener('click', onSharePickedClick);
+  els.up.addEventListener('click', onShareUpClick);
+  els.save.addEventListener('click', onSave);
+  window.addEventListener('popstate', onFoldersPop);
+
+  pendingFolders = new Promise((resolve) => {
+    resolveFolders = resolve;
+  });
+
+  openDrives();
+
+  return pendingFolders;
+}
+
 /**
  * Which screen follows the passcode gate, from GET /api/acknowledge's result.
  * Pure, so it is unit-testable in a runtime with no DOM.
@@ -1281,13 +1795,23 @@ async function ensureAccepted() {
   // the picker and without opening the accept screen - is what stops two
   // screens racing onto the page at once.
   if (!res.ok && res.status === 401) return;
+  // Pinned verbatim by the suite - see the comment above it. The picker call
+  // below reads the same pure answer rather than restructuring this line.
+  const firstRun = screenAfterUnlock(res) === 'accept';
   // THIS LINE IS THE ACKNOWLEDGEMENT GATE. Do not replace it, and do not make
   // it conditional on anything else - without it the warning screen is never
   // shown and no test fails, because the suite checks what showAccept() does,
   // not that boot still calls it.
-  // T97 ADDS a picker call BELOW this, before the picker is revealed; it does
-  // not touch this line.
   if (screenAfterUnlock(res) === 'accept') await showAccept();
+  // showAccept() resolves only once the agent has confirmed the write, so
+  // reaching here on a first run means the warning was read and accepted, and
+  // nothing is shared yet. The folder picker is the next screen, not the
+  // project list - an empty list with no way to fill it is not a screen.
+  // A 401 mid-picker re-runs this function after the re-unlock, and by then
+  // firstRun is false - the acknowledgement was written before the picker ever
+  // opened. Without `|| pendingFolders` the screen is never brought back and
+  // the promise the first run is awaiting never resolves.
+  if (firstRun || pendingFolders) await showFolders(share.ticks);
   picker.hidden = false;
 }
 
@@ -1412,7 +1936,7 @@ async function boot() {
   // and two <main>s render stacked. ensureAccepted() after the re-unlock
   // brings the screen back if it was never accepted - and returns
   // immediately, one round trip, if it was.
-  onAuthLost(async () => { hideConn(); hideAccept(); await showGate(); await ensureAccepted(); await load(); });
+  onAuthLost(async () => { hideConn(); hideAccept(); hideFolders(); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on

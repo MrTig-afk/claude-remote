@@ -185,6 +185,45 @@
         <div class="gate-msg" id="gate-msg" role="status" aria-live="polite"></div>
       </form>
     </main>
+
+    <!-- The folder picker. #folders, NOT #picker: #picker is the project list and
+         has been since the first build. Ships hidden and app.css gives it a
+         display, so the [hidden] force-hide rule at the top of app.css is what
+         holds it shut on the passcode screen. -->
+    <main id="folders" hidden>
+      <div class="share-head">
+        <div class="share-label">CHOOSE FOLDERS TO SHARE</div>
+        <div class="share-crumb" id="share-crumb"></div>
+      </div>
+
+      <button class="backbar" id="share-up" type="button" hidden>
+        <span class="backbar-chev" aria-hidden="true">&lt;</span>
+        <span class="backbar-main">
+          <span class="backbar-name" id="share-up-name"></span>
+          <span class="backbar-path" id="share-up-path"></span>
+        </span>
+      </button>
+
+      <div class="banner" id="share-msg" role="status" aria-live="polite" hidden></div>
+
+      <section class="zone" id="share-picked-zone" hidden>
+        <div class="allhdr"><span>SELECTED</span><span class="count" id="share-picked-count">0</span></div>
+        <div class="rule"></div>
+        <div class="list" id="share-picked"></div>
+        <div class="share-note" id="share-hide-note" hidden></div>
+      </section>
+
+      <section class="zone">
+        <div class="allhdr"><span id="share-list-label">DRIVES</span><span class="count" id="share-list-count">0</span></div>
+        <div class="rule"></div>
+        <div class="list" id="share-list"></div>
+      </section>
+
+      <div class="spacer"></div>
+      <div class="share-actions">
+        <button class="share-save" id="share-save" type="button" disabled>SAVE</button>
+      </div>
+    </main>
   </div>
 </body>
 </html>

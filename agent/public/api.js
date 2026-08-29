@@ -71,8 +71,31 @@ function post(path, body) {
   });
 }
 
+function put(path, body) {
+  return request(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export function getProjects() {
   return request('/api/projects');
+}
+
+export function getDrives() {
+  return request('/api/drives');
+}
+
+// encodeURIComponent, once: handleRequest's `new URL` decodes exactly once,
+// and folders.js rejects any surviving '%' - so a second encode here would be
+// rejected by the server, correctly.
+export function getFolders(p) {
+  return request(`/api/folders?path=${encodeURIComponent(p)}`);
+}
+
+export function putShared(body) {
+  return put('/api/shared', body);
 }
 
 export function getAcknowledged() {
