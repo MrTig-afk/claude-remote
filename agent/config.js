@@ -216,3 +216,53 @@ export function resolveSharedFolders(configPath = getConfigFilePath()) {
 
   return migrateDefaultBaseFolder(config, configPath);
 }
+
+/**
+ * True iff the owner has been through the accept screen. NEVER throws: an
+ * unreadable or corrupt config reads as NOT acknowledged, because showing the
+ * warning a second time is harmless and skipping it is the one failure that
+ * matters. Same "share less, never more" posture resolveSharedFolders takes.
+ */
+export function isAcknowledged(configPath = getConfigFilePath()) {
+  let config;
+  try {
+    config = readConfig(configPath);   // throws on invalid JSON
+  } catch {
+    return false;
+  }
+  return typeof config.acknowledged_at === 'string' && config.acknowledged_at.trim() !== '';
+}
+
+/**
+ * Writes acknowledged_at once and never again. The early return below is what
+ * makes idempotency STRUCTURAL rather than behavioural: on a second call this
+ * function does not write at all, so there is no code path that could
+ * overwrite the first timestamp even if it wanted to. Nothing anywhere clears
+ * this field - undoing it means editing the config file on the PC by hand,
+ * which is a deliberate act rather than a button someone taps by accident.
+ * Merged into the object readConfig returned, so shared_folders and every
+ * unrelated key survive untouched.
+ * -> { ok: true, acknowledged_at } | { ok: false, status, error }
+ */
+export function acknowledge(configPath = getConfigFilePath()) {
+  let config;
+  try {
+    config = readConfig(configPath);
+  } catch {
+    // Refuse rather than write a fresh object over a file we could not read -
+    // that would silently destroy shared_folders. Same call, same reasoning
+    // and the same error code as putSharedFolders in agent/shared.js.
+    return { ok: false, status: 500, error: 'config_unreadable' };
+  }
+
+  const existing = config.acknowledged_at;
+  if (typeof existing === 'string' && existing.trim() !== '') {
+    return { ok: true, acknowledged_at: existing };
+  }
+
+  config.acknowledged_at = new Date().toISOString();
+  if (!writeConfig(configPath, config)) {
+    return { ok: false, status: 500, error: 'write_failed' };
+  }
+  return { ok: true, acknowledged_at: config.acknowledged_at };
+}

@@ -75,6 +75,17 @@ export function getProjects() {
   return request('/api/projects');
 }
 
+export function getAcknowledged() {
+  return request('/api/acknowledge');
+}
+
+// Empty body by contract - the server reads nothing from it. `{}` rather than
+// no body at all so this can go through the same post() helper as every other
+// write in this file.
+export function acknowledge() {
+  return post('/api/acknowledge', {});
+}
+
 export function getSessions() {
   return request('/api/sessions');
 }

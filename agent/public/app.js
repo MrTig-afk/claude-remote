@@ -1,5 +1,6 @@
-import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, onAuthLost } from './api.js';
+import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
+import { TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, renderSections } from './copy.js';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
@@ -40,6 +41,10 @@ const ERROR_COPY = {
   // file while the app was open. api.js only re-locks on 401, so this one
   // reaches the banner and needs real copy.
   setup_required: 'This agent has no passcode yet. Reload the app to set one.',
+  // The two failures POST /api/acknowledge can return - see agent/config.js's
+  // acknowledge().
+  config_unreadable: 'The agent could not read its config file on the PC. Check its terminal window.',
+  write_failed: 'The agent could not save that on the PC. Check its terminal window.',
 };
 
 function errorCopy(code, status) {
@@ -677,6 +682,10 @@ function hideConn() {
   document.getElementById('conn').hidden = true;
 }
 
+function hideAccept() {
+  document.getElementById('accept').hidden = true;
+}
+
 function renderConn() {
   const conn = document.getElementById('conn');
   const dot = conn.querySelector('.dot');
@@ -1241,6 +1250,115 @@ function onNewProject() {
   openNewProjectPanel();
 }
 
+/**
+ * Which screen follows the passcode gate, from GET /api/acknowledge's result.
+ * Pure, so it is unit-testable in a runtime with no DOM.
+ * NEVER fails open: anything other than an explicit `true` - a network
+ * failure, a timeout, a body this app does not understand - shows the accept
+ * screen. Showing a warning twice costs a tap; skipping it once is the whole
+ * failure this screen exists to prevent. It also matches the copy's own rule
+ * ("shown when that field is absent"): an unknown state is not "present".
+ */
+function screenAfterUnlock(res) {
+  return res.ok && res.data.acknowledged === true ? 'list' : 'accept';
+}
+
+/**
+ * Runs between the gate and the project list. lock.js un-hides #picker on
+ * unlock and knows nothing about this screen, so the picker is put away again
+ * HERE, synchronously - no paint happens between a promise resolving and its
+ * continuation, so the project list can never flash ahead of a warning the
+ * owner has not read. The window while the check is in flight shows the app
+ * header and nothing under it, which is a normal one-round-trip state and not
+ * the blank-before-any-script case #splash exists for.
+ */
+async function ensureAccepted() {
+  const picker = document.getElementById('picker');
+  picker.hidden = true;
+  const res = await getAcknowledged();
+  // 401 means api.js has already re-locked and onAuthLost will re-run this
+  // whole function after the next unlock. Returning here - without revealing
+  // the picker and without opening the accept screen - is what stops two
+  // screens racing onto the page at once.
+  if (!res.ok && res.status === 401) return;
+  // THIS LINE IS THE ACKNOWLEDGEMENT GATE. Do not replace it, and do not make
+  // it conditional on anything else - without it the warning screen is never
+  // shown and no test fails, because the suite checks what showAccept() does,
+  // not that boot still calls it.
+  // T97 ADDS a picker call BELOW this, before the picker is revealed; it does
+  // not touch this line.
+  if (screenAfterUnlock(res) === 'accept') await showAccept();
+  picker.hidden = false;
+}
+
+/**
+ * The accept screen. Resolves ONLY once the agent has confirmed the write -
+ * there is no skip, no cancel and no dismiss on this screen (skipping is
+ * offered later, from the empty project list, T100). Same shape as
+ * lock.js's showGate(): put the screen up, resolve on success, and remove
+ * every listener on the way out so a second run cannot stack a duplicate
+ * closure over the same nodes.
+ */
+function showAccept() {
+  const el = {
+    accept: document.getElementById('accept'),
+    title: document.getElementById('accept-title'),
+    lede1: document.getElementById('accept-lede-1'),
+    lede2: document.getElementById('accept-lede-2'),
+    sections: document.getElementById('accept-sections'),
+    consentText: document.getElementById('accept-consent-text'),
+    note: document.getElementById('accept-note'),
+    go: document.getElementById('accept-go'),
+    check: document.getElementById('accept-check'),
+    msg: document.getElementById('accept-msg'),
+  };
+
+  el.title.textContent = TITLE;
+  el.lede1.textContent = LEDE[0];
+  el.lede2.textContent = LEDE[1];
+  renderSections(el.sections);
+  el.consentText.textContent = CONSENT_LABEL;
+  el.note.textContent = SETTINGS_NOTE;
+  el.go.textContent = ACCEPT_BUTTON;
+  el.accept.hidden = false;
+
+  return new Promise((resolve) => {
+    let inFlight = false;
+
+    function onCheck() {
+      el.go.disabled = !el.check.checked;
+    }
+
+    async function onClick() {
+      // A double tap on a phone is ordinary - lock.js's onSubmit has the same
+      // guard and the same reason.
+      if (inFlight) return;
+      inFlight = true;
+      el.go.disabled = true;
+
+      const res = await acknowledge();
+
+      if (res.ok) {
+        el.accept.hidden = true;
+        el.msg.hidden = true;
+        el.msg.textContent = '';
+        el.check.removeEventListener('change', onCheck);
+        el.go.removeEventListener('click', onClick);
+        resolve();
+        return;
+      }
+
+      el.msg.textContent = errorCopy(res.code, res.status);
+      el.msg.hidden = false;
+      inFlight = false;
+      el.go.disabled = false; // the box is still ticked, so the button is the retry
+    }
+
+    el.check.addEventListener('change', onCheck);
+    el.go.addEventListener('click', onClick);
+  });
+}
+
 function wireEvents() {
   document.getElementById('projects').addEventListener('click', onProjectTap);
   document.getElementById('tiles').addEventListener('click', onTileTap);
@@ -1289,7 +1407,12 @@ async function boot() {
   if (await maybeResetCache()) return;
   registerServiceWorker(); // above the gate: the PWA must stay installable
                             // from the lock screen
-  onAuthLost(async () => { hideConn(); await showGate(); await load(); });
+  // hideAccept() is not decoration: if the token expires while the accept
+  // screen is up, showGate() un-hides #gate but nothing else hides #accept,
+  // and two <main>s render stacked. ensureAccepted() after the re-unlock
+  // brings the screen back if it was never accepted - and returns
+  // immediately, one round trip, if it was.
+  onAuthLost(async () => { hideConn(); hideAccept(); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on
@@ -1297,6 +1420,7 @@ async function boot() {
   const unlocked = showGate();
   hideSplash();
   await unlocked;
+  await ensureAccepted();
   wireEvents();
   render();
   await load();

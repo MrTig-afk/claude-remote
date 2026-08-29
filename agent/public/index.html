@@ -126,6 +126,41 @@
       <footer class="footer" id="footer"></footer>
     </main>
 
+    <main id="accept" hidden>
+      <div class="accept">
+        <div class="accept-head">
+          <!-- Chrome, not copy: the words come from copy.js. Stroked in the
+               primary text token, NOT the accent and NOT the danger colour -
+               design/tokens.md reserves #7ee787 for "active/running" and
+               #ff7b72 for "this ends something", and a warning is neither.
+               aria-hidden: the heading beside it already says it. -->
+          <svg class="accept-warn" width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="#eafbea" stroke-width="1.3" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M8 2 L15 14 H1 Z"/>
+            <path d="M8 6.5 V9.5"/>
+            <path d="M8 11.8 V11.9"/>
+          </svg>
+          <div class="accept-title" id="accept-title"></div>
+        </div>
+
+        <p class="accept-lede">
+          <span id="accept-lede-1"></span>
+          <span class="accept-strong" id="accept-lede-2"></span>
+        </p>
+
+        <div class="accept-sections" id="accept-sections"></div>
+
+        <label class="accept-consent">
+          <input type="checkbox" id="accept-check">
+          <span id="accept-consent-text"></span>
+        </label>
+
+        <div class="accept-note" id="accept-note"></div>
+
+        <button class="accept-go" id="accept-go" type="button" disabled></button>
+        <div class="accept-msg" id="accept-msg" role="status" aria-live="polite" hidden></div>
+      </div>
+    </main>
+
     <main id="gate" hidden>
       <form class="gate" id="gate-form" novalidate>
         <div class="gate-label" id="gate-label">LOCKED</div>

@@ -181,7 +181,16 @@ const TOKEN_SET = new Set([
 ]);
 
 function assertOnlyTokenColours(source, label) {
-  const hexes = source.match(/#[0-9a-fA-F]{3,8}/g) || [];
+  // A CSS/DOM id selector that happens to start with hex-valid letters
+  // (#accept, #accept-go: a,c,c,e all parse as hex) is not a colour literal -
+  // the regex below stops at the first non-hex character, so `#accept` yields
+  // a false-positive match of `#acce`. A real hex colour is always followed
+  // by a delimiter (`;`, `)`, `,`, whitespace, end of string), never by
+  // another letter - so a match immediately followed by [a-zA-Z] is an
+  // identifier, not a colour, and is excluded.
+  const hexes = [...source.matchAll(/#[0-9a-fA-F]{3,8}/g)]
+    .filter((m) => !/[a-zA-Z]/.test(source[m.index + m[0].length] || ''))
+    .map((m) => m[0]);
   for (const hex of hexes) {
     const normalized = hex.slice(1).toLowerCase();
     assert.ok(TOKEN_SET.has(normalized), `${label} contains an untokenized colour: ${hex}`);
@@ -229,7 +238,7 @@ test('lock.js never calls fetch() directly - it only calls into api.js', () => {
 // --- No egress ---
 
 test('no shipped asset embeds an absolute http(s) URL', () => {
-  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js']) {
+  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js', 'copy.js']) {
     const source = read(f);
     assert.ok(!source.includes('http://'), `${f} must not contain http://`);
     assert.ok(!source.includes('https://'), `${f} must not contain https://`);
@@ -264,6 +273,13 @@ test('PRECACHE includes /lock.js', () => {
   assert.ok(precache.includes('/lock.js'));
 });
 
+test('PRECACHE includes /copy.js', () => {
+  const source = read('sw.js');
+  const match = source.match(/const PRECACHE = (\[[\s\S]*?\]);/);
+  const precache = new Function(`return ${match[1]};`)();
+  assert.ok(precache.includes('/copy.js'), 'the accept screen cannot render offline without its words');
+});
+
 test('api.js carries the token header and never persists the token to the device', () => {
   const source = read('api.js');
   assert.ok(source.includes('X-Claude-Remote-Token'));
@@ -292,8 +308,11 @@ test('app.css force-hides [hidden] - the picker must not render behind the lock 
   // display to is a candidate for this bug. Prove at least the two wrappers
   // are in that state, so the guard is not silently protecting nothing.
   const hiddenIds = [...html.matchAll(/id="([A-Za-z0-9_-]+)"[^>]*\shidden[\s>]/g)].map((m) => m[1]);
-  assert.ok(hiddenIds.includes('picker') && hiddenIds.includes('gate'), 'both wrappers must ship hidden');
-  for (const id of ['picker', 'gate']) {
+  assert.ok(
+    hiddenIds.includes('picker') && hiddenIds.includes('gate') && hiddenIds.includes('accept'),
+    'all three wrappers must ship hidden',
+  );
+  for (const id of ['picker', 'gate', 'accept']) {
     const rule = css.match(new RegExp(`#${id}\\s*\\{[^}]*\\}`));
     assert.ok(rule, `#${id} should have a rule`);
     assert.match(rule[0], /display:/, `#${id} sets display, which is what makes the guard load-bearing`);
@@ -739,11 +758,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v17', () => {
+test('sw.js CACHE is claude-remote-shell-v21', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v17');
+  assert.equal(match[1], 'claude-remote-shell-v21');
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -1810,4 +1829,117 @@ test('sw.js does not fail a good network response because the cache write failed
 
   const res = await responded;
   assert.equal(res.status, 200, 'the served response must survive a failing cache write');
+});
+
+// --- the accept screen (T96) -----------------------------------------------
+
+test('boot() awaits ensureAccepted() between the unlock and wireEvents(), so the project list cannot show ahead of the warning', () => {
+  const js = read('app.js');
+  const boot = js.slice(js.indexOf('async function boot()'), js.indexOf('boot().finally'));
+  const unlockedIdx = boot.indexOf('await unlocked;');
+  // The onAuthLost callback declared earlier in the function ALSO calls
+  // ensureAccepted() (see the "hideAccept() is not decoration" test) - search
+  // from unlockedIdx so that occurrence is not mistaken for boot()'s own.
+  assert.ok(unlockedIdx !== -1, 'boot() must await the gate');
+  const ensureIdx = boot.indexOf('await ensureAccepted();', unlockedIdx);
+  const wireIdx = boot.indexOf('wireEvents();', unlockedIdx);
+  assert.ok(ensureIdx !== -1 && wireIdx !== -1, 'boot() must carry all three markers');
+  assert.ok(unlockedIdx < ensureIdx, 'ensureAccepted() must run after the unlock resolves');
+  assert.ok(ensureIdx < wireIdx, 'ensureAccepted() must run before wireEvents()');
+});
+
+test('ensureAccepted sets picker.hidden = true before its first await', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function showAccept()'));
+  const hideIdx = fn.indexOf('picker.hidden = true;');
+  const awaitIdx = fn.indexOf('await ');
+  assert.ok(hideIdx !== -1, 'ensureAccepted must hide the picker');
+  assert.ok(awaitIdx !== -1, 'ensureAccepted must await something');
+  assert.ok(hideIdx < awaitIdx, 'the picker must be hidden synchronously, before any paint can happen between promise ticks');
+});
+
+test('the onAuthLost callback in boot() calls hideAccept() before showGate()', () => {
+  const js = read('app.js');
+  const match = js.match(/onAuthLost\(async \(\) => \{ ([^}]+) \}\);/);
+  assert.ok(match, 'boot() must register an onAuthLost callback');
+  const callback = match[1];
+  const hideIdx = callback.indexOf('hideAccept();');
+  const gateIdx = callback.indexOf('showGate()');
+  assert.ok(hideIdx !== -1, 'onAuthLost callback must call hideAccept()');
+  assert.ok(gateIdx !== -1, 'onAuthLost callback must call showGate()');
+  assert.ok(hideIdx < gateIdx, 'a token expiry on the accept screen must hide it before the gate returns, or two <main>s stack');
+});
+
+test('screenAfterUnlock never fails open - anything other than an explicit acknowledged:true shows the accept screen', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function screenAfterUnlock('), js.indexOf('async function ensureAccepted('));
+  const body = fn.match(/return ([^;]+);/);
+  assert.ok(body, 'app.js must carry screenAfterUnlock');
+  const screenAfterUnlock = new Function('res', `return ${body[1]};`);
+  assert.equal(screenAfterUnlock({ ok: true, data: { acknowledged: true } }), 'list');
+  assert.equal(screenAfterUnlock({ ok: true, data: { acknowledged: false } }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: true, data: {} }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: false, code: 'network' }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: false, code: 'timeout' }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: true, data: { acknowledged: 'yes' } }), 'accept');
+});
+
+test('the accept path pushes no history entry, and onPopState is unchanged', () => {
+  const js = read('app.js');
+  const ensureAccepted = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
+  assert.ok(!ensureAccepted.includes('history.pushState'), 'the accept screen must push no history entry - there is nowhere to go back to');
+  // onPopState's documented ordering invariant (confirm entry always on top of
+  // a drill entry) must not gain a third kind of pushed entry to reconcile.
+  const onPopState = js.slice(js.indexOf('function onPopState()'), js.indexOf('// A synthetic desk-subfolder tile'));
+  assert.match(onPopState, /confirmPushed = false;/);
+  assert.match(onPopState, /folderPushed = false;/);
+  assert.ok(!onPopState.includes('accept'), 'onPopState must know nothing about the accept screen');
+});
+
+test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {
+  const html = read('index.html');
+  const tag = html.match(/<button class="accept-go"[^>]*>/);
+  assert.ok(tag, 'index.html must contain #accept-go');
+  assert.match(tag[0], /\sdisabled[\s>]/, '#accept-go must ship disabled - the button ships unusable before any script runs');
+
+  const js = read('app.js');
+  const showAccept = js.slice(js.indexOf('function showAccept()'), js.indexOf('function wireEvents()'));
+  assert.match(
+    showAccept,
+    /function onCheck\(\)\s*\{\s*el\.go\.disabled = !el\.check\.checked;\s*\}/,
+    'the checkbox change handler must be the whole enable rule',
+  );
+  // Every other write to go.disabled in this function must sit inside the
+  // click handler, guarding an in-flight request or restoring the retry -
+  // never an unconditional enable that bypasses the checkbox.
+  const otherWrites = [...showAccept.matchAll(/el\.go\.disabled = (true|false);/g)];
+  assert.equal(otherWrites.length, 2, 'expected exactly two writes in onClick: disabled=true up front, disabled=false on a failed retry');
+});
+
+test('errorCopy carries real copy for config_unreadable and write_failed, not the generic fallback', () => {
+  const js = read('app.js');
+  const table = js.match(/const ERROR_COPY = \{([\s\S]*?)\n\};/);
+  assert.ok(table, 'app.js must carry ERROR_COPY');
+  const fnMatch = js.match(/function errorCopy\(code, status\) \{\s*return ([^;]+);/);
+  assert.ok(fnMatch, 'app.js must carry errorCopy');
+  const errorCopy = new Function('ERROR_COPY', 'code', 'status', `return ${fnMatch[1]};`);
+  const ERROR_COPY = new Function(`return {${table[1]}\n};`)();
+  for (const code of ['config_unreadable', 'write_failed']) {
+    const msg = errorCopy(ERROR_COPY, code, 500);
+    assert.ok(msg && msg.length > 0, `${code} must have a non-empty message`);
+    assert.ok(!msg.includes('status 500'), `${code} must not fall through to the generic "status" fallback`);
+  }
+});
+
+test('index.html ships every accept-screen text node empty - the words live only in copy.js', () => {
+  const html = read('index.html');
+  const start = html.indexOf('<main id="accept"');
+  const end = html.indexOf('<main id="gate"');
+  const block = html.slice(start, end);
+  for (const heading of ['WHAT IT CAN SEE', 'WHAT IT CANNOT SEE', 'WHO CAN REACH IT', 'WHAT LEAVES THIS MACHINE']) {
+    assert.ok(!block.includes(heading), `index.html must not hardcode the heading "${heading}"`);
+  }
+  for (const lede of ['claude-remote starts Claude Code', 'Anything Claude Code can do on this machine']) {
+    assert.ok(!block.includes(lede), `index.html must not hardcode the lede text "${lede}"`);
+  }
 });

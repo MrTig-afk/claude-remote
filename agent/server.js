@@ -1,6 +1,6 @@
 import http from 'node:http';
 
-import { resolveSharedFolders } from './config.js';
+import { resolveSharedFolders, isAcknowledged, acknowledge } from './config.js';
 import { listProjects, createProject, rootsFrom } from './projects.js';
 import { listDrives } from './drives.js';
 import { listFolders } from './folders.js';
@@ -165,6 +165,28 @@ export async function handleRequest(req, res, ctx) {
       if (!gate.ok) { sendJson(res, gate.status, gate.body); return; }
     }
     // -----------------------------------------------------------------------
+
+    // Both halves of the accept screen (M9), on one pathname because they are
+    // one thing. The POST reads NO request body: the body is empty by
+    // contract, and running it through readJsonObject would turn a
+    // correctly-empty POST into a 400. Nothing in the body could change what
+    // this route does, so there is nothing to parse.
+    if (url.pathname === '/api/acknowledge') {
+      if (req.method === 'GET') {
+        sendJson(res, 200, { acknowledged: isAcknowledged(ctx.configPath) });
+        return;
+      }
+      if (req.method === 'POST') {
+        const result = acknowledge(ctx.configPath);
+        if (!result.ok) {
+          sendJson(res, result.status, { error: result.error });
+          return;
+        }
+        sendJson(res, 200, { acknowledged: true, acknowledged_at: result.acknowledged_at });
+        return;
+      }
+      // Any other method falls through to the 404 at the bottom.
+    }
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
       sendJson(res, 200, { projects: listProjects(rootsFrom(ctx)) });
