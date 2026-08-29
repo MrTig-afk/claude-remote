@@ -59,6 +59,17 @@ export const CONSENT_LABEL = 'I understand what this can see';
 export const SETTINGS_NOTE = 'You can change which folders are shared at any time in Settings.';
 export const ACCEPT_BUTTON = 'CHOOSE FOLDERS';
 
+// The accept screen collapses SECTIONS behind this control (T103); Settings >
+// What this app can see renders the same SECTIONS expanded, with no
+// disclosure, because a screen someone navigates to on purpose must not hide
+// its payload behind a second tap.
+//
+// It is a table of contents, not a "learn more": it names all four sections in
+// their own order, so the collapsed screen still states the shape of what is
+// behind it. Do not shorten it to two of the four, and do not make it sound
+// reassuring - the file header's banned-wording rule binds this string too.
+export const SECTIONS_TOGGLE = 'What it can see, what it cannot, who can reach it, what leaves this machine';
+
 /**
  * Draws SECTIONS into `host`, replacing whatever is there. The one piece of
  * DOM in this module, so the accept screen (T96) and the read-only Settings

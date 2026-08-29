@@ -773,11 +773,11 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v23', () => {
+test('sw.js CACHE is claude-remote-shell-v24', () => {
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v23');
+  assert.equal(match[1], 'claude-remote-shell-v24');
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -2753,4 +2753,184 @@ test('index.html ships every accept-screen text node empty - the words live only
   for (const lede of ['claude-remote starts Claude Code', 'Anything Claude Code can do on this machine']) {
     assert.ok(!block.includes(lede), `index.html must not hardcode the lede text "${lede}"`);
   }
+});
+
+// --- E: the accept screen's progressive disclosure (T103) ------------------
+
+// Runs showAccept()'s real wiring under a stub DOM, the same recipe
+// loadPicker() uses. renderSections is a thin wrapper around the real
+// copy.js export rather than a reimplementation, so E4 cannot drift from the
+// words it is checking - the real export reads the global `document` (node
+// has none), so the wrapper points it at the stub only for the call.
+//
+// #accept-check and #accept-go both ship `disabled` in index.html; the stub
+// DOM has no HTML parser to pick that up, so it is reproduced here once,
+// the same way a real page's initial attribute state is a precondition of
+// the wiring under test, not something the wiring itself sets.
+function loadAccept({ acknowledge: acknowledgeImpl } = {}) {
+  const js = read('app.js').replace(/\r/g, '');
+  const src = js.slice(js.indexOf('function showAccept()'), js.indexOf('function wireEvents()'));
+  const doc = fakeDocument();
+  doc.getElementById('accept-check').disabled = true;
+  doc.getElementById('accept-go').disabled = true;
+
+  function wrappedRenderSections(host) {
+    const prev = globalThis.document;
+    globalThis.document = doc;
+    try {
+      copy.renderSections(host);
+    } finally {
+      if (prev === undefined) delete globalThis.document;
+      else globalThis.document = prev;
+    }
+  }
+
+  const fn = new Function(
+    'document', 'TITLE', 'LEDE', 'CONSENT_LABEL', 'SETTINGS_NOTE', 'ACCEPT_BUTTON',
+    'SECTIONS_TOGGLE', 'renderSections', 'acknowledge', 'errorCopy',
+    `${src}; return { showAccept };`,
+  );
+  const mod = fn(
+    doc, copy.TITLE, copy.LEDE, copy.CONSENT_LABEL, copy.SETTINGS_NOTE, copy.ACCEPT_BUTTON,
+    copy.SECTIONS_TOGGLE, wrappedRenderSections,
+    acknowledgeImpl || (async () => ({ ok: true })),
+    (code, status) => `${code} ${status}`,
+  );
+  mod.document = doc;
+  return mod;
+}
+
+test('E1 - index.html: #accept-sections sits inside <details id="accept-more"> with no open attribute, and #accept-check ships disabled', () => {
+  const html = read('index.html');
+  const detailsMatch = html.match(/<details[^>]*id="accept-more"[^>]*>[\s\S]*?<\/details>/);
+  assert.ok(detailsMatch, 'index.html must carry <details id="accept-more">');
+  assert.ok(detailsMatch[0].includes('id="accept-sections"'), '#accept-sections must sit inside the <details>');
+  const openTag = detailsMatch[0].match(/<details[^>]*>/)[0];
+  assert.ok(!/\sopen[\s>]/.test(openTag), 'the <details> must ship with no open attribute - collapsed is the shipped state');
+  const checkTag = html.match(/<input type="checkbox" id="accept-check"[^>]*>/);
+  assert.ok(checkTag, 'index.html must carry #accept-check');
+  assert.match(checkTag[0], /\sdisabled[\s>]/, '#accept-check must ship disabled - unusable before any script has drawn the words');
+});
+
+test('the summary keeps the platform disclosure triangle: no list-style:none, no display:flex/block on .accept-more > summary', () => {
+  const css = read('app.css');
+  const rule = css.match(/\.accept-more > summary\s*\{([\s\S]*?)\}/);
+  assert.ok(rule, 'app.css must declare .accept-more > summary');
+  const body = rule[1];
+  assert.ok(!/list-style\s*:\s*none/.test(body), 'list-style:none removes the only affordance the collapsed screen has that says "tappable"');
+  assert.ok(!/display\s*:\s*(flex|block)/.test(body), 'Chrome drops the disclosure marker the moment display is not list-item');
+  assert.ok(!/::-webkit-details-marker\s*\{\s*display\s*:\s*none/.test(css), 'the marker must not be hidden via the webkit pseudo-element either');
+});
+
+test('E2 - after showAccept(), #accept-more-sum.textContent is SECTIONS_TOGGLE', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  assert.equal(doc.getElementById('accept-more-sum').textContent, copy.SECTIONS_TOGGLE);
+});
+
+test('E3 - collapsed, #accept-sections still holds four .copy-section children', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const more = doc.getElementById('accept-more');
+  assert.ok(!more.open, 'the <details> must not be opened by showAccept() itself');
+  const sections = doc.getElementById('accept-sections');
+  const wraps = sections.children.filter((c) => c.className === 'copy-section');
+  assert.equal(wraps.length, 4, 'rendering only on open would lose the sections from find-in-page and a screen reader');
+});
+
+test('E4 - collapsed, all four headings and all eight item strings are reachable as text under #accept-sections, matching copy.SECTIONS itself', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const sections = doc.getElementById('accept-sections');
+  const texts = flatten(sections).map((n) => n.textContent).join(' ␟ ');
+  for (const section of copy.SECTIONS) {
+    assert.ok(texts.includes(section.heading), `heading "${section.heading}" must be reachable under #accept-sections`);
+    for (const item of section.items) {
+      assert.ok(texts.includes(item), `item "${item}" must be reachable under #accept-sections`);
+    }
+  }
+});
+
+test('E5 - #accept-go is still gated on the checkbox alone: disabled before a tick, enabled after', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const check = doc.getElementById('accept-check');
+  const go = doc.getElementById('accept-go');
+  assert.equal(go.disabled, true, 'note 1 is unchanged - the button starts disabled');
+  check.checked = true;
+  check.fire('change');
+  assert.equal(go.disabled, false, 'the disclosure work must not rewire the button');
+});
+
+test('E6 - the checkbox ships disabled and is enabled only once the sections have been opened', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const check = doc.getElementById('accept-check');
+  const more = doc.getElementById('accept-more');
+  assert.equal(check.disabled, true, 'consent must not be claimable about words never shown');
+  more.open = true;
+  more.fire('toggle');
+  assert.equal(check.disabled, false);
+});
+
+test('E7 - tapping the consent row while the box is disabled opens the sections; a second tap after the toggle does not re-set anything', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const consent = doc.getElementById('accept-consent');
+  const more = doc.getElementById('accept-more');
+  const check = doc.getElementById('accept-check');
+
+  assert.equal(check.disabled, true);
+  consent.fire('click');
+  assert.equal(more.open, true, 'the first tap on the consent row must do the thing the label describes: show the words');
+  assert.equal(check.checked, false, 'the first tap must not tick the box');
+
+  // The stub DOM does not fire `toggle` when `.open` is set - fired by hand
+  // here, the way a real browser fires it asynchronously on the attribute
+  // change. The real-browser link is proven by the tester's headless run.
+  more.fire('toggle');
+  assert.equal(check.disabled, false);
+
+  consent.fire('click');
+  assert.equal(more.open, true, 'a second tap must not undo the open state');
+  assert.equal(check.checked, false, 'onConsentTap must do nothing once the box is live - the native label click is what ticks it');
+});
+
+test('E8 - a successful acknowledge() tears down the toggle and consent-tap listeners, like the existing two', async () => {
+  const { showAccept, document: doc } = loadAccept({ acknowledge: async () => ({ ok: true }) });
+  const p = showAccept();
+  const more = doc.getElementById('accept-more');
+  const consent = doc.getElementById('accept-consent');
+  const check = doc.getElementById('accept-check');
+  const go = doc.getElementById('accept-go');
+  assert.equal(more.listenerCount('toggle'), 1);
+  assert.equal(consent.listenerCount('click'), 1);
+
+  check.checked = true;
+  check.fire('change');
+  go.fire('click');
+  await p;
+
+  assert.equal(more.listenerCount('toggle'), 0, 're-entry after an auth loss must not stack a duplicate closure over the same node');
+  assert.equal(consent.listenerCount('click'), 0);
+});
+
+test('E9 - a disabled consent checkbox does not swallow the tap', () => {
+  // RED WHEN: `.accept-consent input:disabled { pointer-events: none; }` is
+  // removed from app.css.
+  // A disabled input dispatches NOTHING on click, so without this rule a thumb
+  // landing on the 18px box - the exact spot the eye aims for - reaches neither
+  // the input nor the label's handler, and the sections never open. Verified in
+  // Chrome and Edge over CDP, including with touch emulation at 390x844: the
+  // label handler fired 0 times on the box and 1 time on the text.
+  // This is the rule the locked checkbox rests on: "tapping the consent row
+  // opens the sections" has to be true for the whole row, or the gate is a dead
+  // control in its most tappable spot. A DOM stub cannot model hit-testing, so
+  // this pins the declaration in source.
+  const css = read('app.css').split(String.fromCharCode(13)).join('');
+  assert.match(
+    css,
+    /\.accept-consent\s+input:disabled\s*\{[^}]*pointer-events:\s*none/,
+    'the disabled consent checkbox must let the tap fall through to its label',
+  );
 });

@@ -484,7 +484,7 @@ test('C4 - LEDE[1] is the sentence the screen exists for, and it must not be sof
 });
 
 test('C5 - the joined copy contains none of the four banned phrases', () => {
-  const joined = [copy.TITLE, ...copy.LEDE, copy.CONSENT_LABEL, copy.SETTINGS_NOTE, copy.ACCEPT_BUTTON,
+  const joined = [copy.TITLE, ...copy.LEDE, copy.CONSENT_LABEL, copy.SETTINGS_NOTE, copy.ACCEPT_BUTTON, copy.SECTIONS_TOGGLE,
     ...copy.SECTIONS.flatMap((s) => [s.heading, ...s.items])].join(' ').toLowerCase();
   for (const banned of ['privacy seriously', 'secure', 'only you can access', 'by continuing you agree']) {
     assert.ok(!joined.includes(banned), `must not contain "${banned}"`);
@@ -508,7 +508,7 @@ test('C6 - copy.js matches design/accept-screen-copy.txt verbatim, when that fil
   }
 });
 
-test('C7 - index.html carries none of the four headings or either LEDE line as literal text', () => {
+test('C7 - index.html carries none of the four headings, either LEDE line, or SECTIONS_TOGGLE as literal text', () => {
   const html = fs.readFileSync(new URL('index.html', PUBLIC_DIR), 'utf8');
   const start = html.indexOf('<main id="accept"');
   const end = html.indexOf('<main id="gate"');
@@ -518,6 +518,15 @@ test('C7 - index.html carries none of the four headings or either LEDE line as l
   }
   for (const lede of copy.LEDE) {
     assert.ok(!block.includes(lede), `index.html must not hardcode "${lede}"`);
+  }
+  assert.ok(!block.includes(copy.SECTIONS_TOGGLE), 'index.html must not hardcode SECTIONS_TOGGLE - it would drift from copy.js');
+});
+
+test('C9 - SECTIONS_TOGGLE is exported, exact, and names all four sections\' subjects', () => {
+  assert.equal(copy.SECTIONS_TOGGLE, 'What it can see, what it cannot, who can reach it, what leaves this machine');
+  const lower = copy.SECTIONS_TOGGLE.toLowerCase();
+  for (const subject of ['what it can see', 'what it cannot', 'who can reach it', 'what leaves this machine']) {
+    assert.ok(lower.includes(subject), `SECTIONS_TOGGLE must mention "${subject}" - collapsing it to two of the four hides the other two entirely`);
   }
 });
 

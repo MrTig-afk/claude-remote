@@ -617,6 +617,28 @@ body {
 .accept-strong { color: #eafbea; }
 
 .accept-sections { display: flex; flex-direction: column; gap: 12px; }
+
+/* The four sections collapse behind a native <details> (T103). Native, not a
+   div and a click handler: the summary is a button to a screen reader, it is
+   keyboard-operable, and find-in-page expands it - none of which we would get
+   for free otherwise.
+   The UA's own triangle is the only affordance on the collapsed screen that
+   says this is tappable, so it is kept: no list-style:none, and the summary
+   keeps display:list-item, because Chrome drops the marker the moment it is
+   given display:flex or block. The 44px floor comes from min-height. */
+.accept-more { border-top: 1px solid #1b231b; border-bottom: 1px solid #1b231b; }
+.accept-more > summary {
+  min-height: 44px;
+  padding: 12px 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c9d1c9;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* .accept's 14px flex gap does not reach inside the <details>. */
+.accept-more > .accept-sections { padding-bottom: 14px; }
+
 /* Same type as .allhdr's section label - this app has one section-heading
    voice and these are section headings. */
 .copy-heading { font-size: 9px; letter-spacing: 0.09em; color: #4a5a4a; margin-bottom: 5px; }
@@ -625,6 +647,13 @@ body {
 
 /* The whole row is the tap target, not the 18px box - a control that looks
    right and misses the thumb is a bug, not a style choice. */
+/* A DISABLED input swallows the tap and dispatches nothing, so a thumb landing
+   on the 18px box while the consent is still locked would reach neither the
+   input nor the label's handler - a dead tap in the exact spot the eye aims
+   for. Letting the tap fall through to the label is what makes "tapping the
+   consent row opens the sections" true everywhere on the row, which is the
+   promise the locked checkbox rests on. */
+.accept-consent input:disabled { pointer-events: none; }
 .accept-consent {
   display: flex;
   align-items: center;

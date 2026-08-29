@@ -1,7 +1,7 @@
 import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, onAuthLost } from './api.js';
 import { showGate } from './lock.js';
 import {
-  TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, renderSections,
+  TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
   CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON,
   NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle,
   emptyDayOneTitle, EMPTY_DAY_ONE_BODY,
@@ -2003,6 +2003,9 @@ function showAccept() {
     lede1: document.getElementById('accept-lede-1'),
     lede2: document.getElementById('accept-lede-2'),
     sections: document.getElementById('accept-sections'),
+    more: document.getElementById('accept-more'),
+    summary: document.getElementById('accept-more-sum'),
+    consent: document.getElementById('accept-consent'),
     consentText: document.getElementById('accept-consent-text'),
     note: document.getElementById('accept-note'),
     go: document.getElementById('accept-go'),
@@ -2014,16 +2017,39 @@ function showAccept() {
   el.lede1.textContent = LEDE[0];
   el.lede2.textContent = LEDE[1];
   renderSections(el.sections);
+  el.summary.textContent = SECTIONS_TOGGLE;
   el.consentText.textContent = CONSENT_LABEL;
   el.note.textContent = SETTINGS_NOTE;
   el.go.textContent = ACCEPT_BUTTON;
   el.accept.hidden = false;
+  // Derived from the DOM, never stored: on the one path that re-enters this
+  // screen (an auth loss mid-warning) the <details> is still on the page with
+  // whatever the owner left it as, and re-locking a checkbox he has already
+  // earned would be a regression.
+  el.check.disabled = !el.more.open;
 
   return new Promise((resolve) => {
     let inFlight = false;
 
     function onCheck() {
       el.go.disabled = !el.check.checked;
+    }
+
+    // The sections are one tap away now, so the tick is gated on that tap
+    // having happened: "I understand what this can see" must not be claimable
+    // about words that were never on screen. Opening is not reading, but it is
+    // the difference between a warning and a formality.
+    function onToggle() {
+      if (el.more.open) el.check.disabled = false;
+    }
+
+    // A disabled checkbox under a label is a dead control, and a dead control
+    // is the UX complaint this task exists to answer. Tapping the consent row
+    // before the sections have been shown does the thing the label describes:
+    // it shows them. The second tap ticks. Once the box is live this handler
+    // does nothing and the native label behaviour takes over.
+    function onConsentTap() {
+      if (el.check.disabled) el.more.open = true;
     }
 
     async function onClick() {
@@ -2041,6 +2067,8 @@ function showAccept() {
         el.msg.textContent = '';
         el.check.removeEventListener('change', onCheck);
         el.go.removeEventListener('click', onClick);
+        el.more.removeEventListener('toggle', onToggle);
+        el.consent.removeEventListener('click', onConsentTap);
         resolve();
         return;
       }
@@ -2053,6 +2081,8 @@ function showAccept() {
 
     el.check.addEventListener('change', onCheck);
     el.go.addEventListener('click', onClick);
+    el.more.addEventListener('toggle', onToggle);
+    el.consent.addEventListener('click', onConsentTap);
   });
 }
 
