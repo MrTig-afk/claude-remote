@@ -385,9 +385,18 @@ function statusLine(rs) {
 }
 
 // One <use> clone of a symbol from the sprite in index.html.
-// document.createElementNS is deliberately not used anywhere in this app - a
-// shipped asset carrying an absolute namespace URL trips the no-egress test -
-// so every icon comes from cloning this template.
+//
+// Cloned from a <template> rather than built with createElementNS, which would
+// put the SVG namespace URL - an absolute one - in a shipped asset. That is a
+// namespace identifier and not egress, but the no-absolute-URL test is the
+// machine-checkable half of "nothing leaves this machine" and is worth more
+// than the convenience of one constructor. The HTML parser puts template
+// content in the SVG namespace for free.
+// Used by buildTile only. Every OTHER builder in this file keeps the clone
+// inline, deliberately: they are sliced out and EXECUTED by the test
+// harnesses with an explicit injected dependency list, where a call to a
+// module-scope helper is a ReferenceError. buildTile is only ever stubbed,
+// never sliced, so it can use this.
 function glyph(href) {
   const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
   ico.querySelector('use').setAttribute('href', href);
@@ -2207,10 +2216,10 @@ function buildChk() {
   chk.className = 'chk';
   chk.setAttribute('aria-hidden', 'true');
   for (const icon of ['#i-check', '#i-x']) {
-    const glyph = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
-    glyph.setAttribute('class', `ico chk-${icon === '#i-check' ? 'tick' : 'x'}`);
-    glyph.querySelector('use').setAttribute('href', icon);
-    chk.appendChild(glyph);
+    const g = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+    g.setAttribute('class', `ico chk-${icon === '#i-check' ? 'tick' : 'x'}`);
+    g.querySelector('use').setAttribute('href', icon);
+    chk.appendChild(g);
   }
   return chk;
 }
@@ -3384,12 +3393,6 @@ function buildSettingsRow({
   }
   el.setAttribute('aria-label', stateText ? `${name}, ${stateText}` : name);
 
-  // Cloned from a <template> rather than built with createElementNS, which
-  // would put the SVG namespace URL - an absolute one - in a shipped asset.
-  // That is a namespace identifier and not egress, but the no-absolute-URL
-  // test is the machine-checkable half of "nothing leaves this machine" and
-  // is worth more than the convenience of one constructor. The HTML parser
-  // puts template content in the SVG namespace for free.
   const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
   ico.querySelector('use').setAttribute('href', `#${icon}`);
   el.appendChild(ico);

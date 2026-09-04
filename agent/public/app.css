@@ -1464,18 +1464,10 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
    control whose own border is already accent. currentColor via .ico, so
    naming the row's own colour is the whole override. 12px, not the
    template's 15: it sits beside 10px text. */
-.tile-confirm-warn .ico {
-  width: 12px;
-  height: 12px;
-  margin-top: 2px;
-  color: var(--warn);
-}
-.tile-confirm-open .ico {
-  width: 12px;
-  height: 12px;
-  margin-right: 7px;
-  color: var(--accent);
-}
+.tile-confirm-warn .ico,
+.tile-confirm-open .ico { width: 12px; height: 12px; }
+.tile-confirm-warn .ico { margin-top: 2px; color: var(--warn); }
+.tile-confirm-open .ico { margin-right: 7px; color: var(--accent); }
 .tile-confirm-open {
   display: flex;
   align-items: center;

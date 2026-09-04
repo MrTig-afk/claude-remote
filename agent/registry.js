@@ -445,7 +445,6 @@ export function listSessions(ctx) {
   // Set when an entry is normalised IN PLACE rather than removed. Without it
   // the write-back below never fires for a mutation, and the normalisation
   // would be recomputed - and lost - on every single request.
-  let rewroteAny = false;
 
   for (const entry of entries) {
     const drop = (sessionNameForCleanup) => {
@@ -539,14 +538,12 @@ export function listSessions(ctx) {
         drop(sessionName);
         continue;
       }
+      // One window, both ends. The lower bound is the same clock-tamper rule
+      // the `starting` branch uses below: without it a timestamp from the
+      // future blocks every future relaunch, and CLAIM_STALE_MS is short
+      // enough now that it would block one for a very long time.
       const age = nowMs - Date.parse(entry.handoff_started_at);
-      // Same clock-tamper rule the `starting` branch uses below - without a
-      // drop here a tampered timestamp blocks every future relaunch.
-      if (age < -STARTING_GRACE_MS) {
-        drop(sessionName);
-        continue;
-      }
-      if (Math.max(0, age) >= CLAIM_STALE_MS) {
+      if (!(age > -STARTING_GRACE_MS && age < CLAIM_STALE_MS)) {
         drop(sessionName);
         continue;
       }
@@ -657,7 +654,7 @@ export function listSessions(ctx) {
     });
   }
 
-  if (droppedAny || rewroteAny) {
+  if (droppedAny) {
     writeRegistry(registryPath, survivors);
   }
 
