@@ -493,10 +493,14 @@ body {
 }
 /* THE FLOOR, not a type choice. Mobile Safari zooms the whole page in when a
    focused text input is under 16px and does not zoom back out on blur. Setting
-   it here rather than per-input makes the bug unrepresentable: a new input
-   added without its own font-size inherits the UA default (~13.33px) and would
-   reproduce it silently. Individual rules may go LARGER (.pin is 19px), never
-   smaller - a test pins both. */
+   it here rather than per-input makes the DEFAULT case safe: a new input added
+   with no rule of its own would otherwise take the UA ~13.33px and reproduce
+   the bug silently.
+   It does NOT make the bug unrepresentable, and do not read it that way: this
+   is specificity 0-0-1, so ANY class rule beats it regardless of source order.
+   `.filter input { font-size: 12px }` would win. What actually holds the line
+   is the test, which sweeps every rule that can size an input. Individual rules
+   may go LARGER (.pin is 19px), never smaller. */
 input,
 textarea,
 select {

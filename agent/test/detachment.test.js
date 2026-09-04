@@ -144,8 +144,15 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   // quickly). requiredTokens above cannot express "must be ABSENT", which is
   // why this sits beside it. Comments stripped first - the script's own
   // comment explains this rule and has to name the flag to do so.
+  // ONE definition, reused by the assertion AND by the proofs below. They used
+  // to each re-implement this expression, which made the proofs worthless:
+  // review demonstrated it by replacing only the real check's strip with one
+  // that can never fail, and the "proofs" still reported 2/2 pass. A proof that
+  // does not exercise the thing it proves is decoration.
+  const stripPsComments = (src) => src.replace(/^\s*#.*$/gm, '');
+  const carriesChannels = (src) => /--channels/.test(stripPsComments(src));
   assert.ok(
-    !/--channels/.test(real.replace(/^\s*#.*$/gm, '')),
+    !carriesChannels(real),
     'the PWA recipe must not pass --channels - it prevents the Code-tab row appearing',
   );
 
@@ -179,7 +186,7 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   // seen through the strip.
   const channelsBack = `${real}\n    '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',\n`;
   assert.equal(
-    /--channels/.test(channelsBack.replace(/^\s*#.*$/gm, '')),
+    carriesChannels(channelsBack),
     true,
     'a copy that re-adds --channels as CODE must fail the absence check - if this passes, the strip has eaten the line it is meant to scan',
   );
@@ -187,7 +194,7 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   // which is the failure that made this strip necessary in the first place.
   const onlyInComment = `${real}\n    # explains why --channels must not be here\n`;
   assert.equal(
-    /--channels/.test(onlyInComment.replace(/^\s*#.*$/gm, '')),
+    carriesChannels(onlyInComment),
     false,
     'a mention inside a comment must NOT fail the check - the script documents this rule and has to name the flag',
   );

@@ -725,32 +725,52 @@ test('every text input is at least 16px, or iOS zooms the page and stays zoomed'
   // 2026-09-05: the panel zoomed, the header was cut off both sides, and it
   // stayed that way afterwards. .pin was always safe at 19px, which is why
   // only the new-project field ever showed it.
-  // Comments STRIPPED first. The rule below carries a 7-line comment that
+  // Comments STRIPPED first. The rule below carries a long comment that
   // explains the bug and names the wrong size; without this the block regex
   // spans it and `.match(font-size)` takes the FIRST hit, which would report
   // the number from the prose rather than the number the browser uses.
   const css = read('app.css').replace(/\/\*[\s\S]*?\*\//g, '');
-  // The global floor first: it is what makes a too-small input unrepresentable
-  // rather than merely absent today. A bare <input> inherits ~13.33px from the
-  // UA stylesheet, so a THIRD text input added later is unsafe by default -
-  // this rule is what catches it, not the two selectors below.
-  const floor = css.match(/(^|\})\s*input,\s*textarea,\s*select\s*\{[^}]*\}/);
-  assert.ok(floor, 'app.css must set a global font-size floor for input/textarea/select');
-  const floorSize = floor[0].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
-  assert.ok(floorSize && Number(floorSize[1]) >= 16,
-    `the global input floor is ${floorSize ? floorSize[1] : 'unset'}px; under 16px iOS zooms on focus`);
-  const rules = [
-    ['.newproj-panel input', /\.newproj-panel input\s*\{[^}]*\}/],
-    ['.pin', /^\.pin\s*\{[^}]*\}/m],
-  ];
-  for (const [name, rx] of rules) {
-    const block = css.match(rx);
-    assert.ok(block, `app.css must carry a ${name} rule`);
-    const size = block[0].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
-    assert.ok(size, `${name} must set an explicit font-size - inheriting one is how this regresses`);
+
+  // SWEEP every rule that can size an input, rather than naming the two that
+  // exist today. The bare `input, textarea, select` floor is only specificity
+  // 0-0-1, so it loses to ANY class rule regardless of source order - a future
+  // `.filter input { font-size: 12px }` would beat it, zoom the page, and pass
+  // a test that only checked the floor plus a hardcoded list. Matching on the
+  // selector rather than on an exact string also means reordering the floor's
+  // three selectors, or moving it, cannot fail this with a message sending the
+  // reader after a CSS bug that is not there.
+  // CSS alone cannot tell that `.pin` is an input - a class selector looks the
+  // same whether it sits on an <input> or a <div>. So the sweep catches every
+  // selector that NAMES an element, and this list carries the class-only rules
+  // that are known to land on one. Add to it when a new input gets a bare
+  // class; the sweep covers everything else automatically.
+  const CLASS_ONLY_INPUTS = ['.pin'];
+  const sized = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+    const selector = m[1].trim().replace(/\s+/g, ' ');
+    const namesElement = /(^|[\s,>+~])(input|textarea|select)\b/.test(selector);
+    if (!namesElement && !CLASS_ONLY_INPUTS.includes(selector)) continue;
+    const size = m[2].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
+    if (size) sized.push({ selector, px: Number(size[1]) });
+  }
+  assert.ok(
+    sized.some((r) => /\binput\b/.test(r.selector)
+      && /\btextarea\b/.test(r.selector) && /\bselect\b/.test(r.selector)),
+    'app.css must set a global font-size floor on input/textarea/select, so an input with no rule of its own is safe by default',
+  );
+  const tooSmall = sized.filter((r) => r.px < 16);
+  assert.deepEqual(
+    tooSmall, [],
+    `these rules size an input under 16px, which makes iOS zoom the page on focus and leave it zoomed: ${
+      tooSmall.map((r) => `${r.selector} = ${r.px}px`).join('; ')}`,
+  );
+  // And the two that exist today must still declare one explicitly: both carry
+  // `font: inherit`, which resets font-size and would otherwise drop them back
+  // to the inherited value even with the floor present.
+  for (const name of ['.newproj-panel input', '.pin']) {
     assert.ok(
-      Number(size[1]) >= 16,
-      `${name} is ${size[1]}px; anything under 16px makes iOS zoom the page on focus and leave it zoomed`,
+      sized.some((r) => r.selector === name),
+      `${name} must set an explicit font-size - its own \`font: inherit\` resets what the floor gave it`,
     );
   }
 });
