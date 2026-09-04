@@ -9,6 +9,7 @@ import { readServiceWorker } from '../static.js';
 import * as folders from '../public/folders-ui.js';
 import * as copy from '../public/copy.js';
 import * as update from '../public/update-ui.js';
+import { handoffReady } from '../public/handoff-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -965,11 +966,41 @@ test('statusLine appends an optional suffix on top of its existing behaviour', (
   );
 });
 
-test("app.js never tells the owner to open the Claude app after a launch, except the failed banner", () => {
+// Strips comments before asserting on copy. The claim below is about what the
+// app SAYS, and a source-wide grep also reads what the source EXPLAINS - which
+// is how a comment describing this very rule can fail the test enforcing it.
+// Third time this project has been bitten by that; see HANDOFF's gotchas.
+function codeOnly(js) {
+  return js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+test("app.js never asks the owner to go and VERIFY a launch in the Claude app", () => {
+  // T47's invariant, and it still holds: the owner's words were "it should
+  // just know". The agent proves the pid, so the app must never send someone
+  // to another app to check whether a launch worked.
   const js = read('app.js');
   assert.doesNotMatch(js, /not confirmed/);
-  assert.equal((js.match(/Claude app/g) || []).length, 1,
-    "only maybeFailedBanner may mention the Claude app (owner, T47 interview Q1)");
+
+  // NARROWED by Lane 10 / R1, 2026-09-04. This used to assert that only
+  // maybeFailedBanner could mention the Claude app at all. That is no longer
+  // right, and the two decisions do not actually conflict:
+  //   T47 cut "open the Code tab to CHECK IT APPEARED" - verification the app
+  //        can do itself, which is what "just knows" killed.
+  //   R1  adds "Ready in the Claude app... to START TYPING" - fired only once
+  //        handoffReady() confirms the session is running, i.e. exactly after
+  //        the app has done the knowing. It names a destination, not a check.
+  // What survives is the real rule: no verification prompts. The hand-off copy
+  // lives in handoff-ui.js, so app.js itself still carries exactly one mention.
+  assert.equal((codeOnly(js).match(/Claude app/g) || []).length, 1,
+    'in app.js code, only maybeFailedBanner may name the Claude app');
+});
+
+test('the hand-off copy names a destination, never a check', () => {
+  // The distinction above, enforced on the copy itself rather than on a count.
+  const src = read('handoff-ui.js');
+  for (const verify of [/check it appeared/i, /to check/i, /confirm it/i, /make sure/i]) {
+    assert.doesNotMatch(src, verify, "R1 must not reintroduce T47's verification prompt");
+  }
 });
 
 test("rowState's running branch shows the session's busy/idle activity", () => {
@@ -980,7 +1011,7 @@ test("rowState's running branch shows the session's busy/idle activity", () => {
 
 // --- the launch banner clears itself once the session settles --------------
 
-function makeClearSettled(hideBannerSpy, state, launchBannerFor) {
+function makeClearSettled(hideBannerSpy, state, launchBannerFor, showHandoffSpy = () => {}) {
   const js = read('app.js');
   const src = js.slice(
     js.indexOf('function clearSettledLaunchBanner('),
@@ -990,11 +1021,14 @@ function makeClearSettled(hideBannerSpy, state, launchBannerFor) {
   // row resolves to its session, or to null when there is none yet.
   const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path) ?? null;
   if (!state.results) state.results = new Map();
+  // handoffReady is the REAL implementation, not a stub: which statuses count
+  // as "go and open it" is the whole decision this branch turns on, and a
+  // stub here would let the two drift apart silently.
   const make = new Function(
-    'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff',
     src + '; return clearSettledLaunchBanner;',
   );
-  return make(state, sessionFor, hideBannerSpy, launchBannerFor);
+  return make(state, sessionFor, hideBannerSpy, launchBannerFor, handoffReady, showHandoffSpy);
 }
 
 function spy() {
@@ -1028,16 +1062,29 @@ test('clearSettledLaunchBanner keeps the banner while the session is still start
   assert.equal(hide.calls.length, 0);
 });
 
-test('clearSettledLaunchBanner drops the banner as soon as the session is running', () => {
+test('clearSettledLaunchBanner hands off as soon as the session is running', () => {
+  // CHANGED by Lane 10 / R1. This used to assert hideBanner(). The launch
+  // banner still must not sit there until a manual refresh - the original
+  // bug - but "landed and live" is now the one moment the hand-off to the
+  // Claude app is worth saying, so the line is REPLACED rather than cleared.
+  // Clearing it here again would put the app back to saying nothing at the
+  // only point where it has something useful to say.
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, 'Sherlock')();
-  assert.equal(hide.calls.length, 1, 'this is the bug: it used to sit there until a manual refresh');
+  const handoff = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, 'Sherlock', handoff)();
+  assert.equal(handoff.calls.length, 1, 'a live launch must hand off');
+  assert.equal(hide.calls.length, 0, 'and must not blank the banner on the way');
 });
 
 test('clearSettledLaunchBanner drops the banner for a failed session too, so maybeFailedBanner can replace it', () => {
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'failed' }] }, 'Sherlock')();
+  const handoff = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'failed' }] }, 'Sherlock', handoff)();
   assert.equal(hide.calls.length, 1);
+  // Lane 10 / R1: a failed launch must NEVER hand off. Sending someone to the
+  // Claude app to look for a session that did not start is worse than silence
+  // - they go, find nothing, and stop trusting what the app tells them.
+  assert.equal(handoff.calls.length, 0, 'a failed launch must not offer to open it');
 });
 
 test('both banner primitives release the launch handle, so no other message can be hidden by it', () => {
@@ -1427,12 +1474,18 @@ test('a nested launch banner clears once the nested session is running', () => {
   // what lets this resolve at all.
   const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path || (s.project === p.name && s.source !== 'desk')) ?? null;
   const hide = spy();
+  const handoff = spy();
   const clearSettledLaunchBanner = new Function(
-    'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff',
     src + '; return clearSettledLaunchBanner;',
-  )(state, sessionFor, hide, 'Pull Requests/Vercel');
+  )(state, sessionFor, hide, 'Pull Requests/Vercel', handoffReady, handoff);
   clearSettledLaunchBanner();
-  assert.equal(hide.calls.length, 1, 'without the pathless stand-in, a nested launch banner never clears - the same bug fixed for top-level projects');
+  // CHANGED by Lane 10 / R1, same as the top-level case: a running session
+  // hands off rather than blanking. The claim under test is unchanged and is
+  // still about the pathless stand-in - without it this nested launch resolves
+  // to no session at all and the banner is left up forever.
+  assert.equal(handoff.calls.length, 1, 'without the pathless stand-in, a nested launch banner never settles - the same bug fixed for top-level projects');
+  assert.equal(hide.calls.length, 0);
 });
 
 // The two chrome taps that could open a folder / leave a folder under a live
@@ -1589,10 +1642,14 @@ function makePopState(state, historyStub) {
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
   // The settings stack is EMPTY in these tests: they exercise the drill/confirm
   // branches, which sit below the settings branch and must be unaffected by it.
+  // 'sheetPushed' is Lane 10's flag, injected false: its branch is first in
+  // onPopState and would otherwise swallow every pop these tests issue.
   return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
     'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
+    'sheetPushed',
     src + '; return onPopState;')(state, historyStub, () => {}, true, true, false, () => {},
-    [], () => null, false, new Set(['see', 'agent', 'reset', 'about', 'update']), () => {}, () => {});
+    [], () => null, false, new Set(['see', 'agent', 'reset', 'about', 'update']), () => {}, () => {},
+    false);
 }
 
 test('back with only the drill-in open returns to the list', () => {

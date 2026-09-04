@@ -17,6 +17,9 @@ import {
 import {
   updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState,
 } from './update-ui.js';
+import {
+  CLAUDE_APP_LINK, handoffReady, handoffCopy, SHEET_SEEN_KEY, SHEET,
+} from './handoff-ui.js';
 
 // The version baked into whatever copy of the shell the phone has cached.
 // Keep it a plain single-quoted literal: the version test reads it out of
@@ -547,6 +550,12 @@ let launchBannerFor = null;
 
 function setBanner(tone, parts) {
   launchBannerFor = null;
+  // R1: the hand-off button belongs to ONE banner - the hand-off one. Any
+  // other message replacing that banner must take the button with it, or a
+  // "could not end the session" line would sit above a button offering to
+  // open it. Cleared here and in hideBanner(), which between them are the
+  // only two ways the banner ever changes.
+  hideHandoffGo();
   const el = document.getElementById('banner');
   el.innerHTML = '';
   el.className = 'banner' + (tone === 'error' ? ' error' : '');
@@ -564,9 +573,109 @@ function setBanner(tone, parts) {
 
 function hideBanner() {
   launchBannerFor = null;
+  hideHandoffGo();
   const el = document.getElementById('banner');
   el.hidden = true;
   el.innerHTML = '';
+}
+
+// ---- Lane 10 / R1: the hand-off ------------------------------------------
+// The app starts sessions on the PC and cannot show them - they are driven
+// from the Claude app's Code tab, because launch-session.ps1 runs
+// `claude.cmd --remote-control`. Everything below exists to say so at the one
+// moment it matters: a launch THIS device made has just come up.
+
+function hideHandoffGo() {
+  const go = document.getElementById('handoff-go');
+  go.hidden = true;
+  go.removeAttribute('href');   // an <a> with no href is not focusable
+}
+
+/**
+ * Replaces the "start requested" line once the session is actually live.
+ *
+ * Shown ONLY for a launch this device made (the caller gates on
+ * launchBannerFor) and never for a session that was already running - opening
+ * the Claude app is not news for a session you did not just start.
+ */
+function showHandoff(project) {
+  const copy = handoffCopy(project);
+  // setBanner clears launchBannerFor, which is what retires the launch
+  // watcher: this banner is terminal for that launch and nothing should come
+  // along and hide it a second later.
+  setBanner('info', [{ b: copy.title }, { text: ' ' + copy.body }]);
+  const go = document.getElementById('handoff-go');
+  // The external-link glyph is STATIC in index.html and only the label is
+  // written here. Two reasons, both of which bit this function already:
+  // writing the label onto the anchor wipes the glyph the Artifact draws, and
+  // building the SVG in JS needs the namespaced create call, whose absolute
+  // namespace URL the no-egress test rejects - the same reason
+  // buildSettingsRow clones a <template> instead. (Named, not spelled: a test
+  // greps this function's source for that call.)
+  document.getElementById('handoff-go-label').textContent = copy.button;
+  go.href = CLAUDE_APP_LINK;
+  go.hidden = false;
+  maybeShowSheet();
+}
+
+// ---- Lane 10 / R2: the once-only sheet ------------------------------------
+
+// Every access is wrapped: localStorage throws outright in some contexts
+// (private windows, blocked site data) and a thrown read here would break the
+// launch path itself. The cost of failing to read is showing the sheet again,
+// which is harmless; the cost of throwing is a broken app.
+function sheetSeen() {
+  try { return localStorage.getItem(SHEET_SEEN_KEY) === '1'; } catch { return false; }
+}
+function markSheetSeen() {
+  try { localStorage.setItem(SHEET_SEEN_KEY, '1'); } catch { /* nothing to do */ }
+}
+
+// Same shape as confirmPushed and folderPushed: true exactly while the
+// sheet's own history entry is on the stack, so Android back closes the sheet
+// instead of leaving the app.
+let sheetPushed = false;
+
+function maybeShowSheet() {
+  if (sheetSeen()) return;
+  const el = document.getElementById('handoff-sheet');
+  if (!el.hidden) return;            // already open; a second launch must not stack it
+
+  el.hidden = false;
+  document.getElementById('sheet-title').textContent = SHEET.title;
+  const list = document.getElementById('sheet-steps');
+  list.innerHTML = '';
+  for (const step of SHEET.steps) {
+    const li = document.createElement('li');
+    li.textContent = step;
+    list.appendChild(li);
+  }
+  document.getElementById('sheet-go').textContent = SHEET.button;
+  document.getElementById('sheet-note').textContent = SHEET.note;
+
+  // Marked seen on OPEN, not on dismiss. If it is shown and the app is killed
+  // mid-read, it has still done its job; re-showing it on the next launch
+  // would be the app nagging about something already read.
+  markSheetSeen();
+
+  history.pushState({ handoffSheet: true }, '');   // Android back = GOT IT
+  sheetPushed = true;
+  // ACCEPTED CEILING: focus moves to the one control, but the header behind
+  // the sheet stays reachable by keyboard - this is not a full focus trap.
+  // One control, one exit, and the sheet is shown once per device; a trap is
+  // more machinery than the surface earns.
+  document.getElementById('sheet-go').focus();
+}
+
+// Count first, mutate after. The flag must go false BEFORE back() is issued,
+// because the popstate it triggers must find nothing left to undo - clearing
+// it afterwards lets the pop take a second entry with it. Same shape as the
+// confirm and drill flags for the same reason.
+function closeSheet() {
+  const el = document.getElementById('handoff-sheet');
+  if (el.hidden) return;
+  el.hidden = true;
+  if (sheetPushed) { sheetPushed = false; history.back(); }
 }
 
 // Drops the launch banner as soon as the session it names stops being
@@ -608,6 +717,13 @@ function clearSettledLaunchBanner() {
   const s = sessionFor(p);
   if (s) {
     if (s.status === 'starting') return; // still coming up, the banner is the only signal
+    // R1. The launch landed. If it landed LIVE this is the one moment the
+    // hand-off is worth saying, so the "start requested" line is replaced by
+    // it rather than just cleared. Any other landing (failed, already tearing
+    // down) falls through and clears as before - sending someone to the
+    // Claude app to look for a session that is not there is worse than
+    // silence.
+    if (handoffReady(s)) { showHandoff(launchBannerFor); return; }
     hideBanner();
     return;
   }
@@ -1515,6 +1631,17 @@ function goHome() {
 // owner back out of the folder. Same class of race the single-entry code
 // already had, and a second tap recovers.
 function onPopState() {
+  // R2's sheet is checked FIRST because its entry is always the topmost one
+  // while it is open: it is pushed from a launch landing, the sheet covers
+  // the list so nothing under it can be tapped to push another, and it is
+  // closed before anything else can be reached. Its own pop lands here, so
+  // the flag is cleared WITHOUT a second history move - closeSheet() would
+  // issue one and traverse an entry that has already gone.
+  if (sheetPushed) {
+    sheetPushed = false;
+    document.getElementById('handoff-sheet').hidden = true;
+    return;
+  }
   // Settings' entry is ALWAYS the top one while Settings is on screen:
   // nothing reachable from Settings pushes, openSettings refuses to push
   // under an open confirm, and the picker is entered only after this entry
@@ -3268,6 +3395,8 @@ function wireEvents() {
   document.getElementById('projects').addEventListener('click', onProjectTap);
   document.getElementById('tiles').addEventListener('click', onTileTap);
   document.getElementById('newproj').addEventListener('click', onNewProject);
+  // R2. GOT IT is the sheet's only control and its only exit.
+  document.getElementById('sheet-go').addEventListener('click', closeSheet);
   document.getElementById('refresh').addEventListener('click', () => load());
   document.getElementById('newproj-cancel').addEventListener('click', closeNewProjectPanel);
   document.getElementById('newproj-create').addEventListener('click', onCreateProject);

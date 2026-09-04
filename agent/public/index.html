@@ -132,6 +132,17 @@
 
       <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
+      <!-- Lane 10 / R1. A sibling of #banner, not a child: setBanner() clears
+           the banner's innerHTML on every call, so a button living inside it
+           would be wiped by the next message. An <a href> rather than a
+           button so the deep link is the browser's job - nothing in app.js
+           navigates, and the href is the single point of failure the scheme
+           comment in handoff-ui.js names. -->
+      <a class="handoff-go ripples" id="handoff-go" hidden>
+        <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-ext"/></svg>
+        <span id="handoff-go-label"></span>
+      </a>
+
       <div class="newproj-panel" id="newproj-panel" hidden>
         <label for="newproj-name">New project name</label>
         <input id="newproj-name" type="text" maxlength="64" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="e.g. email-lint">
@@ -174,6 +185,20 @@
         <button class="refresh" id="refresh" type="button">REFRESH</button>
       </div>
       <footer class="footer" id="footer"></footer>
+
+      <!-- Lane 10 / R2. The once-only sheet, shown after the FIRST successful
+           launch on this device - not during onboarding, where there is no
+           session yet to go and look at. Inside #picker so it covers the list
+           it is explaining. Copy comes from handoff-ui.js; this is chrome. -->
+      <div class="sheet" id="handoff-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <div class="sheet-card">
+          <svg class="sheet-tick" width="30" height="30" aria-hidden="true"><use href="#i-check"/></svg>
+          <div class="sheet-title" id="sheet-title"></div>
+          <ol class="sheet-steps" id="sheet-steps"></ol>
+          <button class="sheet-go ripples" id="sheet-go" type="button"></button>
+          <div class="sheet-note" id="sheet-note"></div>
+        </div>
+      </div>
     </main>
 
     <main id="accept" hidden>

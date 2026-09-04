@@ -615,7 +615,12 @@ body {
 /* #picker must reproduce the flex column .app used to own directly, or
    .spacer stops pushing the footer down. It must NOT be position:relative -
    .newproj is absolutely positioned against .app. */
-#picker { display: flex; flex-direction: column; flex-grow: 1; }
+/* `position: relative` is Lane 10's, not layout's: it makes #picker the
+   containing block for .sheet, so the once-only hand-off sheet covers the
+   project list and NOT the header above it - which is what the Artifact
+   draws (the mark and name stay visible behind it). Without this the sheet
+   resolves against the 430px app wrapper and swallows the header too. */
+#picker { display: flex; flex-direction: column; flex-grow: 1; position: relative; }
 
 #settings { display: flex; flex-direction: column; flex-grow: 1; }
 
@@ -1255,3 +1260,93 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Lane 10 - the hand-off to the Claude app (R1, R2).
+   Colours are tokens only; no hex below :root, which a test enforces.
+--------------------------------------------------------------------------- */
+
+/* R1. Sits directly under #banner and shares its horizontal margin so the two
+   read as one block rather than two stacked cards. Accent-bordered because it
+   is the one control on this screen that leaves the app - it is not competing
+   with STOP, which is the only danger-coloured thing here. */
+.handoff-go {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  min-height: 44px;      /* tap target; matches .gate-go and .accept-go */
+  padding: 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  border: 1px solid var(--accent-2);
+  border-radius: 4px;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.handoff-go .ico { width: 14px; height: 14px; flex: 0 0 auto; }
+
+/* R2. Covers the project list it is explaining, stopping under the header -
+   #picker is the containing block (see its rule above). Absolute rather than
+   fixed so it is bounded by the picker; a fixed sheet would cover the header
+   as well. Either would disappear correctly on a 401, since hiding #picker
+   removes this whole subtree with it. */
+.sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+}
+.sheet-card { width: 100%; max-width: 340px; text-align: center; }
+.sheet-tick { color: var(--accent); stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+.sheet-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 12px 0 18px; }
+.sheet-steps {
+  list-style: none;
+  counter-reset: step;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.sheet-steps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 26px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.sheet-steps li::before {
+  content: counter(step) ".";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+.sheet-go {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 22px;
+  padding: 12px;
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-weight: 700;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.sheet-note { margin-top: 10px; font-size: 9.5px; color: var(--dim); }

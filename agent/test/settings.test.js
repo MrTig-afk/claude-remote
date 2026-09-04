@@ -133,6 +133,8 @@ function makePopState(state, historyStub, showScreenSpy = () => {}, sub = null) 
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
     'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
+    // Lane 10's sheet flag, injected false - see the note in loadSubNav.
+    'sheetPushed',
     `${src}; return onPopState;`,
   );
   // The stack defaults to EMPTY: the sub-screen branch is opt-in per test, so
@@ -142,6 +144,7 @@ function makePopState(state, historyStub, showScreenSpy = () => {}, sub = null) 
     state, historyStub, () => {}, true, true, true, showScreenSpy,
     stack, () => (stack.length === 0 ? null : stack[stack.length - 1]), false,
     new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update']), () => {}, () => {},
+    false,
   );
 }
 
@@ -653,6 +656,10 @@ function loadSubNav() {
   const fn = new Function(
     'state', 'history', 'showScreen', 'renderSettings', 'renderSettingsSub',
     'SETTINGS_SUBS', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed',
+    // Lane 10's sheet flag. Injected false: its branch is the first one in
+    // onPopState and would otherwise swallow every pop in this harness, and
+    // these tests are about settings navigation, not the sheet.
+    'sheetPushed',
     `${navSrc}
 ${popSrc}
 return { openSettingsSub, closeSettingsSub, onPopState };`,
@@ -660,6 +667,7 @@ return { openSettingsSub, closeSettingsSub, onPopState };`,
   const api = fn(
     state, history, showScreen, () => {}, () => {},
     new Set(['see', 'agent', 'reset', 'about', 'update']), () => {}, false, false, true,
+    false,
   );
   return { ...api, state, shown, queued };
 }
