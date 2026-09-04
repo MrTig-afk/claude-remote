@@ -950,6 +950,50 @@ async function watchSessions() {
   }
 }
 
+// While the project list is on screen with NOTHING running, nothing in this
+// app asks the agent anything: watchSessions only runs when a session is
+// watchable, and load() only fires on boot, on a tap, and on becoming
+// visible. So switching a radio off changed the world and left the screen
+// showing a state that had stopped being true, indefinitely - owner,
+// 2026-09-04: "switching off wifi and data when in the app, it does nothing
+// and shows nothing".
+//
+// One cheap probe, slowly. GET /api/status is a single request rather than
+// load()'s four, and it escalates to a real load() only once a probe has
+// actually failed - so the healthy case costs one request every 20s to a
+// server on the same machine, and the broken case transitions properly
+// through the same path every other failure uses.
+//
+// Stops itself the moment anything else takes over: a running session (5s
+// watchSessions), a screen change, the app going to the background, or
+// reachability already being lost (waitForAgent owns the retry from there).
+const HEALTH_GAP_MS = 20_000;
+let healthWatching = false;
+
+async function watchHealth() {
+  if (healthWatching) return;
+  const live = () => document.visibilityState === 'visible'
+    && state.screen === 'list'
+    && state.reachable === true
+    && !anyWatchable();
+  if (!live()) return;
+  healthWatching = true;
+  try {
+    while (live()) {
+      await sleep(HEALTH_GAP_MS);
+      if (!live()) return;
+      const st = await getStatus();
+      if (st.ok) continue;
+      // Only the two codes that mean the agent said nothing at all. An agent
+      // ANSWERING with a refusal is not a reachability problem and must not
+      // blank the list behind a "can't reach your PC".
+      if (st.code === 'network' || st.code === 'timeout') { await load(); return; }
+    }
+  } finally {
+    healthWatching = false;
+  }
+}
+
 // Gaps between automatic retries while the agent is unreachable; the last
 // one repeats for as long as the app is open and in front. Short at first
 // because a PC that is merely finishing its boot comes back in seconds, then
@@ -1467,6 +1511,7 @@ async function load() {
   if (state.reachable === true) maybeFailedBanner();
   confirmStarting();
   watchSessions();
+  watchHealth();
 }
 
 async function onProjectTap(e) {

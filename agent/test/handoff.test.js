@@ -352,3 +352,34 @@ test('every screen title is sentence case, as the Artifact draws them', () => {
     assert.notEqual(t, t.toUpperCase(), `"${t}" is shouted, not a title`);
   }
 });
+
+test('an idle project list keeps checking the agent is still there', () => {
+  // RED WHEN: nothing polls while the list is up with nothing running - which
+  // is what shipped. watchSessions only runs when a session is watchable, and
+  // load() only fires on boot, on a tap, and on becoming visible. Switching a
+  // radio off therefore changed nothing on screen, for as long as the app
+  // stayed open (owner, 2026-09-04).
+  const app = read('app.js');
+  assert.match(app, /async function watchHealth\(\)/);
+  assert.match(app, /watchHealth\(\);/, 'load() must start it');
+
+  const fn = app.slice(app.indexOf('async function watchHealth()'), app.indexOf('// Gaps between automatic retries'));
+  // One cheap probe, not load()'s four requests, until something actually fails.
+  assert.match(fn, /getStatus\(\)/);
+  assert.doesNotMatch(codeOnly(fn), /await load\(\);[\s\S]*await load\(\)/, 'one escalation, not a loop of them');
+  // It must yield to everything that owns the connection more directly.
+  assert.match(fn, /document\.visibilityState === 'visible'/);
+  assert.match(fn, /state\.screen === 'list'/);
+  assert.match(fn, /!anyWatchable\(\)/, 'a running session is watchSessions\' job, at 5s');
+  assert.match(fn, /state\.reachable === true/, 'once it is lost, waitForAgent owns the retry');
+  // Re-entry guard, same shape as watching/waiting.
+  assert.match(fn, /if \(healthWatching\) return;/);
+});
+
+test('the idle probe only treats silence as unreachable', () => {
+  // An agent ANSWERING with a refusal is not a reachability problem, and must
+  // not blank the list behind "can't reach your PC".
+  const app = read('app.js');
+  const fn = app.slice(app.indexOf('async function watchHealth()'), app.indexOf('// Gaps between automatic retries'));
+  assert.match(fn, /st\.code === 'network' \|\| st\.code === 'timeout'/);
+});
