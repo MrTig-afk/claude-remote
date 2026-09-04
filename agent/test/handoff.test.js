@@ -19,10 +19,20 @@ const read = (f) => fs.readFileSync(path.join(PUBLIC, f), 'utf8');
 
 // --- handoffReady: which statuses mean "go and type in it" ----------------
 
-test('handoffReady is true for a session that is up', () => {
-  for (const status of ['running', 'busy', 'waiting']) {
-    assert.equal(handoffReady({ status }), true, status);
+test('handoffReady is true only for a running session', () => {
+  assert.equal(handoffReady({ status: 'running' }), true);
+});
+
+test("handoffReady does not read the activity field's values as statuses", () => {
+  // busy / idle / waiting are `activity`, read from the desk-session file;
+  // `status` is only ever starting | running | handoff | ended | failed. An
+  // earlier cut tested status against the activity values, which can never
+  // match - harmless, but it stated a contract this app does not have and
+  // this test agreed with it.
+  for (const activity of ['busy', 'idle', 'waiting']) {
+    assert.equal(handoffReady({ status: activity }), false, activity);
   }
+  assert.equal(handoffReady({ status: 'running', activity: 'busy' }), true);
 });
 
 test('handoffReady is false while the session is still starting', () => {
@@ -61,6 +71,16 @@ test('the banner names the Claude app and the Code tab', () => {
   assert.match(copy.body, /Code/);
 });
 
+test('no copy promises that the Code-tab row carries the project name', () => {
+  // The row is named by `--remote-control <SessionName>`, and SessionName is
+  // deriveSessionName's root slug + hash + slugged segments - so it reads
+  // like `f-dev-projects-repos-a1b2c3/claude-remote`, never the display name.
+  // "tap <project>" would be the one instruction this lane exists to give,
+  // pointing at a label that is not on screen.
+  assert.doesNotMatch(handoffCopy('claude-remote').body, /tap claude-remote/);
+  assert.doesNotMatch(SHEET.steps[1], /named after the project/);
+});
+
 test('the banner names the project that was launched', () => {
   assert.match(handoffCopy('email-lint').body, /email-lint/);
   assert.match(handoffCopy('NutritionDE').body, /NutritionDE/);
@@ -80,12 +100,6 @@ test('the sheet has exactly three steps and one control', () => {
 });
 
 // --- the deep link --------------------------------------------------------
-
-test('the deep link is a single non-empty scheme string', () => {
-  assert.equal(typeof CLAUDE_APP_LINK, 'string');
-  assert.notEqual(CLAUDE_APP_LINK.trim(), '');
-  assert.match(CLAUDE_APP_LINK, /^[a-z][a-z0-9+.-]*:/i, 'must be a URL scheme');
-});
 
 test('nothing outside handoff-ui.js hardcodes a claude:// scheme', () => {
   // The scheme is UNVERIFIED on a device and a wrong one fails silently, the

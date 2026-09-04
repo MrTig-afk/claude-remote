@@ -37,30 +37,25 @@
 export const CLAUDE_APP_LINK = 'claude://';
 
 /**
- * Statuses that mean "the session is up and you can go and type in it".
- *
- * Deliberately an allow-list, not `!== 'starting'`. The statuses this app can
- * see are starting, running, busy, waiting, handoff, ended and failed; only
- * three of them mean the thing the banner promises. A deny-list would send
- * someone to the Claude app to look for a session that had already failed or
- * was in the middle of being torn down, which is a worse failure than saying
- * nothing - they would go, find nothing, and distrust the app afterwards.
- */
-const LIVE = new Set(['running', 'busy', 'waiting']);
-
-/**
  * Should the hand-off banner be on screen?
  *
  * `session` is the registry entry for the project this device just launched,
  * or null/undefined while the launch has not landed yet.
  *
- * FALSE while the answer is not yet known - no entry, or still `starting`.
- * The "start requested" banner is already covering that window and is the
- * better message for it: the session genuinely is not there to open.
+ * `running` is the ONLY status that means "up, and there to be opened". The
+ * whole set is starting | running | handoff | ended | failed - `busy`,
+ * `idle` and `waiting` are the separate `activity` field (registry.js reads
+ * them from the desk-session file), so testing status against them can never
+ * match and would state a contract this app does not have. An earlier cut of
+ * this function did exactly that.
+ *
+ * Everything else is correctly false: `starting` is covered by the "start
+ * requested" banner, and `handoff`/`ended`/`failed` would send someone to
+ * look for a session that is gone - worse than saying nothing, because they
+ * go, find nothing, and stop trusting what the app tells them.
  */
 export function handoffReady(session) {
-  if (session === null || session === undefined) return false;
-  return LIVE.has(session.status);
+  return session?.status === 'running';
 }
 
 /**
@@ -75,11 +70,22 @@ export function handoffReady(session) {
  * tab moves, this copy goes stale and has to be edited. That is a cheap edit
  * and a real instruction beats a vague one that never goes stale because it
  * never said anything.
+ *
+ * DOES NOT PROMISE A ROW LABEL, and that is deliberate. The Artifact draws
+ * "tap <project> to start typing", but the Code-tab row is named by
+ * `--remote-control <SessionName>` (launch-session.ps1), and SessionName is
+ * deriveSessionName's root slug + hash + slugged segments - so the row reads
+ * something like `f-dev-projects-repos-a1b2c3/claude-remote`, never the
+ * display name. Telling someone to tap a label that is not there would break
+ * the one instruction this whole lane exists to give. "Pick the session for
+ * X" is true however the row is labelled. Making the row itself readable is
+ * a product change to the launch arguments, not a copy fix - raised with the
+ * owner, not decided here.
  */
 export function handoffCopy(project) {
   return {
     title: 'Ready in the Claude app.',
-    body: `Open Claude → Code, and tap ${project} to start typing.`,
+    body: `Open Claude → Code, then pick the session for ${project}.`,
     button: 'OPEN THE CLAUDE APP',
   };
 }
@@ -113,7 +119,10 @@ export const SHEET = {
   title: 'It is running on your PC',
   steps: [
     'This app starts sessions. It does not show them.',
-    'Open the Claude app, go to Code, and your session is the row named after the project.',
+    // Same correction as handoffCopy: the Code-tab row carries the derived
+    // session name, not the project's display name, so "the row named after
+    // the project" was not true.
+    'Open the Claude app and go to Code. Your session is waiting there.',
     'Come back here to stop it, or to start another one.',
   ],
   button: 'GOT IT',

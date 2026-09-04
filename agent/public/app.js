@@ -636,10 +636,15 @@ function markSheetSeen() {
 // instead of leaving the app.
 let sheetPushed = false;
 
-function maybeShowSheet() {
-  if (sheetSeen()) return;
+/**
+ * Show it because the owner asked (Settings > About), regardless of whether
+ * it has been seen. Split from maybeShowSheet so that guard stays strict:
+ * "once per device, automatically" and "whenever you go looking for it" are
+ * different questions and only one of them consults the flag.
+ */
+function showSheet() {
   const el = document.getElementById('handoff-sheet');
-  if (!el.hidden) return;            // already open; a second launch must not stack it
+  if (!el.hidden) return;            // already open; a second call must not stack it
 
   el.hidden = false;
   document.getElementById('sheet-title').textContent = SHEET.title;
@@ -660,11 +665,29 @@ function maybeShowSheet() {
 
   history.pushState({ handoffSheet: true }, '');   // Android back = GOT IT
   sheetPushed = true;
-  // ACCEPTED CEILING: focus moves to the one control, but the header behind
-  // the sheet stays reachable by keyboard - this is not a full focus trap.
-  // One control, one exit, and the sheet is shown once per device; a trap is
-  // more machinery than the surface earns.
+  // The sheet is viewport-fixed and covers the header, so nothing behind it
+  // can be TAPPED. `inert` is what stops it being reached by keyboard as
+  // well - without it the gear is still focusable, and opening Settings from
+  // under an open modal pushes a history entry above the sheet's and desyncs
+  // the back stack.
+  document.querySelector('.hdr').inert = true;
   document.getElementById('sheet-go').focus();
+}
+
+/**
+ * The automatic showing: once per device, and only over the project list.
+ *
+ * The screen guard is load-bearing. clearSettledLaunchBanner is driven by
+ * confirmStarting and watchSessions, which keep polling whatever screen is
+ * showing - so tapping a project and then opening Settings before the launch
+ * lands would un-hide the sheet behind Settings, mark it seen, and push a
+ * history entry under the owner. The one piece of onboarding R2 exists for
+ * would be consumed without ever being rendered, and never shown again.
+ */
+function maybeShowSheet() {
+  if (sheetSeen()) return;
+  if (state.screen !== 'list') return;
+  showSheet();
 }
 
 // Count first, mutate after. The flag must go false BEFORE back() is issued,
@@ -673,9 +696,17 @@ function maybeShowSheet() {
 // confirm and drill flags for the same reason.
 function closeSheet() {
   const el = document.getElementById('handoff-sheet');
-  if (el.hidden) return;
+  if (el.hidden) return;    // guards a double tap: hidden first, so no second back()
   el.hidden = true;
-  if (sheetPushed) { sheetPushed = false; history.back(); }
+  document.querySelector('.hdr').inert = false;
+  // The flag is deliberately NOT cleared here - the popstate branch owns it.
+  // Clearing it first (the shape confirmPushed uses) works on the project
+  // list because the fall-through is a no-op there. It is NOT a no-op in
+  // Settings: once the About row can open this sheet, a pop that misses the
+  // sheet branch is read by the settings branch and pops a settings screen
+  // the owner never asked to leave. Hiding first is what makes the double-tap
+  // guard above sufficient without it.
+  if (sheetPushed) history.back();
 }
 
 // Drops the launch banner as soon as the session it names stops being
@@ -1606,11 +1637,19 @@ function goHome() {
   // app's own entries come off in one guarded traversal, the same discipline
   // finishFolders uses: state is mutated and rendered synchronously first, so
   // a double tap finds nothing left to pop.
-  const n = (confirmPushed ? 1 : 0) + (folderPushed ? 1 : 0);
+  // sheetPushed counted too: the sheet's entry sits ABOVE the folder's when a
+  // launch inside a drill-in opens it, so leaving it out popped the sheet's
+  // entry and orphaned the folder's, making the next back press a dead one.
+  const n = (confirmPushed ? 1 : 0) + (folderPushed ? 1 : 0) + (sheetPushed ? 1 : 0);
   state.confirmName = null;
   state.openFolder = null;
   confirmPushed = false;
   folderPushed = false;
+  if (sheetPushed) {
+    sheetPushed = false;
+    document.getElementById('handoff-sheet').hidden = true;
+    document.querySelector('.hdr').inert = false;
+  }
   render();
   if (n > 0) history.go(-n);
 }
@@ -1640,6 +1679,7 @@ function onPopState() {
   if (sheetPushed) {
     sheetPushed = false;
     document.getElementById('handoff-sheet').hidden = true;
+    document.querySelector('.hdr').inert = false;
     return;
   }
   // Settings' entry is ALWAYS the top one while Settings is on screen:
@@ -2600,6 +2640,12 @@ function renderAbout() {
   rows.push({
     id: 'see', icon: 'i-eye', name: 'What this app can see', state: '', enterable: true,
   });
+  // Lane 10 / R2. The once-only sheet's own last line says "Always in
+  // Settings > About", so this row is what makes that sentence true rather
+  // than a promise the app breaks the first time someone goes looking.
+  rows.push({
+    id: 'howto', icon: 'i-info', name: 'How this works', state: 'the two-app flow', enterable: true,
+  });
   for (const row of rows) listEl.appendChild(buildSettingsRow(row));
 }
 
@@ -3416,6 +3462,9 @@ function wireEvents() {
     if (!row) return;
     const id = row.dataset.settings;
     if (id === 'lock') { lockNow(); return; }
+    // Not a sub-screen: R2's sheet is an overlay, so it opens ON TOP of About
+    // and GOT IT drops the owner back there rather than anywhere new.
+    if (id === 'howto') { showSheet(); return; }
     if (SETTINGS_SUBS.has(id)) {
       openSettingsSub(id);
       // Fetched on open, not on boot: this is the only screen that reads it.

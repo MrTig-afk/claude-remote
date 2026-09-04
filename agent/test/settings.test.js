@@ -252,6 +252,10 @@ function loadGoHome({
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'finishFolders', 'closeSettings',
     'settingsSubs', 'closingSub', 'settingsPushed', 'showScreen',
+    // Lane 10's sheet flag, injected false. Its branch touches the DOM, which
+    // this harness does not have - and the sheet cannot be open here anyway,
+    // since it covers the header the home control lives in.
+    'sheetPushed',
     `${src}; return goHome;`,
   );
   const goHome = fn(
@@ -266,6 +270,7 @@ function loadGoHome({
     false,
     settingsPushed,
     (name) => { calls.showScreen.push(name); },
+    false,
   );
   return {
     goHome, state, calls,

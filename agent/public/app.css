@@ -615,12 +615,7 @@ body {
 /* #picker must reproduce the flex column .app used to own directly, or
    .spacer stops pushing the footer down. It must NOT be position:relative -
    .newproj is absolutely positioned against .app. */
-/* `position: relative` is Lane 10's, not layout's: it makes #picker the
-   containing block for .sheet, so the once-only hand-off sheet covers the
-   project list and NOT the header above it - which is what the Artifact
-   draws (the mark and name stay visible behind it). Without this the sheet
-   resolves against the 430px app wrapper and swallows the header too. */
-#picker { display: flex; flex-direction: column; flex-grow: 1; position: relative; }
+#picker { display: flex; flex-direction: column; flex-grow: 1; }
 
 #settings { display: flex; flex-direction: column; flex-grow: 1; }
 
@@ -929,7 +924,7 @@ body {
 }
 .pin:focus { border-color: var(--edge); outline: none; }
 
-.gate-go, .accept-go, .share-save {
+.gate-go, .accept-go, .share-save, .sheet-go, .handoff-go {
   width: 100%;
   min-height: 44px;
   padding: 12px;
@@ -1269,32 +1264,34 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 /* R1. Sits directly under #banner and shares its horizontal margin so the two
    read as one block rather than two stacked cards. Accent-bordered because it
    is the one control on this screen that leaves the app - it is not competing
-   with STOP, which is the only danger-coloured thing here. */
+   with STOP, which is the only danger-coloured thing here.
+   Everything else (44px tap band, padding, type, radius) comes from the
+   shared button rule above. */
 .handoff-go {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   margin: 8px 12px 0;
-  min-height: 44px;      /* tap target; matches .gate-go and .accept-go */
-  padding: 12px;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--accent);
-  border: 1px solid var(--accent-2);
-  border-radius: 4px;
+  border-color: var(--accent-2);
   text-decoration: none;
-  -webkit-tap-highlight-color: transparent;
 }
-.handoff-go .ico { width: 14px; height: 14px; flex: 0 0 auto; }
+.handoff-go .ico { width: 14px; height: 14px; }
 
-/* R2. Covers the project list it is explaining, stopping under the header -
-   #picker is the containing block (see its rule above). Absolute rather than
-   fixed so it is bounded by the picker; a fixed sheet would cover the header
-   as well. Either would disappear correctly on a 401, since hiding #picker
-   removes this whole subtree with it. */
+/* R2. FIXED, not absolute. It was absolute inside #picker so the header
+   stayed visible, as the Artifact's frame draws it - but #picker is
+   flex-grow inside a min-height:100dvh column, so with enough projects it is
+   the full SCROLL height of the document. `inset: 0` then sized the sheet to
+   that and `align-items: center` put the card at the midpoint of the whole
+   list: on a 390x844 phone with ~20 projects the user saw a full-bleed wash
+   with no card in it. Viewport-fixed is the only version that is correct at
+   every list length.
+   Two things fall out of that and both are wanted: the sheet covers the
+   header, so the gear cannot be tapped to push a history entry above the
+   sheet's (which desynced the back stack), and #picker no longer needs to be
+   a containing block - its own rule says it must not be one. */
 .sheet {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 5;
   background: var(--bg);
@@ -1304,7 +1301,9 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   padding: 24px 16px;
 }
 .sheet-card { width: 100%; max-width: 340px; text-align: center; }
-.sheet-tick { color: var(--accent); stroke: currentColor; fill: none; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+/* .ico carries stroke/fill/linecap/linejoin; only the colour and a heavier
+   stroke are this glyph's own. */
+.sheet-tick { color: var(--accent); stroke-width: 2.5; }
 .sheet-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 12px 0 18px; }
 .sheet-steps {
   list-style: none;
@@ -1332,21 +1331,14 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   color: var(--accent);
   font-weight: 600;
 }
+/* The one filled button in the app: this sheet's only exit, so it should not
+   look like the outlined secondary controls everywhere else. The rest comes
+   from the shared button rule above. */
 .sheet-go {
-  width: 100%;
-  min-height: 44px;
   margin-top: 22px;
-  padding: 12px;
-  font: inherit;
-  font-size: 11px;
-  letter-spacing: 0.08em;
   color: var(--accent-ink);
   background: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: 4px;
+  border-color: var(--accent);
   font-weight: 700;
-  appearance: none;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
 }
 .sheet-note { margin-top: 10px; font-size: 9.5px; color: var(--dim); }
