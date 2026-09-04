@@ -113,17 +113,6 @@ export const NOTHING_SHARED = {
 };
 
 /**
- * R4 (Lane 13). The phone has no network at all - a DIFFERENT failure from
- * "the PC has not answered", and the app must not confuse them. The shipped
- * app had one story for both, and when the phone is the one that is offline
- * that story sends someone to go and physically check a machine that is
- * fine.
- *
- * Tailscale is named because on this setup it is the most common cause: the
- * phone has signal, the tailnet is simply not up. "Check your connection" on
- * its own would leave someone staring at a full signal bar.
- */
-/**
  * The COMMON failure, and the honest one.
  *
  * The app cannot tell "this phone has no route" from "that PC is asleep".
@@ -143,6 +132,17 @@ export const CANNOT_REACH = {
   body: 'It may still be waking up. If it has been a while, check this phone’s connection and that Tailscale is on.',
 };
 
+/**
+ * R4 (Lane 13). The DEFINITIVE case: the device says it has no network at
+ * all. Rare, and worth its own words when it happens, because it is the one
+ * time the app can honestly say the PC is fine.
+ *
+ * Rarer than it looks, and that is the point of CANNOT_REACH above. Tailscale
+ * is a VPN client and keeps an interface up, so the browser answers "yes,
+ * there is a connection" with both radios off - measured on the owner's phone
+ * 2026-09-04. This screen shows only when navigator.onLine is FALSE, which is
+ * the one answer it is trustworthy for.
+ */
 export const PHONE_OFFLINE = {
   title: 'This phone is offline.',
   body: 'Nothing is wrong with your PC. Check your connection, then check Tailscale is on.',

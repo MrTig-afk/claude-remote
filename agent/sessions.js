@@ -615,11 +615,13 @@ export function remoteControlName(targetPath, paths) {
 function allProjectPaths(roots) {
   const out = [];
   for (const p of listProjects(roots)) {
-    if (Array.isArray(p.children) && p.children.length > 0) {
-      for (const c of p.children) out.push(c.path);
-    } else {
-      out.push(p.path);
-    }
+    // The container's OWN path as well as its children's: a container is
+    // launchable through the API in its own right, so leaving it out meant a
+    // top-level `Vercel` and a `Pull Requests/Vercel` saw no collision
+    // between them and both produced a bare `Vercel` row - the duplicate this
+    // function exists to prevent.
+    out.push(p.path);
+    for (const c of (p.children || [])) out.push(c.path);
   }
   return out;
 }

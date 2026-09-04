@@ -15,7 +15,7 @@ import {
   rootEditRows, excludesFrom, withRootExcludes, orphanWarning,
 } from './folders-ui.js';
 import {
-  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState, shellStale,
+  updateAvailable, releaseOf, releaseLines, readyLine, fallbackReadyLine, aboutRowState, updateWaiting,
 } from './update-ui.js';
 import {
   CLAUDE_APP_LINK, handoffReady, handoffCopy, SHEET_SEEN_KEY, SHEET,
@@ -704,13 +704,28 @@ function maybeShowSheet() {
 
 /**
  * Put the sheet away without touching history - for the paths that are not a
- * dismissal: the app re-locking under it. The entry is left on the stack and
- * disowned, which the popstate branch above tolerates by checking that the
- * sheet is actually open.
+ * dismissal: the app re-locking under it.
+ *
+ * Its history entry is left on the stack and disowned, so the owner's next
+ * back press is absorbed doing nothing. That is the accepted cost of not
+ * issuing a traversal from inside an auth failure, where the screen is being
+ * replaced under us anyway. It is NOT covered by a visibility check in
+ * onPopState - that check was tried and removed in the same review, because
+ * it broke GOT IT.
  */
-function closeSheetHard() {
+/**
+ * Put the sheet away. Does NOT touch sheetPushed - who owns that entry
+ * differs by path, and getting it wrong is how About gets popped out from
+ * under the owner.
+ */
+function hideSheet() {
   document.getElementById('handoff-sheet').hidden = true;
   document.querySelector('.hdr').inert = false;
+}
+
+/** ...and disown its history entry too, for the paths that issue no pop. */
+function closeSheetHard() {
+  hideSheet();
   sheetPushed = false;
 }
 
@@ -719,10 +734,13 @@ function closeSheetHard() {
 // it afterwards lets the pop take a second entry with it. Same shape as the
 // confirm and drill flags for the same reason.
 function closeSheet() {
-  const el = document.getElementById('handoff-sheet');
-  if (el.hidden) return;    // guards a double tap: hidden first, so no second back()
-  el.hidden = true;
-  document.querySelector('.hdr').inert = false;
+  if (document.getElementById('handoff-sheet').hidden) return;   // double-tap guard
+  // hideSheet, NOT closeSheetHard: the flag must survive until the pop this
+  // issues actually lands, or onPopState misses the sheet branch and the
+  // SETTINGS branch reads it instead - popping About out from under the
+  // owner. A ponytail pass folded these two together and reintroduced exactly
+  // that; the browser caught it, the suite did not.
+  hideSheet();
   // The flag is deliberately NOT cleared here - the popstate branch owns it.
   // Clearing it first (the shape confirmPushed uses) works on the project
   // list because the fall-through is a no-op there. It is NOT a no-op in
@@ -947,6 +965,10 @@ async function watchSessions() {
     }
   } finally {
     watching = false;
+    // The list is idle again the moment the last session goes, and nothing
+    // else would start the slow probe: watchHealth is only called from
+    // load(), and load() does not run when a session simply ends at the desk.
+    watchHealth();
   }
 }
 
@@ -987,7 +1009,17 @@ async function watchHealth() {
       // Only the two codes that mean the agent said nothing at all. An agent
       // ANSWERING with a refusal is not a reachability problem and must not
       // blank the list behind a "can't reach your PC".
-      if (st.code === 'network' || st.code === 'timeout') { await load(); return; }
+      if (st.code === 'network' || st.code === 'timeout') {
+        // The flag goes down BEFORE the escalation, or load()'s own
+        // watchHealth() call hits the re-entry guard and no-ops - and then
+        // this return unwinds with nothing watching. One recovered blip
+        // (wifi drops for a single probe, comes back before load lands) would
+        // leave the list idle and unwatched for good, which is the exact bug
+        // this loop exists to fix.
+        healthWatching = false;
+        await load();
+        return;
+      }
     }
   } finally {
     healthWatching = false;
@@ -1751,11 +1783,7 @@ function goHome() {
   state.openFolder = null;
   confirmPushed = false;
   folderPushed = false;
-  if (sheetPushed) {
-    sheetPushed = false;
-    document.getElementById('handoff-sheet').hidden = true;
-    document.querySelector('.hdr').inert = false;
-  }
+  if (sheetPushed) closeSheetHard();
   render();
   if (n > 0) history.go(-n);
 }
@@ -1791,9 +1819,7 @@ function onPopState() {
   // And while the sheet is up it covers the viewport with the header inert,
   // so no other control can push an entry above its own.
   if (sheetPushed) {
-    sheetPushed = false;
-    document.getElementById('handoff-sheet').hidden = true;
-    document.querySelector('.hdr').inert = false;
+    closeSheetHard();
     return;
   }
   // Settings' entry is ALWAYS the top one while Settings is on screen:
@@ -2745,7 +2771,7 @@ function renderAbout() {
   // Lane 5: the ONE row on this screen that carries a dot, so the news stands
   // out against plain rows. Absent entirely when there is nothing waiting -
   // a row saying "you are up to date" is a row that is never worth a tap.
-  if (shellStale(state.shellStale, SHELL_VERSION, state.status)) {
+  if (updateWaiting(state.shellStale, SHELL_VERSION, state.status)) {
     rows.push({
       id: 'update', icon: 'i-dl', name: aboutRowState(SHELL_VERSION, state.status, state.shellStale).text,
       state: 'see what changed', enterable: true, dot: true, accent: true,
@@ -2769,7 +2795,7 @@ function renderAbout() {
   // exposes no API whatsoever, so the row states the gesture instead of
   // pretending to perform it - nothing to tap and have nothing happen.
   // Gone entirely once installed, or once the dialog has been declined.
-  if (!isInstalled() && !installDeclined) {
+  if (!isInstalled() && !installPromptUsed) {
     rows.push({
       id: 'install', icon: 'i-dl', name: 'Add to home screen',
       state: installPrompt ? 'opens like an app' : 'Share, then Add to Home Screen',
@@ -2789,7 +2815,7 @@ function renderAbout() {
 // ---------------------------------------------------------------------------
 
 function renderUpdateDot() {
-  document.getElementById('update-dot').hidden = !shellStale(state.shellStale, SHELL_VERSION, state.status);
+  document.getElementById('update-dot').hidden = !updateWaiting(state.shellStale, SHELL_VERSION, state.status);
 }
 
 function renderUpdate() {
@@ -2801,7 +2827,7 @@ function renderUpdate() {
   // drawing an empty "What changed" list under a confident heading.
   document.getElementById('update-ready').textContent = release
     ? readyLine(release, SHELL_VERSION)
-    : `Version ${state.status && state.status.version} is ready. You are on ${SHELL_VERSION}.`;
+    : fallbackReadyLine(state.status, SHELL_VERSION);
 
   for (const line of releaseLines(release ? release.notes : [])) {
     const row = document.createElement('div');
@@ -3705,12 +3731,13 @@ function wireEvents() {
 // means "tell them how", not "something failed".
 let installPrompt = null;
 
-// Set once the owner has opened the dialog and declined. The row is dropped
-// for the rest of the session rather than falling back to the other
-// platform's copy - Chromium will not re-raise a consumed event, and telling
-// a Chrome user to "Share, then Add to Home Screen" is an instruction for a
-// gesture their browser does not have.
-let installDeclined = false;
+// Set once the dialog has been raised, WHATEVER the answer. Chromium will not
+// re-raise a consumed event, so after one showing the row can do nothing
+// useful either way - and re-rendering it would fall back to the other
+// platform's copy, telling a Chrome user to "Share, then Add to Home Screen",
+// a gesture their browser does not have. Accepting is the case that made this
+// obvious: isInstalled() is still false in the tab that raised the dialog.
+let installPromptUsed = false;
 
 // REGISTERED AT MODULE SCOPE, not in wireEvents(). wireEvents runs after
 // `await unlocked`, and the gate does not resolve until six digits have been
@@ -3746,13 +3773,11 @@ async function runInstall() {
   const prompt = installPrompt;
   if (!prompt) return;
   installPrompt = null;          // single-use: Chromium will not re-raise it
+  installPromptUsed = true;      // ...so the row is spent too, accepted or not
   try {
     await prompt.prompt();
-    const choice = await prompt.userChoice;
-    if (!choice || choice.outcome !== 'accepted') installDeclined = true;
-  } catch {
-    installDeclined = true;      // dismissed, or the event was already spent
-  }
+    await prompt.userChoice;
+  } catch { /* dismissed, or the event was already spent */ }
   renderAbout();
 }
 
@@ -3794,12 +3819,19 @@ function registerServiceWorker() {
   let refreshing = false;
   const hadController = navigator.serviceWorker.controller !== null;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing || !hadController) return;
+    if (refreshing) return;
+    // `hadController` guards the RELOAD only. On a genuine first visit
+    // claim() fires this event for the initial worker and reloading there
+    // would be a reload on every first run - but suppressing the DOT as well
+    // meant a page that first-installed the app could never report a new
+    // build for as long as it stayed open, which is the thing the dot was
+    // added for.
     if (Date.now() - LOADED_AT > LAUNCH_WINDOW_MS) {
       state.shellStale = true;
       renderUpdateDot();
       return;
     }
+    if (!hadController) return;
     refreshing = true;
     location.reload();
   });

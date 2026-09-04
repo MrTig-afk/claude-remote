@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import {
-  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState, shellStale,
+  updateAvailable, releaseOf, releaseLines, readyLine, fallbackReadyLine, aboutRowState, updateWaiting,
 } from '../public/update-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
@@ -145,13 +145,14 @@ function loadUpdateScreen(statusValue, shellVersion = '0.1.0', stale = false) {
   const state = { status: statusValue, shellStale: stale };
   const fn = new Function(
     'document', 'state', 'SHELL_VERSION', 'updateAvailable', 'releaseOf', 'releaseLines', 'readyLine',
-    // The content-accurate half of "is there an update": a shell that changed
-    // with no version bump behind it. REAL implementation, not a stub - which
-    // facts light the dot is the whole decision this function encodes.
-    'shellStale',
+    // The heading for "a build is ready but the agent has not said which".
+    // Reachable since the dot stopped depending on status, so the screen can
+    // be opened with the PC asleep.
+    'fallbackReadyLine',
+    'updateWaiting',
     `${src}; return { renderUpdateDot, renderUpdate };`,
   );
-  const mod = fn(doc, state, shellVersion, updateAvailable, releaseOf, releaseLines, readyLine, shellStale);
+  const mod = fn(doc, state, shellVersion, updateAvailable, releaseOf, releaseLines, readyLine, fallbackReadyLine, updateWaiting);
   return { ...mod, doc };
 }
 
@@ -201,6 +202,16 @@ test('U12 - an agent with no readable release notes still says which version is 
   s.renderUpdate();
   assert.equal(s.doc.getElementById('update-ready').textContent, 'Version 0.2.0 is ready. You are on 0.1.0.');
   assert.equal(s.doc.getElementById('update-notes').children.length, 0);
+});
+
+test('U12b - a build ready with the PC asleep does not print "Version null"', () => {
+  // Reachable since the dot stopped depending on the agent: the service
+  // worker swaps a shell in, the PC then sleeps, and the owner opens
+  // Settings > About > the update row. It used to read "Version null is
+  // ready." A build that is ready is still ready - what is unknown is which.
+  const s = loadUpdateScreen(null, '0.1.0', true);
+  s.renderUpdate();
+  assert.equal(s.doc.getElementById('update-ready').textContent, 'A newer build of 0.1.0 is ready.');
 });
 
 test('U13 - UPDATE NOW and RESET are one implementation, not two', () => {

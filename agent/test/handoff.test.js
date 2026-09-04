@@ -238,7 +238,7 @@ test('the install row is absent once the app is already installed', () => {
   assert.match(app, /function isInstalled\(\)/);
   assert.match(app, /display-mode: standalone/);
   const about = app.slice(app.indexOf('function renderAbout('), app.indexOf('function renderUpdateDot('));
-  assert.match(about, /if \(!isInstalled\(\) && !installDeclined\)/, 'renderAbout must gate the row on it');
+  assert.match(about, /if \(!isInstalled\(\) && !installPromptUsed\)/, 'renderAbout must gate the row on it');
 });
 
 test('the install row is only tappable when there is a dialog to raise', () => {
@@ -374,12 +374,54 @@ test('an idle project list keeps checking the agent is still there', () => {
   assert.match(fn, /state\.reachable === true/, 'once it is lost, waitForAgent owns the retry');
   // Re-entry guard, same shape as watching/waiting.
   assert.match(fn, /if \(healthWatching\) return;/);
-});
-
-test('the idle probe only treats silence as unreachable', () => {
   // An agent ANSWERING with a refusal is not a reachability problem, and must
   // not blank the list behind "can't reach your PC".
-  const app = read('app.js');
-  const fn = app.slice(app.indexOf('async function watchHealth()'), app.indexOf('// Gaps between automatic retries'));
   assert.match(fn, /st\.code === 'network' \|\| st\.code === 'timeout'/);
+  // The flag must go DOWN before the escalation, or load()'s own watchHealth()
+  // hits the re-entry guard and the loop unwinds with nothing watching - one
+  // recovered blip and the list is idle and unwatched for good.
+  assert.ok(
+    fn.indexOf('healthWatching = false;') < fn.indexOf('await load();'),
+    'clear the guard before escalating, or the watcher never restarts',
+  );
+});
+
+test('the last session ending hands the list back to the idle probe', () => {
+  // watchHealth is only called from load(), and load() does not run when a
+  // session simply ends at the desk - so the list went idle with nothing
+  // watching it at all.
+  const app = read('app.js');
+  const fn = app.slice(app.indexOf('async function watchSessions()'), app.indexOf('// While the project list is on screen'));
+  assert.match(fn, /finally \{[\s\S]*watchHealth\(\);[\s\S]*\}/);
+});
+
+test('closeSheet leaves the history flag for the pop it issues', () => {
+  // RED WHEN: closeSheet clears sheetPushed before its own history.back().
+  // The pop then misses the sheet branch in onPopState and is read by the
+  // SETTINGS branch instead, popping About out from under the owner.
+  //
+  // This has now been reintroduced TWICE by tidying: once by gating the
+  // popstate branch on the sheet being visible, once by folding closeSheet
+  // into closeSheetHard (which owns the flag). Both times the suite was green
+  // and the browser caught it. Hence this test.
+  const app = read('app.js');
+  // Bounded by the function's own closing brace: maybeShowSheet sits BEFORE
+  // closeSheet in the file, so slicing to it gave an empty string that passed
+  // the doesNotMatch assertions for free.
+  const start = app.indexOf('function closeSheet()');
+  const fn = codeOnly(app.slice(start, app.indexOf('\n}', start) + 2));
+  assert.match(fn, /hideSheet\(\)/, 'it hides via hideSheet, which does not touch the flag');
+  assert.doesNotMatch(fn, /closeSheetHard\(\)/, 'closeSheetHard disowns the entry - wrong for a path that pops one');
+  assert.doesNotMatch(fn, /sheetPushed = false/, 'the popstate branch owns the flag on this path');
+});
+
+test('the two teardowns differ only in who owns the history entry', () => {
+  // hideSheet is the shared half; closeSheetHard adds the disown. Written out
+  // four times before this, which is how the invariant drifted.
+  const app = read('app.js');
+  const hard = app.slice(app.indexOf('function closeSheetHard()'), app.indexOf('// Count first, mutate after'));
+  assert.match(hard, /hideSheet\(\);/);
+  assert.match(hard, /sheetPushed = false;/);
+  assert.equal((codeOnly(app).match(/\.hdr'\)\.inert = false/g) || []).length, 1,
+    'one place lifts inert, or it drifts again');
 });

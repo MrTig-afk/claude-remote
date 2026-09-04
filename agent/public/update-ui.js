@@ -74,6 +74,21 @@ export function releaseLines(notes) {
  * The one sentence at the top of the update screen: "Version 1.1 is ready.
  * You are on 1.0.0." Pure so the wording is pinned without a DOM.
  */
+/**
+ * The heading when the agent has no readable release entry - or has not
+ * answered at all.
+ *
+ * `status` can be null here since the dot stopped depending on it: a shell
+ * swapped in by the service worker lights it on its own, so the owner can
+ * reach this screen with the PC asleep. It printed "Version null is ready."
+ * A build that is ready is still ready; what is unknown is which one.
+ */
+export function fallbackReadyLine(status, shellVersion) {
+  const v = status && typeof status.version === 'string' ? status.version : null;
+  if (v === null || v === shellVersion) return `A newer build of ${shellVersion} is ready.`;
+  return `Version ${v} is ready. You are on ${shellVersion}.`;
+}
+
 export function readyLine(release, shellVersion) {
   // A build with no version change behind it: "Version 0.1.0 is ready. You
   // are on 0.1.0." is a sentence that makes the app look broken.
@@ -82,7 +97,11 @@ export function readyLine(release, shellVersion) {
 }
 
 /**
- * Is the shell this page is RUNNING older than the one now cached?
+ * Is there an update waiting - by EITHER route?
+ *
+ * Named for the question, not the field: it is called with `state.shellStale`
+ * as its first argument, and `shellStale(state.shellStale, ...)` reads like a
+ * no-op or a recursion to anyone skimming.
  *
  * `updateAvailable` above compares two VERSION strings, which only moves when
  * someone bumps a number - so a shell that changed materially with no release
@@ -98,7 +117,7 @@ export function readyLine(release, shellVersion) {
  * The two are OR-ed, not swapped: a version bump is still worth announcing in
  * its own words, and this catches everything else.
  */
-export function shellStale(stale, shellVersion, status) {
+export function updateWaiting(stale, shellVersion, status) {
   return stale === true || updateAvailable(shellVersion, status);
 }
 

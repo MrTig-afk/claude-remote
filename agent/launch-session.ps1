@@ -41,14 +41,26 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     # PWA-launched tab read "Claude Code" until this was added, verified from
     # the owner's screenshot 2026-08-27. --name is the one that reaches the
     # title (its --help: "shown in the prompt box, /resume picker, and
-    # terminal title"). The FOLDER leaf, not $SessionName: the owner wants
-    # `MingleHub`, and $SessionName is the sanitized lowercase-hyphen form.
+    # terminal title"). The FOLDER leaf, because the owner wants `MingleHub`.
+    # CORRECTED 2026-09-04: this used to add "not $SessionName, which is the
+    # sanitized lowercase-hyphen form" - true then, wrong now. $SessionName is
+    # the folder leaf too since the Code-tab row was found reading
+    # `f-dev-projects-repos-02b052.email-lint`. The two carry the same value by
+    # different routes; only the internal session name is still slugged.
     # The inner quotes are load-bearing - Start-Process joins ArgumentList
     # with spaces and adds no quoting of its own, so a project like
     # `Pull Requests` would otherwise arrive as `--name=Pull` plus a stray
     # `Requests` that claude reads as an initial prompt.
     "--name=`"$(Split-Path -Leaf $ProjectPath)`"",
-    '--remote-control', $SessionName
+    # QUOTED, for exactly the reason the --name comment above gives. Until
+    # 2026-09-04 this value was the slug (`f-dev-projects-repos-...`), which can
+    # never contain a space, so passing it bare was safe. It is now the folder
+    # LEAF - so `Pull Requests` would arrive as `--remote-control Pull` plus a
+    # stray `Requests` that claude reads as an initial prompt, and the
+    # collision form `email-lint (Work)` would lose its qualifier the same way.
+    # The node-side test asserts the ARGUMENT VALUE, so it cannot see this;
+    # only reading these two lines together can.
+    "--remote-control=`"$SessionName`""
 )
 
 # Liveness for the agent's session registry. The pid the agent's own
