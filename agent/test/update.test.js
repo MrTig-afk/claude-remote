@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import {
-  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState,
+  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState, shellStale,
 } from '../public/update-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
@@ -138,16 +138,20 @@ function fakeDocument() {
   };
 }
 
-function loadUpdateScreen(statusValue, shellVersion = '0.1.0') {
+function loadUpdateScreen(statusValue, shellVersion = '0.1.0', stale = false) {
   const js = read('app.js').replace(/\r/g, '');
   const src = js.slice(js.indexOf('function renderUpdateDot('), js.indexOf('function installUpdate('));
   const doc = fakeDocument();
-  const state = { status: statusValue };
+  const state = { status: statusValue, shellStale: stale };
   const fn = new Function(
     'document', 'state', 'SHELL_VERSION', 'updateAvailable', 'releaseOf', 'releaseLines', 'readyLine',
+    // The content-accurate half of "is there an update": a shell that changed
+    // with no version bump behind it. REAL implementation, not a stub - which
+    // facts light the dot is the whole decision this function encodes.
+    'shellStale',
     `${src}; return { renderUpdateDot, renderUpdate };`,
   );
-  const mod = fn(doc, state, shellVersion, updateAvailable, releaseOf, releaseLines, readyLine);
+  const mod = fn(doc, state, shellVersion, updateAvailable, releaseOf, releaseLines, readyLine, shellStale);
   return { ...mod, doc };
 }
 
@@ -163,6 +167,14 @@ test('U10 - the dot appears only when there is something to see', () => {
   const unknown = loadUpdateScreen(null);
   unknown.renderUpdateDot();
   assert.equal(unknown.doc.getElementById('update-dot').hidden, true, 'an unanswered agent is not an update');
+
+  // A shell that changed with NO version bump - the case the version
+  // comparison alone is blind to, and the one that actually happens between
+  // releases. The owner hit exactly this: a new build served, an identical
+  // screen, and nothing to tell him.
+  const newBuild = loadUpdateScreen(status('0.1.0'), '0.1.0', true);
+  newBuild.renderUpdateDot();
+  assert.equal(newBuild.doc.getElementById('update-dot').hidden, false, 'a new shell must light the dot');
 });
 
 test('U11 - the update screen draws the ready line and one row per note, marked', () => {

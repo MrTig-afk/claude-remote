@@ -15,7 +15,7 @@ import {
   rootEditRows, excludesFrom, withRootExcludes, orphanWarning,
 } from './folders-ui.js';
 import {
-  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState,
+  updateAvailable, releaseOf, releaseLines, readyLine, aboutRowState, shellStale,
 } from './update-ui.js';
 import {
   CLAUDE_APP_LINK, handoffReady, handoffCopy, SHEET_SEEN_KEY, SHEET,
@@ -45,6 +45,9 @@ const state = {
   // answer AND the reason was network/timeout, which is the one failure that
   // ends by itself when the PC finishes waking up. waitForAgent() owns it.
   reachable: null,
+  // True once the service worker has swapped in a shell newer than the one
+  // this page is running. Set by controllerchange, never polled.
+  shellStale: false,
   // R4. Set from navigator.onLine at the moment a request comes back with
   // nothing, never polled: a stale reading here would blame the wrong end.
   offline: false,
@@ -2691,9 +2694,9 @@ function renderAbout() {
   // Lane 5: the ONE row on this screen that carries a dot, so the news stands
   // out against plain rows. Absent entirely when there is nothing waiting -
   // a row saying "you are up to date" is a row that is never worth a tap.
-  if (updateAvailable(SHELL_VERSION, state.status)) {
+  if (shellStale(state.shellStale, SHELL_VERSION, state.status)) {
     rows.push({
-      id: 'update', icon: 'i-dl', name: `Version ${state.status.version} available`,
+      id: 'update', icon: 'i-dl', name: aboutRowState(SHELL_VERSION, state.status, state.shellStale).text,
       state: 'see what changed', enterable: true, dot: true, accent: true,
     });
   }
@@ -2735,7 +2738,7 @@ function renderAbout() {
 // ---------------------------------------------------------------------------
 
 function renderUpdateDot() {
-  document.getElementById('update-dot').hidden = !updateAvailable(SHELL_VERSION, state.status);
+  document.getElementById('update-dot').hidden = !shellStale(state.shellStale, SHELL_VERSION, state.status);
 }
 
 function renderUpdate() {
@@ -3276,7 +3279,7 @@ function buildSettingsRow({
  */
 function settingsGroups(facts) {
   const shared = sharedRowState(state.shared);
-  const about = aboutRowState(SHELL_VERSION, state.status);
+  const about = aboutRowState(SHELL_VERSION, state.status, state.shellStale);
   return [
     {
       heading: 'FOLDERS',
@@ -3529,6 +3532,9 @@ function wireEvents() {
   });
   document.getElementById('home').addEventListener('click', goHome);
   document.getElementById('settings-open').addEventListener('click', openSettings);
+  // The Settings root's own way out. closeSettings, not goHome: this leaves
+  // Settings the way its own entry came on, popping exactly one entry.
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
   // One delegated handler for the settings root AND for the row lists inside
   // sub-screens (About repeats "What this app can see"), so a row behaves the
   // same wherever it is drawn. buildSettingsRow gives an unenterable row no
@@ -3611,7 +3617,17 @@ function wireEvents() {
   document.getElementById('reset-go').addEventListener('click', resetApp);
   document.getElementById('agent-recheck').addEventListener('click', refreshAgentStatus);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') load();
+    if (document.visibilityState !== 'visible') return;
+    load();
+    // Returning to an already-open PWA is not a navigation, so the browser
+    // never re-checks sw.js on its own and a shipped change could sit
+    // undetected for days. This is the only thing that asks. It does not
+    // install anything the owner did not ask for: a new worker takes the
+    // cache, and controllerchange above turns that into the dot rather than
+    // a reload once the launch window has passed.
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistration().then((reg) => reg && reg.update()).catch(() => {});
+    }
   });
   // R4. The offline state deliberately has no retry ladder of its own - this
   // is what ends it. Only when we were actually showing the offline screen,
@@ -3689,6 +3705,12 @@ async function runInstall() {
   renderAbout();
 }
 
+// How long after load a controllerchange still counts as "this launch".
+// The worker installs within a second or two of load; ten is generous and
+// still nowhere near a session.
+const LAUNCH_WINDOW_MS = 10_000;
+const LOADED_AT = Date.now();
+
 function registerServiceWorker() {
   // .catch(() => {}) is load-bearing: over plain HTTP on a Tailscale IP the
   // origin is not a secure context, registration throws, and the app must
@@ -3706,10 +3728,27 @@ function registerServiceWorker() {
   // the other half of it: on the very first visit there is no controller, and
   // claim() fires controllerchange for that too. Reloading THEN would be a
   // reload on every first run, for no new content at all.
+  //
+  // AMENDED 2026-09-04. Reloading on EVERY controllerchange was fine while
+  // the only one that could happen was seconds after load - but nothing
+  // re-checked sw.js after that, so switching back to an already-open PWA
+  // showed yesterday's build forever with no way to notice (owner: "Its not
+  // updated in the PWA dude"). The visibilitychange handler now asks the
+  // worker to re-check, which means a controllerchange can arrive with the
+  // owner mid-session - and Lane 5 is explicit that "an update never installs
+  // itself mid-session".
+  // So: inside the launch window it still collapses the two launches into
+  // one. After it, the new shell is cached and waiting, and the app says so
+  // with the quiet dot Lane 5 chose rather than reloading underneath him.
   let refreshing = false;
   const hadController = navigator.serviceWorker.controller !== null;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (refreshing || !hadController) return;
+    if (Date.now() - LOADED_AT > LAUNCH_WINDOW_MS) {
+      state.shellStale = true;
+      renderUpdateDot();
+      return;
+    }
     refreshing = true;
     location.reload();
   });

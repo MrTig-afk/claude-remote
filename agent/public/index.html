@@ -329,7 +329,20 @@
          group headings and rows beside FOLDERS; this ships with the one
          destination that already exists. -->
     <main id="settings" hidden>
-      <div class="set-head"><div class="set-label">SETTINGS</div></div>
+      <!-- The Artifact's Lane 6 frame header is a title plus an X. The title
+           shipped as 9px var(--dim) - the palette's DISABLED colour - and the
+           X did not ship at all, so the only ways out of Settings were the
+           header mark and the Android back gesture. On an installed PWA with
+           no browser chrome that reads as a screen with no exit (owner,
+           2026-09-04: "there is no go back arrow when you click settings").
+           The sub-screens below carry the back crumb instead, which is the
+           same promise made a different way. -->
+      <div class="set-head set-head-root">
+        <div class="set-label">Settings</div>
+        <button class="set-close" id="settings-close" type="button" aria-label="Close settings">
+          <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-x"/></svg>
+        </button>
+      </div>
       <!-- Group headers and rows are both built by renderSettings from one
            table, so the artifact's grouping lives in exactly one place. It
            shipped once as a single hard-coded FOLDERS section holding one
@@ -351,7 +364,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
         </button>
-        <div class="set-label">WHAT THIS APP CAN SEE</div>
+        <div class="set-label">What this app can see</div>
       </div>
       <!-- Same four sections as the first-run accept screen, from copy.js,
            read only and with no checkbox - so the words a person agreed to
@@ -391,7 +404,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to About">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>About</span>
         </button>
-        <div class="set-label">UPDATE</div>
+        <div class="set-label">Update</div>
       </div>
       <div class="set-body">
         <div class="banner set-ready">
@@ -417,7 +430,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
         </button>
-        <div class="set-label">SHARED FOLDERS</div>
+        <div class="set-label">Shared folders</div>
       </div>
       <div class="set-body">
         <!-- Lane 4's "folder is gone" banner. Revealed by renderSharedScreen
@@ -455,7 +468,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
         </button>
-        <div class="set-label">CHANGE PASSCODE</div>
+        <div class="set-label">Change passcode</div>
       </div>
       <div class="set-body">
         <!-- Three labelled groups in the artifact's order, reusing the gate's
@@ -533,7 +546,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
         </button>
-        <div class="set-label">AGENT STATUS</div>
+        <div class="set-label">Agent status</div>
       </div>
       <div class="set-body">
         <div id="agent-facts"></div>
@@ -550,7 +563,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
         </button>
-        <div class="set-label">RESET THE APP</div>
+        <div class="set-label">Reset the app</div>
       </div>
       <div class="set-body">
         <div class="set-mid">
@@ -579,7 +592,7 @@
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
           <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
         </button>
-        <div class="set-label">ABOUT</div>
+        <div class="set-label">About</div>
       </div>
       <div class="set-body">
         <div class="set-mid">

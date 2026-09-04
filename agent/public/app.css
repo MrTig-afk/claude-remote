@@ -620,7 +620,33 @@ body {
 #settings { display: flex; flex-direction: column; flex-grow: 1; }
 
 .set-head  { padding: 12px 20px 0; }
-.set-label { font-size: 9px; letter-spacing: 0.09em; color: var(--dim); }
+/* The screen's TITLE, and it has to read as one. It shipped at 9px in
+   var(--dim) - the token the palette reserves for dim/disabled text - which
+   put the only "where am I" signal in the app in its least legible colour at
+   its smallest size. The Artifact draws it as .nm: weight 700, and sentence
+   case rather than shouted. */
+.set-label { font-size: 15px; font-weight: 700; color: var(--text); }
+
+/* The root has no back crumb - it is the top of Settings - so the X is its
+   way out, sat on the same row as the title. 44px tap floor with the padding
+   pulled back so it costs the header no height, the same trick .set-back and
+   .settings-open both use. */
+.set-head-root { display: flex; align-items: center; justify-content: space-between; }
+.set-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  margin: -12px -12px -12px 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
 
 /* Lane 7 sub-screens ------------------------------------------------------
    The crumb: 'Settings' with a back chevron, naming the screen it returns

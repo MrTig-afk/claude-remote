@@ -311,3 +311,44 @@ test('the offline empty state can actually be reached in the harness', () => {
   assert.match(harness, /'PHONE_OFFLINE',/, 'parameter list');
   assert.match(harness, /stubs\.PHONE_OFFLINE \|\| copy\.PHONE_OFFLINE/, 'call arguments');
 });
+
+// ---------------------------------------------------------------------------
+// Settings chrome. Owner-reported 2026-09-04: "there is no go back arrow when
+// you click settings, even the setting thingy is soo confusing that you need
+// to squint to see that you're in the settings page." Both were deviations
+// from Lane 6, which draws a title plus an X.
+// ---------------------------------------------------------------------------
+
+test('a screen title is a title, not the palette\'s disabled colour', () => {
+  // It shipped at 9px in var(--dim) - the token reserved for dim/disabled
+  // text - which put the only "where am I" signal in the app in its least
+  // legible colour at its smallest size.
+  const css = read('app.css');
+  const rule = css.slice(css.indexOf('.set-label {'), css.indexOf('}', css.indexOf('.set-label {')));
+  assert.doesNotMatch(rule, /var\(--dim\)/, 'a title must not be the disabled colour');
+  assert.match(rule, /font-weight: 700/);
+  const size = /font-size: (\d+)px/.exec(rule);
+  assert.ok(size && Number(size[1]) >= 14, `a title at ${size && size[1]}px is not a title`);
+});
+
+test('the Settings root has its own way out', () => {
+  // Sub-screens have the back crumb; the root had nothing but the header mark
+  // and the Android gesture - and an installed PWA has no browser chrome, so
+  // that reads as a screen with no exit.
+  const html = read('index.html');
+  const root = html.slice(html.indexOf('<main id="settings"'), html.indexOf('</main>', html.indexOf('<main id="settings"')));
+  assert.match(root, /id="settings-close"/, 'the Settings root needs a close control');
+  assert.match(root, /#i-x/, 'drawn as the X the Artifact draws');
+  assert.match(read('app.js'), /getElementById\('settings-close'\)\.addEventListener\('click', closeSettings\)/,
+    'and it leaves Settings the way its entry came on, not via goHome');
+});
+
+test('every screen title is sentence case, as the Artifact draws them', () => {
+  // "AGENT STATUS" is a section label shouting; the Artifact draws "Agent
+  // status". The two are different kinds of text and were being styled alike.
+  const html = read('index.html');
+  for (const m of html.matchAll(/class="set-label">([^<]+)</g)) {
+    const t = m[1];
+    assert.notEqual(t, t.toUpperCase(), `"${t}" is shouted, not a title`);
+  }
+});

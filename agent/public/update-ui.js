@@ -75,7 +75,31 @@ export function releaseLines(notes) {
  * You are on 1.0.0." Pure so the wording is pinned without a DOM.
  */
 export function readyLine(release, shellVersion) {
+  // A build with no version change behind it: "Version 0.1.0 is ready. You
+  // are on 0.1.0." is a sentence that makes the app look broken.
+  if (release.version === shellVersion) return `A newer build of ${shellVersion} is ready.`;
   return `Version ${release.version} is ready. You are on ${shellVersion}.`;
+}
+
+/**
+ * Is the shell this page is RUNNING older than the one now cached?
+ *
+ * `updateAvailable` above compares two VERSION strings, which only moves when
+ * someone bumps a number - so a shell that changed materially with no release
+ * behind it is invisible to it, and the owner is left looking at an identical
+ * screen with a newer build sitting behind it. That is not hypothetical; it
+ * is what happened on 2026-09-04.
+ *
+ * This is the content-accurate half. `stale` comes from the service worker
+ * actually taking over the page - which only happens when its bytes changed,
+ * and its bytes carry a hash of every shell file. No network, no polling, no
+ * version to remember: exactly what the Decided table asks for.
+ *
+ * The two are OR-ed, not swapped: a version bump is still worth announcing in
+ * its own words, and this catches everything else.
+ */
+export function shellStale(stale, shellVersion, status) {
+  return stale === true || updateAvailable(shellVersion, status);
 }
 
 /**
@@ -83,7 +107,13 @@ export function readyLine(release, shellVersion) {
  * "version 1.1 available"; with nothing waiting the row just carries the
  * version this phone is running.
  */
-export function aboutRowState(shellVersion, status) {
-  if (!updateAvailable(shellVersion, status)) return { text: shellVersion, update: false };
-  return { text: `version ${status.version} available`, update: true };
+export function aboutRowState(shellVersion, status, stale = false) {
+  if (updateAvailable(shellVersion, status)) {
+    return { text: `version ${status.version} available`, update: true };
+  }
+  // Same version, different build. Naming the version here would read
+  // "version 0.1.0 available" to someone already on 0.1.0, which is worse
+  // than saying nothing - it looks like the app cannot tell.
+  if (stale === true) return { text: 'a newer build is ready', update: true };
+  return { text: shellVersion, update: false };
 }
