@@ -130,6 +130,14 @@
         </span>
       </button>
 
+      <!-- R6. Two wrappers, and they are LAYOUT ONLY: at >=900px they are the
+           main column, above and below the sidebar's row. Below 900px both are
+           `display: contents`, so the phone's flex flow and DOM order are
+           byte-identical to before they existed. They exist because several
+           elements share the main column and grid items placed in one row
+           stack on top of each other - the sidebar's 804px row was stretching
+           the banner to fill it. -->
+      <div id="pane-top">
       <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
       <!-- Lane 10 / R1. A sibling of #banner, not a child: setBanner() clears
@@ -154,7 +162,7 @@
         </div>
       </div>
 
-      <section class="zone" aria-labelledby="runhdr-label">
+      <section class="zone" id="zone-run" aria-labelledby="runhdr-label">
         <div class="runhdr">
           <span id="runhdr-label">RUNNING</span>
           <span class="count" id="run-count">0</span>
@@ -162,7 +170,11 @@
         <div class="tiles" id="tiles"></div>
       </section>
 
-      <section class="zone">
+      </div><!-- /#pane-top -->
+
+      <!-- id is R6's: at >=900px this whole section becomes the desktop
+           sidebar. -->
+      <section class="zone" id="zone-list">
         <!-- Lane 9: with ONE shared folder this header is named after that
              folder ("All projects" told you nothing), and the list below it
              stays flat and expanded so a single-folder install looks exactly
@@ -180,11 +192,13 @@
         <span class="newproj-box">+</span>
       </button>
 
+      <div id="pane-bottom">
       <div class="spacer"></div>
       <div class="actions">
         <button class="refresh" id="refresh" type="button">REFRESH</button>
       </div>
       <footer class="footer" id="footer"></footer>
+      </div><!-- /#pane-bottom -->
 
       <!-- Lane 10 / R2. The once-only sheet, shown after the FIRST successful
            launch on this device - not during onboarding, where there is no

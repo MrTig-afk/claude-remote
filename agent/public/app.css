@@ -1342,3 +1342,70 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   font-weight: 700;
 }
 .sheet-note { margin-top: 10px; font-size: 9.5px; color: var(--dim); }
+
+/* R6. Below 900px the two layout wrappers do not exist as boxes: their
+   children are the picker's own flex items, in the same order, with the same
+   margins. Everything about the phone layout is unchanged. */
+#pane-top, #pane-bottom { display: contents; }
+
+/* ---------------------------------------------------------------------------
+   R6 (Lane 16) - the desktop layout. Two panes at >=900px, and BELOW that
+   nothing here applies: the phone layout is untouched, which is the whole
+   point of a single breakpoint.
+
+   THE RULE THAT KEEPS THIS AFFORDABLE, from the Artifact: the sidebar is the
+   phone's project list unchanged, and the main column is the phone's current
+   screen unchanged. Nothing is redesigned, so a new screen inherits desktop
+   for free by being in the main column. Break that and this becomes a second
+   app to maintain.
+
+   Column placement, not named grid areas: several elements share the main
+   column, and items placed in the same NAMED area stack on top of each other.
+   Giving them a column and letting auto-rows do the rest keeps the DOM order
+   and needs no wrapper element.
+
+   900px: two panes need ~264px of sidebar plus a main column wide enough to
+   read. Below that the split costs more than it gives, and a tablet in
+   portrait is better off with the phone layout.
+--------------------------------------------------------------------------- */
+@media (min-width: 900px) {
+  .app { max-width: 1040px; }
+
+  #picker {
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    align-content: start;
+    flex-grow: 1;
+  }
+  /* Explicit placement, not auto: the sidebar spans both rows, and letting
+     the main column auto-place put its first child in the SIDEBAR'S row -
+     which is as tall as the project list, so the banner stretched to 792px
+     and pushed everything else below the fold. */
+  #pane-top { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; }
+  #pane-bottom { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; }
+
+  /* The sidebar: one column, every row, its own scroll. A long project list
+     scrolls here instead of pushing the main column's content off screen. */
+  #zone-list {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    border-right: 1px solid var(--line);
+    padding-right: 4px;
+    overflow-y: auto;
+    max-height: calc(100dvh - 96px);
+  }
+
+  /* The banner and the hand-off share the main column's padding rather than
+     the phone's 12px gutter, or they sit hard against the divider. */
+  #banner, #handoff-go { margin-left: 20px; margin-right: 20px; }
+  #zone-run, #newproj-panel { padding-left: 8px; padding-right: 8px; }
+
+  /* Running tiles have a whole column to themselves now, so they stop being
+     a two-up grid squeezed into a phone width. */
+  .tiles { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+
+  /* The + button is fixed to the viewport and was positioned against the
+     430px column; at this width it belongs at the main column's right edge. */
+  .newproj { right: max(13px, calc(50% - 520px + 13px)); }
+}

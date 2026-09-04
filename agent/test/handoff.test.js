@@ -256,3 +256,50 @@ test('the install row is only tappable when there is a dialog to raise', () => {
   assert.match(about, /enterable: false/, 'the no-API form must not be enterable');
   assert.match(about, /Add to Home Screen/, 'and must name the platform gesture');
 });
+
+// ---------------------------------------------------------------------------
+// R6 (Lane 16) - the desktop layout. One breakpoint, and below it nothing
+// about the phone changes.
+// ---------------------------------------------------------------------------
+
+test('there is exactly one desktop breakpoint, at 900px', () => {
+  // Two panes need ~264px of sidebar plus a readable main column. Picking a
+  // single number keeps the "design it twice" cost at exactly twice.
+  const css = read('app.css');
+  const widths = (css.match(/@media \(min-width: (\d+)px\)/g) || []);
+  assert.deepEqual([...new Set(widths)], ['@media (min-width: 900px)'],
+    'a second width would mean a third layout to keep correct');
+});
+
+test('the phone layout is untouched below the breakpoint', () => {
+  // The wrappers R6 added are layout-only: outside the media query they are
+  // display:contents, so the picker's flex flow and DOM order are what they
+  // always were.
+  const css = read('app.css');
+  assert.match(css, /#pane-top, #pane-bottom \{ display: contents; \}/);
+  const desktop = css.slice(css.indexOf('@media (min-width: 900px)'));
+  assert.match(desktop, /#picker \{[^}]*display: grid/, 'the split is inside the query, never outside it');
+});
+
+test('the sidebar is the project list itself, not a second copy of it', () => {
+  // The rule that keeps this affordable: nothing is redesigned, so a new
+  // screen inherits desktop by being in the main column. A separately
+  // rendered sidebar would be a second app to keep in step.
+  const html = read('index.html');
+  assert.equal((html.match(/id="projects"/g) || []).length, 1,
+    'one list container in the markup - a desktop-only copy would be a second app');
+  assert.match(html, /<section class="zone" id="zone-list">/);
+  assert.ok(html.indexOf('id="projects"') > html.indexOf('id="zone-list"'),
+    'the list lives inside the section that becomes the sidebar');
+});
+
+test('the main column is placed explicitly, not left to auto-placement', () => {
+  // RED WHEN: the sidebar spans both rows and the main column auto-places
+  // into the sidebar's row - which is as tall as the project list, so the
+  // banner stretched to 792px and pushed the rest below the fold. Caught in
+  // the browser, not by a test.
+  const css = read('app.css');
+  const desktop = css.slice(css.indexOf('@media (min-width: 900px)'));
+  assert.match(desktop, /#pane-top \{ grid-column: 2; grid-row: 1;/);
+  assert.match(desktop, /#pane-bottom \{ grid-column: 2; grid-row: 2;/);
+});
