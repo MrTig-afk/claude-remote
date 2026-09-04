@@ -43,14 +43,14 @@ export const CLAUDE_APP_LINK = 'claude://';
  * or null/undefined while the launch has not landed yet.
  *
  * `running` is the ONLY status that means "up, and there to be opened". The
- * whole set is starting | running | handoff | ended | failed - `busy`,
+ * whole set is starting | running | ending | ended | failed - `busy`,
  * `idle` and `waiting` are the separate `activity` field (registry.js reads
  * them from the desk-session file), so testing status against them can never
  * match and would state a contract this app does not have. An earlier cut of
  * this function did exactly that.
  *
  * Everything else is correctly false: `starting` is covered by the "start
- * requested" banner, and `handoff`/`ended`/`failed` would send someone to
+ * requested" banner, and `ending`/`ended`/`failed` would send someone to
  * look for a session that is gone - worse than saying nothing, because they
  * go, find nothing, and stop trusting what the app tells them.
  */

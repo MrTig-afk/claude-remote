@@ -119,7 +119,24 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
 
   const requiredTokens = [
     'CLAUDE_CONFIG_DIR',
-    '.claude-max',
+    // NOT `.claude-max`. That entry lived here until T56 (2026-09-05) and had
+    // become actively harmful: the recipe no longer hardcodes a personal
+    // profile, so the token survived ONLY inside the comment explaining its own
+    // removal. That made this assertion (a) require the opposite of what T56
+    // established, and (b) a trap - rewording that comment turned the suite red
+    // with "real recipe should contain .claude-max", sending the reader after a
+    // regression that does not exist.
+    // What is actually required now is the CONDITIONAL, which is the whole
+    // behaviour: set the variable only when a profile was passed in.
+    'if ($ConfigDir)',
+    '$env:CLAUDE_CONFIG_DIR = $ConfigDir',
+    // The ELSE half, and it needs pinning as much as the if: Start-Process
+    // inherits this process's environment, and the owner's own shell exports
+    // CLAUDE_CONFIG_DIR (the claudemax alias / PowerShell profile). Without the
+    // clear, a launch with no configured profile silently inherits that one and
+    // can land on a workspace-trust modal nobody can answer from a phone.
+    // Review deleted this block and the whole suite stayed green - hence this.
+    'Remove-Item Env:CLAUDE_CONFIG_DIR',
     // WHOLE token, not the bare flag, for a bug that actually
     // happened: this entry was the bare flag `'--remote-control'` on
     // 2026-09-04, so changing the argument FORM stripped nothing this list

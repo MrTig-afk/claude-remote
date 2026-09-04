@@ -701,7 +701,7 @@ test('anyWatchable is true for running/handoff/starting, and the watch loop is a
   assert.ok(body, 'app.js must carry anyWatchable');
   const anyWatchable = new Function('state', `return ${body[1]};`);
   assert.equal(anyWatchable({ sessions: [{ status: 'running' }] }), true);
-  assert.equal(anyWatchable({ sessions: [{ status: 'handoff' }] }), true);
+  assert.equal(anyWatchable({ sessions: [{ status: 'ending' }] }), true);
   assert.equal(anyWatchable({ sessions: [{ status: 'starting' }] }), true, 'a cancelled launch must be polled away, not left stale');
   assert.equal(anyWatchable({ sessions: [{ status: 'failed' }] }), false);
   assert.equal(anyWatchable({ sessions: [{ status: 'ended' }] }), false);
@@ -718,90 +718,164 @@ test('anyWatchable is true for running/handoff/starting, and the watch loop is a
   );
 });
 
-test('every text input is at least 16px, or iOS zooms the page and stays zoomed', () => {
+test('app.css keeps an unqualified >=16px input floor, for the inputs that do not exist yet', () => {
   // NOT a type-scale rule - a functional one. Mobile Safari zooms the whole
   // page in when a focused text input is smaller than 16px, and does not zoom
   // back out when it loses focus. The owner hit this naming a project on
   // 2026-09-05: the panel zoomed, the header was cut off both sides, and it
-  // stayed that way afterwards. .pin was always safe at 19px, which is why
-  // only the new-project field ever showed it.
-  // Comments STRIPPED first. The rule below carries a long comment that
-  // explains the bug and names the wrong size; without this the block regex
-  // spans it and `.match(font-size)` takes the FIRST hit, which would report
-  // the number from the prose rather than the number the browser uses.
-  const css = read('app.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  // stayed that way afterwards.
+  //
+  // THIS TEST DELIBERATELY NO LONGER SWEEPS THE STYLESHEET. It used to try to
+  // answer "what size will every input render at" by parsing selectors, and
+  // that question is cascade + specificity + inheritance + media queries +
+  // `font:` shorthand - four things a regex cannot do. Three review rounds
+  // found six holes in it and two of those holes were introduced by hardening
+  // it. `scripts/check-input-font-sizes.mjs` asks the browser for the computed
+  // font-size of every input instead, which is ground truth and immune to all
+  // six. Owner's call, 2026-09-05.
+  //
+  // What is left here is the half the browser CANNOT see, and it is not a
+  // consolation prize - it is a real gap in the other check. Every input that
+  // exists today carries its own explicit size, so DELETING THE FLOOR CHANGES
+  // NOTHING THE BROWSER CAN OBSERVE (measured: dropping it to 12px leaves all
+  // seven inputs at their own 16/19px and the browser check correctly passes).
+  // The floor exists for the input nobody has added yet - one with no rule of
+  // its own, which would otherwise take the UA ~13.33px and reproduce the bug
+  // silently. That input has no computed style to read, so only a static check
+  // can defend it. The two checks are complementary, not redundant.
+  //
+  // Comments are stripped first: the rules below carry long comments that name
+  // other sizes in prose, and a declaration parser must not read those.
+  const css = read('app.css')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    // STATEMENT at-rules (`@import url("x.css");`, `@charset "utf-8";`) carry
+    // no block, so the depth scan below never sees them as a rule and they leak
+    // into the NEXT rule's selector - which then fails the bare-element test and
+    // reports a perfectly good floor as qualified. This is review's hole 1 in a
+    // new place, and it is why the strip is terminated on `;` as well as `{`:
+    // requiring a `;` before any `{` is what stops it eating a `@media (...) {`
+    // opener, which is the mistake the previous version of this test made.
+    .replace(/@[a-zA-Z-]+[^{};]*;/g, '');
 
-  // SWEEP every rule that can size an input, rather than naming the two that
-  // exist today. The bare `input, textarea, select` floor is only specificity
-  // 0-0-1, so it loses to ANY class rule regardless of source order - a future
-  // `.filter input { font-size: 12px }` would beat it, zoom the page, and pass
-  // a test that only checked the floor plus a hardcoded list. Matching on the
-  // selector rather than on an exact string also means reordering the floor's
-  // three selectors, or moving it, cannot fail this with a message sending the
-  // reader after a CSS bug that is not there.
-  // CSS alone cannot tell that `.pin` is an input - a class selector looks the
-  // same whether it sits on an <input> or a <div>. So the sweep catches every
-  // selector that NAMES an element, and this list carries the class-only rules
-  // that are known to land on one. Add to it when a new input gets a bare
-  // class; the sweep covers everything else automatically.
-  const CLASS_ONLY_INPUTS = ['.pin'];
-  // At-rule WRAPPERS removed first, not skipped. `[^}]*` happily eats a `{`, so
-  // `@media (...) { .filter input {...} ... }` used to match as one rule whose
-  // selector was the @media line and whose body swallowed the first inner rule
-  // - which was then never rescanned. The first rule inside every at-rule was
-  // invisible, and a breakpoint is the likeliest place to shrink an input.
-  // Dropping just the opening `@... {` leaves the inner rules at top level; the
-  // now-unbalanced `}` cannot match the rule pattern, so it is inert.
-  const flat = css.replace(/@[a-zA-Z-]+[^{]*\{/g, '');
-  const sized = [];
-  for (const m of flat.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-    const selector = m[1].trim().replace(/\s+/g, ' ');
-    const parts = selector.split(',').map((p) => p.trim());
-    const namesElement = /(^|[\s>+~])(input|textarea|select)\b/.test(selector.replace(/,/g, ' '));
-    // Per SELECTOR PART, not whole-string equality: `.pin:focus` and `.pin.dense`
-    // are the same element, and :focus is the state iOS actually zooms on.
-    const classOnly = CLASS_ONLY_INPUTS.some((cls) =>
-      parts.some((p) => new RegExp(`(^|[\\s>+~])\\${cls}(?![\\w-])`).test(p)));
-    if (!namesElement && !classOnly) continue;
-    // `font:` shorthand and non-px units count too. `font: 12px/1.4 monospace`
-    // sizes an input just as well as `font-size`, and rem/em/%/pt all resolve
-    // to something the browser compares against 16px. Only px is checked
-    // numerically; any other unit is reported rather than silently skipped,
-    // because this file has no business guessing a root font size.
-    const decl = m[2].match(/font(?:-size)?:\s*[^;}]*?(\d+(?:\.\d+)?)(px|rem|em|%|pt)/);
-    if (decl) sized.push({ selector, px: decl[2] === 'px' ? Number(decl[1]) : null, unit: decl[2] });
+  // TOP-LEVEL rules only, collected by brace DEPTH rather than by stripping
+  // at-rule openers with a regex. The old strip is what produced two of the six
+  // holes: it had no `;` terminator, so `@import url("x.css");` swallowed the
+  // next rule's selector, and because it deleted the `@media` opener a floor
+  // written INSIDE a breakpoint counted as unqualified - a false PASS, and
+  // strictly worse than the code it replaced. A depth counter cannot make
+  // either mistake: an `@media` block is one depth-0 entry whose "selector" is
+  // the @media line, so the conditional rules inside it are simply not
+  // top-level, which is exactly what "unqualified floor" means.
+  const topLevel = [];
+  let depth = 0;
+  let selStart = 0;
+  let selEnd = 0;
+  let bodyStart = 0;
+  for (let i = 0; i < css.length; i++) {
+    if (css[i] === '{') {
+      if (depth === 0) { selEnd = i; bodyStart = i + 1; }
+      depth++;
+    } else if (css[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        topLevel.push({
+          selector: css.slice(selStart, selEnd).trim().replace(/\s+/g, ' '),
+          body: css.slice(bodyStart, i),
+        });
+        selStart = i + 1;
+      }
+    }
   }
-  // The floor must be UNQUALIFIED. This assertion previously accepted any rule
-  // whose selector merely contained the three words, which a prior "cut a dead
-  // alternative" pass introduced: `.app input, .app textarea, .app select`
-  // satisfied it while leaving every input outside `.app` on the UA ~13.33px.
-  // The three bare element names, nothing else.
+
+  // Declarations split on `;` with the property matched as the WHOLE left-hand
+  // side. `font(?:-size)?:` used to be matched with no left boundary, so a
+  // custom property - `--card-font-size: 12px` - was read as the element's own
+  // size and beat the real declaration after it. Exact equality on the property
+  // name ends that: `--card-font-size` is not `font-size`.
+  const sizeOf = (body) => {
+    let found = null;
+    for (const decl of body.split(';')) {
+      const m = decl.match(/^\s*([a-zA-Z-]+)\s*:\s*([^]*)$/);
+      if (!m) continue;
+      const [, prop, value] = m;
+      if (prop !== 'font-size' && prop !== 'font') continue;
+      // `font: 12px/1.4 monospace` sizes an input just as well as `font-size`.
+      const hit = value.match(/(\d+(?:\.\d+)?)(px|rem|em|%|pt)/);
+      // Last one wins, as in the cascade - INCLUDING a declaration that carries
+      // no number at all. `font: inherit`, `font-size: inherit|initial|unset`
+      // and `font: menu` RESET the size, so a later one must CLEAR an earlier
+      // px value rather than leave it standing. Without this,
+      // `{ font-size: 16px; font: inherit }` read as a valid 16px floor while
+      // the browser inherited ~14px - and the browser check cannot see it
+      // either, because every input that exists carries its own >=16px rule.
+      // Both rules in this stylesheet already put `font: inherit` next to their
+      // size, so the order that triggers it is one line-swap away.
+      found = hit ? { px: hit[2] === 'px' ? Number(hit[1]) : null, unit: hit[2] } : null;
+    }
+    return found;
+  };
+
+  // The floor must be UNQUALIFIED - three bare element names, no prefix. A
+  // qualified one (`.app input, .app textarea, .app select`) leaves every input
+  // outside `.app` on the UA default, which a previous pass shipped.
+  // A SUPERSET is fine and must not be rejected: adding `button` to the list
+  // sizes strictly more elements, so requiring exactly three selectors failed a
+  // legitimate floor with a message claiming it was "qualified" - false, and it
+  // sent the reader hunting for a prefix that was not there.
+  const REQUIRED = ['input', 'select', 'textarea'];
+  // LAST match, not the first. Two floors can coexist, and at equal specificity
+  // the later one wins - so reading the first would let someone append
+  // `input, textarea, select { font-size: 12px }` below the good one and pass.
+  // That case is invisible to the browser check too (every input that exists
+  // carries its own >=16px rule), so taking the first here would have left BOTH
+  // guards green on exactly the regression this floor exists to prevent.
+  // A rule counts as a floor if its selector list contains all three BARE
+  // element names, whatever ELSE is in the list. The old version also demanded
+  // that every part be a bare element, which let
+  // `input, textarea, select, .filter { font-size: 12px }` slip past: it sizes
+  // all three elements exactly like a floor, but was not collected as one, so
+  // `.at(-1)` still returned the good 16px rule and the test passed. The
+  // browser check misses it too - every input that exists carries its own
+  // >=16px rule - so it was one more both-guards-green hole.
+  // The qualified case this test was built to reject is still rejected, and by
+  // this same line rather than by the extra one: the parts of
+  // `.app input, .app textarea, .app select` are `.app input` and friends, none
+  // of which equals `input`, so `includes` is false.
+  const floors = topLevel.filter((rule) => {
+    const parts = rule.selector.split(',').map((p) => p.trim());
+    return REQUIRED.every((el) => parts.includes(el));
+  });
+  const floor = floors.at(-1);
   assert.ok(
-    sized.some((r) => {
-      const parts = r.selector.split(',').map((p) => p.trim()).sort();
-      return parts.length === 3 && parts.join(',') === 'input,select,textarea';
-    }),
-    'app.css must set an UNQUALIFIED font-size floor on `input, textarea, select` - a qualified one (e.g. `.app input`) leaves every input outside it on the UA default',
+    floor,
+    'app.css must set a font-size floor on an UNQUALIFIED `input, textarea, select` at the top level - a qualified one (.app input) or one inside a media query leaves inputs on the UA default',
   );
-  const wrongUnit = sized.filter((r) => r.px === null);
-  assert.deepEqual(
-    wrongUnit, [],
-    `these rules size an input in a unit this test cannot compare to the 16px floor - use px: ${
-      wrongUnit.map((r) => `${r.selector} (${r.unit})`).join('; ')}`,
+  const floorSize = sizeOf(floor.body);
+  assert.ok(floorSize, `the floor rule \`${floor.selector}\` must declare a font-size`);
+  assert.equal(
+    floorSize.unit, 'px',
+    `the floor must be in px so it can be compared to the 16px threshold, got ${floorSize.unit}`,
   );
-  const tooSmall = sized.filter((r) => r.px < 16);
-  assert.deepEqual(
-    tooSmall, [],
-    `these rules size an input under 16px, which makes iOS zoom the page on focus and leave it zoomed: ${
-      tooSmall.map((r) => `${r.selector} = ${r.px}px`).join('; ')}`,
+  assert.ok(
+    floorSize.px >= 16,
+    `the floor is ${floorSize.px}px - under 16px iOS zooms the page on focus and leaves it zoomed`,
   );
-  // And the two that exist today must still declare one explicitly: both carry
+
+  // The two rules that exist today must ALSO declare their own size: both carry
   // `font: inherit`, which resets font-size and would otherwise drop them back
   // to the inherited value even with the floor present.
   for (const name of ['.newproj-panel input', '.pin']) {
+    const rule = topLevel.find((r) => r.selector === name);
+    assert.ok(rule, `expected a top-level \`${name}\` rule in app.css`);
+    const size = sizeOf(rule.body);
     assert.ok(
-      sized.some((r) => r.selector === name),
+      size,
       `${name} must set an explicit font-size - its own \`font: inherit\` resets what the floor gave it`,
+    );
+    assert.equal(size.unit, 'px', `${name} must size in px, got ${size.unit}`);
+    assert.ok(
+      size.px >= 16,
+      `${name} is ${size.px}px, under the 16px iOS zoom threshold`,
     );
   }
 });

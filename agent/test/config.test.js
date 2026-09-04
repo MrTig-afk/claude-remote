@@ -4,7 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, after } from 'node:test';
 
-import { FALLBACK_BASE_DIR, getConfigFilePath, resolveBaseDir, readConfig, resolveSharedFolders } from '../config.js';
+import {
+  FALLBACK_BASE_DIR, getConfigFilePath, resolveBaseDir, readConfig, resolveSharedFolders,
+  resolveClaudeConfigDir, getSessionDirPaths,
+} from '../config.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-config-'));
 
@@ -166,4 +169,71 @@ test('readConfig hands back the whole parsed object, acknowledged_at included', 
 test('readConfig returns {} for a top-level JSON array', () => {
   const configPath = writeConfig('read-array.json', '[]');
   assert.deepEqual(readConfig(configPath), {});
+});
+
+// --- T56: the Claude profile is a config value, absent by default -----------
+// It used to be the owner's `.claude-max`, hardcoded into launch-session.ps1,
+// so every session a stranger launched pointed at a profile directory that does
+// not exist on their machine.
+
+test('resolveClaudeConfigDir - absent config means ABSENT, not a guessed default', () => {
+  assert.equal(resolveClaudeConfigDir(writeConfig('t56-missing.json')), null);
+});
+
+test('resolveClaudeConfigDir - an empty or blank value is absent too', () => {
+  assert.equal(resolveClaudeConfigDir(writeConfig('t56-empty.json', '{"claude_config_dir":"   "}')), null);
+});
+
+test('resolveClaudeConfigDir - returns the configured absolute path', () => {
+  const want = path.join(dir, 'my-profile');
+  fs.mkdirSync(want, { recursive: true });   // must EXIST - see the typo test below
+  const configPath = writeConfig('t56-set.json', JSON.stringify({ claude_config_dir: want }));
+  assert.equal(resolveClaudeConfigDir(configPath), path.resolve(want));
+});
+
+test('resolveClaudeConfigDir - a path that does not exist is ignored, not passed on', () => {
+  // A typo is ABSOLUTE, so the absolute check alone let it through: Claude Code
+  // then created that profile from scratch, with no workspace-trust acceptance
+  // for the project, and the session stopped on a modal nobody can answer from
+  // a phone. Invisible too - getSessionDirPaths scans the same empty directory,
+  // so no session file is ever found and the tile just ages into `failed`.
+  const typo = path.join(dir, '.claude-mx-does-not-exist');
+  const configPath = writeConfig('t56-typo.json', JSON.stringify({ claude_config_dir: typo }));
+  assert.equal(resolveClaudeConfigDir(configPath), null);
+});
+
+test('resolveClaudeConfigDir - a relative path is ignored rather than resolved against cwd', () => {
+  // Resolving it would silently point sessions at a directory under whatever
+  // the agent's cwd happened to be.
+  assert.equal(resolveClaudeConfigDir(writeConfig('t56-rel.json', '{"claude_config_dir":".claude"}')), null);
+});
+
+test('getSessionDirPaths - always scans the DEFAULT ~/.claude profile', () => {
+  // The stranger's sessions land here. It was missing entirely: the agent
+  // launched into one profile and then looked for the record in two others.
+  const dirs = getSessionDirPaths(writeConfig('t56-none.json'));
+  assert.ok(
+    dirs.includes(path.join(os.homedir(), '.claude', 'sessions')),
+    `expected the default profile in ${JSON.stringify(dirs)}`,
+  );
+});
+
+test('getSessionDirPaths - a configured profile is scanned first, and never twice', () => {
+  const want = path.join(dir, 'my-profile');
+  fs.mkdirSync(want, { recursive: true });
+  const dirs = getSessionDirPaths(writeConfig('t56-first.json', JSON.stringify({ claude_config_dir: want })));
+  assert.equal(dirs[0], path.join(path.resolve(want), 'sessions'));
+  assert.equal(new Set(dirs).size, dirs.length, 'no directory may be scanned twice');
+});
+
+test('getSessionDirPaths - a corrupt config costs the configured dir, NOT the session list', () => {
+  // readSessionFiles (registry.js) documents "Never throws" and degrades to
+  // fewer records on every fault. A config it cannot parse must not be the one
+  // thing that takes the whole list down.
+  const configPath = writeConfig('t56-corrupt.json', '{ not json');
+  const dirs = getSessionDirPaths(configPath);
+  assert.ok(dirs.includes(path.join(os.homedir(), '.claude', 'sessions')));
+  // ... while the launch path still surfaces it, rather than launching into a
+  // silently wrong profile.
+  assert.throws(() => resolveClaudeConfigDir(configPath), /not valid JSON/);
 });

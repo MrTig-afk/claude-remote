@@ -179,7 +179,7 @@ function writeDeskSessionFile(regCtx, { pid, sessionId, cwd, startedAt = new Dat
 // Seeds a `handoff` registry entry directly - this state is never reached
 // through recordLaunch, so it is written raw, the same way registry.test.js
 // seeds non-default states.
-function seedHandoffEntry(regCtx, project, handoffStartedAt = new Date().toISOString()) {
+function seedHandoffEntry(regCtx, project, endingStartedAt = new Date().toISOString()) {
   const projectPath = path.resolve(base, project);
   const sessionName = deriveSessionName(projectPath, base);
   const sessions = [{
@@ -187,8 +187,8 @@ function seedHandoffEntry(regCtx, project, handoffStartedAt = new Date().toISOSt
     project,
     original_path: projectPath,
     started_at: new Date(Date.now() - 60_000).toISOString(),
-    status: 'handoff',
-    handoff_started_at: handoffStartedAt,
+    status: 'ending',
+    ending_started_at: endingStartedAt,
   }];
   fs.mkdirSync(path.dirname(regCtx.registryPath), { recursive: true });
   fs.writeFileSync(regCtx.registryPath, JSON.stringify({ version: REGISTRY_VERSION, sessions }), 'utf8');
@@ -317,7 +317,10 @@ test('resolveProjectPath - nested rejection table', () => {
 test('launchSession - nested identifier: exact args array, and the registry key keeps its slash', () => {
   const { spawner, calls } = makeFakeSpawner();
   const regCtx = makeRegCtx();
-  const r = launchSession({ baseDir: base, spawner, ...regCtx }, 'Pull Requests/Vercel');
+  // claudeConfigDir null for the same reason the flat exact-args test pins it:
+  // an unpinned ctx reads the REAL config, so this argv would depend on whether
+  // the machine running the suite has a profile configured (T56).
+  const r = launchSession({ baseDir: base, spawner, claudeConfigDir: null, ...regCtx }, 'Pull Requests/Vercel');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
     '-NoProfile',
@@ -562,7 +565,11 @@ test('launchSession - spawns powershell.exe', () => {
 test('launchSession - exact args array', () => {
   const { spawner, calls } = makeFakeSpawner();
   const regCtx = makeRegCtx();
-  launchSession({ baseDir: base, spawner, ...regCtx }, 'Video Editing');
+  // claudeConfigDir null ON PURPOSE - it is the default (no profile
+  // configured), and pinning it keeps this assertion off the real config file.
+  // Without it the expected argv would depend on whether the machine running
+  // the suite happens to have set claude_config_dir (T56).
+  launchSession({ baseDir: base, spawner, claudeConfigDir: null, ...regCtx }, 'Video Editing');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
     '-NoProfile',
@@ -573,6 +580,27 @@ test('launchSession - exact args array', () => {
     '-SessionName', 'Video Editing',   // leaf, spaces and all - the same form --name has always used
     '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(VIDEO_EDITING)),
   ]);
+});
+
+test('launchSession - no -ConfigDir at all when no profile is configured (T56)', () => {
+  // The stranger case, and the DEFAULT. An unset CLAUDE_CONFIG_DIR is what
+  // makes Claude Code choose its own profile; passing the flag with an empty
+  // value would bind it in PowerShell and defeat that.
+  const { spawner, calls } = makeFakeSpawner();
+  launchSession({ baseDir: base, spawner, claudeConfigDir: null, ...makeRegCtx() }, 'Video Editing');
+  assert.ok(
+    !calls[0].args.includes('-ConfigDir'),
+    'an absent claude_config_dir must pass no -ConfigDir switch whatsoever',
+  );
+});
+
+test('launchSession - passes -ConfigDir when a profile IS configured (T56)', () => {
+  const { spawner, calls } = makeFakeSpawner();
+  const dir = path.join(base, 'some-profile');
+  launchSession({ baseDir: base, spawner, claudeConfigDir: dir, ...makeRegCtx() }, 'Video Editing');
+  const at = calls[0].args.indexOf('-ConfigDir');
+  assert.notEqual(at, -1, 'a configured profile must reach the launcher');
+  assert.equal(calls[0].args[at + 1], dir, 'the switch must carry the configured path as its value');
 });
 
 test('remoteControlName - a unique leaf is the whole name', () => {
@@ -1379,7 +1407,33 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
     'utf8',
   );
   assert.ok(script.includes('CLAUDE_CONFIG_DIR'));
-  assert.ok(script.includes('.claude-max'));
+  // T56. This assertion used to be `script.includes('.claude-max')` - it PINNED
+  // the owner's personal profile into the launch recipe, so a stranger got every
+  // session launched against a profile directory that does not exist on their
+  // machine. The profile is now a config value and the flag is ABSENT BY
+  // DEFAULT, so the rule inverts: the recipe must carry no personal profile at
+  // all, and must set the variable only when one was passed in.
+  // Comments stripped first, for the same reason the --channels scan below
+  // strips them: the explanation necessarily names the string it forbids.
+  const noComments = script.replace(/^\s*#.*$/gm, '');
+  assert.ok(
+    !/\.claude-(max|pro)/.test(noComments),
+    'launch-session.ps1 must not hardcode a personal Claude profile - it breaks anyone who is not the owner (T56)',
+  );
+  assert.match(
+    noComments,
+    /if \(\$ConfigDir\)\s*\{\s*\$env:CLAUDE_CONFIG_DIR = \$ConfigDir\s*\}/,
+    'CLAUDE_CONFIG_DIR must be set ONLY when -ConfigDir was passed; unset is the correct default, so Claude Code picks its own profile',
+  );
+  // And the ELSE half must actively CLEAR it. "Not set" is not the same as
+  // "unset" here: Start-Process inherits this process's environment, and the
+  // owner's shell exports CLAUDE_CONFIG_DIR, so without the clear a launch with
+  // no configured profile inherits the desk's profile rather than defaulting.
+  assert.match(
+    noComments,
+    /else\s*\{\s*Remove-Item Env:CLAUDE_CONFIG_DIR/,
+    'with no -ConfigDir the launcher must CLEAR CLAUDE_CONFIG_DIR, or it inherits whatever the agent was started with',
+  );
   // --channels must NOT be passed by the PWA launcher. Measured 2026-09-05:
   // with it, a launched session renders fine and then sits on
   // `/rc connecting...` forever and never reaches the Code tab; without it,
@@ -1940,13 +1994,13 @@ test('endSession - a launch landing during the kill poll returns reused with the
 
   const endPromise = endSession(ctx, 'Video Editing');
 
-  // The claim (status: 'handoff') is written synchronously before endSession
+  // The claim (status: 'ending') is written synchronously before endSession
   // ever awaits, so a launch landing in this window - the exact race the
   // comments in sessions.js worry about - sees it immediately.
   const launchResult = launchSession(ctx, 'Video Editing');
   assert.equal(launchResult.ok, true);
   assert.equal(launchResult.reused, true);
-  assert.equal(launchResult.session.status, 'handoff');
+  assert.equal(launchResult.session.status, 'ending');
 
   const result = await endPromise;
   assert.equal(result.body.result, 'ended');
@@ -1999,7 +2053,7 @@ test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', a
     handoff_ok: true,
     handoff_result: 'written',
   };
-  const handoff = { ...ended, session_name: EMAIL_LINT, project: 'email-lint', original_path: path.join(base, 'email-lint'), status: 'handoff', handoff_started_at: ended.ended_at };
+  const handoff = { ...ended, session_name: EMAIL_LINT, project: 'email-lint', original_path: path.join(base, 'email-lint'), status: 'ending', ending_started_at: ended.ended_at };
   fs.writeFileSync(regCtx.registryPath, JSON.stringify({ version: REGISTRY_VERSION, sessions: [ended, handoff] }));
   const server = fixtureServer({ baseDir: base, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -2022,7 +2076,7 @@ test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', a
     assert.equal(res.status, 204);
 
     const left = (await (await authedFetch(regCtx, `${origin}/api/sessions`)).json()).sessions;
-    assert.deepEqual(left.map((s) => [s.session_name, s.status]), [[EMAIL_LINT, 'handoff']]);
+    assert.deepEqual(left.map((s) => [s.session_name, s.status]), [[EMAIL_LINT, 'ending']]);
   } finally {
     server.close();
   }
@@ -2097,7 +2151,7 @@ test('endSession - desk session: the handoff registry entry is on disk BEFORE th
   assert.ok(registryAtKillTime, 'the kill spawner must have been called');
   assert.equal(registryAtKillTime.sessions.length, 1, 'the handoff entry must already be on disk when the kill spawner fires');
   assert.equal(registryAtKillTime.sessions[0].session_name, PULL_REQUESTS);
-  assert.equal(registryAtKillTime.sessions[0].status, 'handoff');
+  assert.equal(registryAtKillTime.sessions[0].status, 'ending');
 
 });
 

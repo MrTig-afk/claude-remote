@@ -30,9 +30,9 @@ export const REGISTRY_VERSION = 1;
 // PWA. Not worth an endpoint for one banner.
 export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-// How long a STOP claim (the vestigially-named `handoff` status - see
-// endSession) may sit before the prune decides the agent died mid-STOP and
-// drops it. It used to be 10 minutes because a real handoff runner was
+// How long a STOP claim (the `ending` status - see endSession) may sit before
+// the prune decides the agent died mid-STOP and drops it.
+// It used to be 10 minutes because a real handoff runner was
 // working behind it; the claim now spans one taskkill plus the 5s liveness
 // poll, so a minute is already generous. Dropping is the whole recovery:
 // discovery re-reports the process if it is still alive, and the entry
@@ -352,13 +352,13 @@ function newestRecordAt(ctx, targetPath) {
 }
 
 /**
- * Inserts a `handoff` registry entry for a session the agent did NOT launch,
+ * Inserts an `ending` registry entry for a session the agent did NOT launch,
  * ONLY IF no entry with that session_name exists. Returns true iff it wrote.
  * The insert is the claim - the same "the write IS the claim" contract as
  * markSessionState (below) - and it is what makes discovery stop
  * reporting the session the instant a STOP is accepted.
  */
-export function claimDeskSession(ctx, { sessionName, project, projectPath, startedAt, handoffStartedAt }) {
+export function claimDeskSession(ctx, { sessionName, project, projectPath, startedAt, endingStartedAt }) {
   const { registryPath = getRegistryFilePath() } = ctx;
 
   const sessions = readEntries(registryPath);
@@ -371,8 +371,8 @@ export function claimDeskSession(ctx, { sessionName, project, projectPath, start
     project,
     original_path: projectPath,
     started_at: startedAt,
-    status: 'handoff',
-    handoff_started_at: handoffStartedAt,
+    status: 'ending',
+    ending_started_at: endingStartedAt,
     // The prune loop below cannot validate this entry the normal way -
     // `project` is a display label (a subfolder's basename), not something
     // resolveProjectPath(roots, project) would ever resolve - so it needs
@@ -528,13 +528,20 @@ export function listSessions(ctx) {
       resolvedPath = r.path;
     }
 
-    // handoff / ended / any other explicit status are handled here, each
+    // ending / ended / any other explicit status are handled here, each
     // exiting the loop via `continue`; entry.status === undefined falls
     // through to the original status-derivation block below unchanged.
-    if (entry.status === 'handoff') {
+    //
+    // 'handoff' is the pre-T101 spelling of this same claim, READ ONLY and
+    // never written. sessions.json outlives a restart, and the agent restarts
+    // on every commit that touches agent/, so an upgrade landing between a
+    // STOP's claim and its release would otherwise leave an entry no branch
+    // recognises. Removable once no registry can predate 2026-09-05.
+    if (entry.status === 'ending' || entry.status === 'handoff') {
+      const claimedAt = entry.ending_started_at ?? entry.handoff_started_at;
       // No pid-file read here: it is unlinked the moment the kill is
       // confirmed, so its absence carries no information for this branch.
-      if (!Number.isFinite(Date.parse(entry.handoff_started_at))) {
+      if (!Number.isFinite(Date.parse(claimedAt))) {
         drop(sessionName);
         continue;
       }
@@ -542,7 +549,7 @@ export function listSessions(ctx) {
       // the `starting` branch uses below: without it a timestamp from the
       // future blocks every future relaunch, and CLAIM_STALE_MS is short
       // enough now that it would block one for a very long time.
-      const age = nowMs - Date.parse(entry.handoff_started_at);
+      const age = nowMs - Date.parse(claimedAt);
       if (!(age > -STARTING_GRACE_MS && age < CLAIM_STALE_MS)) {
         drop(sessionName);
         continue;
@@ -552,7 +559,7 @@ export function listSessions(ctx) {
         session_name: sessionName,
         project,
         path: resolvedPath,
-        status: 'handoff',
+        status: 'ending',
         started_at: startedAt,
         pid: null,
         source: 'launched',
@@ -634,7 +641,7 @@ export function listSessions(ctx) {
     // A LAUNCHED session's registry pid is the cmd.exe wrapper, so activity
     // cannot come off the pid - it is matched by cwd instead (see
     // newestRecordAt). Only `running` asks: `starting` has no session file
-    // yet, and `handoff`/`ended` return above this point.
+    // yet, and `ending`/`ended` return above this point.
     // ponytail: one extra readSessionFiles pass per running launched entry
     // (0-2 in practice, poll every 5s). Thread the records through
     // discoverDeskSessions too if that ever shows up in a profile.
@@ -669,7 +676,7 @@ export function listSessions(ctx) {
 /** The live SessionView whose session_name === sessionName, or null.
  *  `failed` and `ended` are deliberately NOT live: both are retained only to
  *  be shown, and treating either as live would make the project permanently
- *  unlaunchable. `handoff` IS live - it blocks relaunch while the run is in
+ *  unlaunchable. `ending` IS live - it blocks relaunch while the stop is in
  *  flight, which keeps the session inside the agent's own knowledge until a
  *  verdict is recorded. */
 export function findLiveSession(ctx, sessionName) {

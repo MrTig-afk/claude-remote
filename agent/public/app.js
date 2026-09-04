@@ -322,10 +322,18 @@ function rowState(p) {
     if (session.status === 'failed') {
       return { zone: 'list', dot: 'dim', status: 'launch unconfirmed', idle: elapsed(session.started_at) };
     }
-    if (session.status === 'handoff') {
-      // Vestigial name - see the note in sessions.js. Nothing is being
-      // written any more; this is the brief claim between STOP and the
-      // process actually being gone.
+    if (session.status === 'ending') {
+      // The brief claim between STOP and the process actually being gone.
+      // Called 'handoff' until T101; an agent is never older than its own
+      // shell, so this side needs no back-compat.
+      // The reverse pairing IS possible - a CACHED shell against a newer agent
+      // - and it is worse than a single wrong poll: the old shell's
+      // anyWatchable() tests for 'handoff', so an 'ending' session makes it
+      // return false and the 5s watch loop STOPS. The tile then sits on
+      // 'starting...' until the user taps REFRESH or another session appears.
+      // Self-heals when the service worker installs the new shell (the cache
+      // key is a digest over SHELL_FILES, which includes this file), and it
+      // cannot be fixed from this side - that shell is already deployed.
       return { zone: 'tile', dot: 'accent', status: 'ending...', idle: '—' };
     }
     return { zone: 'tile', dot: 'accent', status: 'starting...', idle: elapsed(session.started_at) };
@@ -981,7 +989,7 @@ let watching = false;
 // ages a dead `starting` entry into `failed` and prunes it; the watch just
 // has to keep asking until it is either running or gone.
 function anyWatchable() {
-  return (state.sessions || []).some((s) => s.status === 'running' || s.status === 'handoff' || s.status === 'starting');
+  return (state.sessions || []).some((s) => s.status === 'running' || s.status === 'ending' || s.status === 'starting');
 }
 
 // A separate loop from confirmStarting(), deliberately: that sequence is

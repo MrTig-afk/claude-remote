@@ -556,9 +556,14 @@ test('clearPidFile - a plain session name inside pidDir is still removed', () =>
   assert.equal(fs.existsSync(real), false, 'the guard must not break the normal case');
 });
 
-// --- R1-R15: handoff / ended registry states -----------------------------------
+// --- R1-R15: ending / ended registry states -----------------------------------
 
-test('listSessions - handoff entry with no pid file -> status handoff, pid null', () => {
+test('listSessions - a PRE-T101 `handoff` claim is still honoured (read-only back-compat)', () => {
+  // sessions.json outlives a restart and the agent restarts on every commit
+  // touching agent/, so an upgrade landing between a STOP's claim and its
+  // release would otherwise leave an entry no branch recognises: it would fall
+  // through to pid-derivation with a null pid. Removable once no registry on
+  // any machine can predate 2026-09-05.
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
@@ -568,8 +573,44 @@ test('listSessions - handoff entry with no pid file -> status handoff, pid null'
   writeSessions(ctx.registryPath, [entry]);
 
   const views = listSessions(ctx);
+  assert.equal(views.length, 1, 'the legacy claim must survive the prune, not be dropped');
+  assert.equal(views[0].status, 'ending', 'and it must be REPORTED under the new name');
+  assert.equal(views[0].pid, null);
+});
+
+test('listSessions - a PRE-T101 claim still expires on ITS OWN timestamp', () => {
+  // The staleness window must read the legacy field too. Reading only
+  // ending_started_at gives NaN, and `NaN < CLAIM_STALE_MS` is false, so a
+  // legacy claim would be dropped immediately rather than held for its window.
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const fresh = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date(now - 1000).toISOString(),
+  });
+  writeSessions(ctx.registryPath, [fresh]);
+  assert.equal(listSessions(ctx).length, 1, 'a claim 1s old is inside the window');
+
+  const stale = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
+    status: 'handoff',
+    handoff_started_at: new Date(now - CLAIM_STALE_MS - 1000).toISOString(),
+  });
+  writeSessions(ctx.registryPath, [stale]);
+  assert.equal(listSessions(ctx).length, 0, 'and one past CLAIM_STALE_MS is dropped');
+});
+
+test('listSessions - handoff entry with no pid file -> status handoff, pid null', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
+    status: 'ending',
+    ending_started_at: new Date(now - 1000).toISOString(),
+  });
+  writeSessions(ctx.registryPath, [entry]);
+
+  const views = listSessions(ctx);
   assert.equal(views.length, 1);
-  assert.equal(views[0].status, 'handoff');
+  assert.equal(views[0].status, 'ending');
   assert.equal(views[0].pid, null);
   assert.equal(views[0].source, 'launched');
   assert.equal(views[0].session_id, null);
@@ -654,8 +695,8 @@ test('listSessions - a claim past CLAIM_STALE_MS is DROPPED, not settled as an i
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const entry = validEntry('Pull Requests', new Date(now - (CLAIM_STALE_MS + 120_000)).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date(now - (CLAIM_STALE_MS + 60_000)).toISOString(),
+    status: 'ending',
+    ending_started_at: new Date(now - (CLAIM_STALE_MS + 60_000)).toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -670,21 +711,21 @@ test('listSessions - a claim inside the window is left alone on disk', () => {
   const ctx = makeCtx({ now: () => now });
   const handoffStarted = new Date(now - 1000).toISOString();
   writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: handoffStarted,
+    status: 'ending',
+    ending_started_at: handoffStarted,
   })]);
 
   listSessions(ctx);
 
   const e = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions[0];
-  assert.equal(e.status, 'handoff');
-  assert.equal(e.handoff_started_at, handoffStarted);
+  assert.equal(e.status, 'ending');
+  assert.equal(e.ending_started_at, handoffStarted);
 });
 
 test('listSessions - drop table for malformed handoff/ended/unknown status entries', () => {
   const now = Date.now();
   const rows = [
-    { status: 'handoff', handoff_started_at: 'not-a-date' },
+    { status: 'ending', ending_started_at: 'not-a-date' },
     { status: 'ended', ended_at: 'not-a-date' },
     { status: 'nonsense' },
   ];
@@ -700,14 +741,14 @@ test('findLiveSession - returns a handoff entry (blocks relaunch)', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date(now - 1000).toISOString(),
+    status: 'ending',
+    ending_started_at: new Date(now - 1000).toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
 
   const found = findLiveSession(ctx, PULL_REQUESTS);
   assert.ok(found);
-  assert.equal(found.status, 'handoff');
+  assert.equal(found.status, 'ending');
 });
 
 test('findLiveSession - null for an ended record (does not block relaunch)', () => {
@@ -744,13 +785,13 @@ test('recordLaunch - replaces an ended record with the same session_name rather 
 test('markSessionState - patches when fromStatus matches, returns true', () => {
   const ctx = makeCtx();
   const entry = validEntry('Pull Requests', new Date().toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date().toISOString(),
+    status: 'ending',
+    ending_started_at: new Date().toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
 
   const endedAt = new Date().toISOString();
-  const patched = markSessionState(ctx, PULL_REQUESTS, 'handoff', { status: 'ended', ended_at: endedAt });
+  const patched = markSessionState(ctx, PULL_REQUESTS, 'ending', { status: 'ended', ended_at: endedAt });
 
   assert.equal(patched, true);
   const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
@@ -761,8 +802,8 @@ test('markSessionState - patches when fromStatus matches, returns true', () => {
 test('markSessionState - returns false and leaves the file byte-identical when fromStatus does not match', () => {
   const ctx = makeCtx();
   const entry = validEntry('Pull Requests', new Date().toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date().toISOString(),
+    status: 'ending',
+    ending_started_at: new Date().toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
   const before = fs.readFileSync(ctx.registryPath, 'utf8');
@@ -777,13 +818,13 @@ test('markSessionState - returns false and leaves the file byte-identical when f
 test('dropSession - removes only the entry whose status matches fromStatus', () => {
   const ctx = makeCtx();
   const handoff = validEntry('Pull Requests', new Date().toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date().toISOString(),
+    status: 'ending',
+    ending_started_at: new Date().toISOString(),
   });
   const other = validEntry('email-lint');
   writeSessions(ctx.registryPath, [handoff, other]);
 
-  dropSession(ctx, PULL_REQUESTS, 'handoff');
+  dropSession(ctx, PULL_REQUESTS, 'ending');
 
   const left = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions;
   assert.deepEqual(left.map((e) => e.session_name), [EMAIL_LINT]);
@@ -796,7 +837,7 @@ test('dropSession - leaves a same-name entry alone when its status is not fromSt
   writeSessions(ctx.registryPath, [relaunched]);
   const before = fs.readFileSync(ctx.registryPath, 'utf8');
 
-  dropSession(ctx, PULL_REQUESTS, 'handoff');
+  dropSession(ctx, PULL_REQUESTS, 'ending');
 
   assert.equal(fs.readFileSync(ctx.registryPath, 'utf8'), before);
 });
@@ -812,7 +853,7 @@ test('markSessionState - returns false and leaves the file byte-identical when t
   const warn = console.warn;
   console.warn = () => {};
   try {
-    const claimed = markSessionState(ctx, PULL_REQUESTS, null, { status: 'handoff' });
+    const claimed = markSessionState(ctx, PULL_REQUESTS, null, { status: 'ending' });
     assert.equal(claimed, false);
     assert.equal(fs.readFileSync(ctx.registryPath, 'utf8'), before);
   } finally {
@@ -823,7 +864,7 @@ test('markSessionState - returns false and leaves the file byte-identical when t
 test('markSessionState - never appends for a session name that is absent', () => {
   const ctx = makeCtx();
 
-  const patched = markSessionState(ctx, 'no-such-session', null, { status: 'handoff' });
+  const patched = markSessionState(ctx, 'no-such-session', null, { status: 'ending' });
 
   assert.equal(patched, false);
   assert.equal(fs.existsSync(ctx.registryPath), false);
@@ -1240,20 +1281,20 @@ test('claimDeskSession - writes a claim listSessions then reports, and returns f
   const ctx = makeCtx({ now: () => now });
   const projectPath = path.join(base, 'Pull Requests');
   const startedAt = new Date(now - 60_000).toISOString();
-  const handoffStartedAt = new Date(now - 1000).toISOString();
+  const endingStartedAt = new Date(now - 1000).toISOString();
 
   const claimed = claimDeskSession(ctx, {
-    sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
+    sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath, startedAt, endingStartedAt,
   });
   assert.equal(claimed, true);
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
-  assert.equal(views[0].status, 'handoff');
+  assert.equal(views[0].status, 'ending');
   assert.equal(views[0].session_name, PULL_REQUESTS);
 
   const second = claimDeskSession(ctx, {
-    sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
+    sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath, startedAt, endingStartedAt,
   });
   assert.equal(second, false, 'a second claim on the same session_name must write nothing and return false');
 });
