@@ -61,8 +61,11 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     # does the collision form `email-lint (Work)`.
     #
     # HISTORY, so nobody re-runs it: the two-argument form was reverted to on
-    # 2026-09-04 as a diagnostic for an outage and did NOT fix it - the form
-    # was never the cause. Full account in .pipeline/spec.md.
+    # 2026-09-04 while diagnosing an outage (a launched session opened a blank
+    # console and never reached the Code tab) and did NOT fix it. The failure
+    # reproduced with this file byte-identical to its last known-good version,
+    # and the same file then succeeded seven launches in a row. The argument
+    # form was never the cause; that outage has no proven root cause.
     #
     # The value FORM is pinned in sessions.test.js's recipe-integrity test and
     # in detachment.test.js's requiredTokens - it was the bare flag until
