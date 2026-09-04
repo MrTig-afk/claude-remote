@@ -120,10 +120,7 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   const requiredTokens = [
     'CLAUDE_CONFIG_DIR',
     '.claude-max',
-    // Whole token, not the bare flag: the plugin is `whatsapp-channel` and the
-    // marketplace is `whatsapp-claude-plugin`, which is the easy confusion.
-    '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',
-    // WHOLE token, same reason as --channels above and for a bug that actually
+    // WHOLE token, not the bare flag, for a bug that actually
     // happened: this entry was the bare flag `'--remote-control'` on
     // 2026-09-04, so changing the argument FORM stripped nothing this list
     // guards and the mutation test below stayed green. A name with a space
@@ -141,6 +138,16 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     assert.ok(real.includes(token), `real recipe should contain ${token}`);
   }
   assert.ok(!/--rc/.test(real), 'real recipe should not contain --rc');
+  // The channels flag stops Remote Control connecting (measured 2026-09-05:
+  // with it the session renders but sits on `/rc connecting...` forever and
+  // never reaches the Code tab; without it, nothing else changed, it connects
+  // quickly). requiredTokens above cannot express "must be ABSENT", which is
+  // why this sits beside it. Comments stripped first - the script's own
+  // comment explains this rule and has to name the flag to do so.
+  assert.ok(
+    !/--channels/.test(real.replace(/^\s*#.*$/gm, '')),
+    'the PWA recipe must not pass --channels - it prevents the Code-tab row appearing',
+  );
 
   // Each mutated copy - one required token stripped - must fail the check
   // that token guards. Proves the assertions are not tautologies.
@@ -162,5 +169,26 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     /--rc/.test(regressed),
     true,
     'a copy containing a bare --rc token should fail the --rc-absence check',
+  );
+
+  // The SAME proof for the --channels absence check, which needs it more: it
+  // asserts against a comment-STRIPPED copy, so a later change to that strip
+  // (to handle trailing `#`, or PowerShell's `<# #>` blocks) could quietly eat
+  // the ArgumentList line and leave the guard unable to fail. The regressed
+  // copy adds the flag as real code - not inside a comment - so it must be
+  // seen through the strip.
+  const channelsBack = `${real}\n    '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',\n`;
+  assert.equal(
+    /--channels/.test(channelsBack.replace(/^\s*#.*$/gm, '')),
+    true,
+    'a copy that re-adds --channels as CODE must fail the absence check - if this passes, the strip has eaten the line it is meant to scan',
+  );
+  // ...and the strip must not be so eager that a commented mention trips it,
+  // which is the failure that made this strip necessary in the first place.
+  const onlyInComment = `${real}\n    # explains why --channels must not be here\n`;
+  assert.equal(
+    /--channels/.test(onlyInComment.replace(/^\s*#.*$/gm, '')),
+    false,
+    'a mention inside a comment must NOT fail the check - the script documents this rule and has to name the flag',
   );
 });

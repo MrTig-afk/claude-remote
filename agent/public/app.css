@@ -491,12 +491,34 @@ body {
   color: var(--muted);
   margin-bottom: 8px;
 }
+/* THE FLOOR, not a type choice. Mobile Safari zooms the whole page in when a
+   focused text input is under 16px and does not zoom back out on blur. Setting
+   it here rather than per-input makes the bug unrepresentable: a new input
+   added without its own font-size inherits the UA default (~13.33px) and would
+   reproduce it silently. Individual rules may go LARGER (.pin is 19px), never
+   smaller - a test pins both. */
+input,
+textarea,
+select {
+  font-size: 16px;
+}
+
 .newproj-panel input {
   width: 100%;
   min-height: 44px;
   padding: 10px;
   font: inherit;
-  font-size: 14px;
+  /* 16px is a FUNCTIONAL floor on iOS, not a type choice. Safari zooms the
+     whole page in when a text input smaller than 16px takes focus, and it does
+     NOT zoom back out on blur - so at 14px, naming a project left the owner
+     zoomed in with the header cut off on both sides, and stuck that way after
+     the panel closed (reported 2026-09-05 with a screenshot). The passcode
+     field never had this because .pin is already 19px. Do not "tidy" this back
+     down to match the surrounding 11px labels; a test pins it.
+     NOT redundant with the global input floor above, however much it looks it:
+     the `font: inherit` on the line before RESETS font-size to the inherited
+     value, which would wipe the floor. Delete this line and the bug is back. */
+  font-size: 16px;
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--edge);

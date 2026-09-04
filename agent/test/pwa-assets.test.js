@@ -718,6 +718,43 @@ test('anyWatchable is true for running/handoff/starting, and the watch loop is a
   );
 });
 
+test('every text input is at least 16px, or iOS zooms the page and stays zoomed', () => {
+  // NOT a type-scale rule - a functional one. Mobile Safari zooms the whole
+  // page in when a focused text input is smaller than 16px, and does not zoom
+  // back out when it loses focus. The owner hit this naming a project on
+  // 2026-09-05: the panel zoomed, the header was cut off both sides, and it
+  // stayed that way afterwards. .pin was always safe at 19px, which is why
+  // only the new-project field ever showed it.
+  // Comments STRIPPED first. The rule below carries a 7-line comment that
+  // explains the bug and names the wrong size; without this the block regex
+  // spans it and `.match(font-size)` takes the FIRST hit, which would report
+  // the number from the prose rather than the number the browser uses.
+  const css = read('app.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  // The global floor first: it is what makes a too-small input unrepresentable
+  // rather than merely absent today. A bare <input> inherits ~13.33px from the
+  // UA stylesheet, so a THIRD text input added later is unsafe by default -
+  // this rule is what catches it, not the two selectors below.
+  const floor = css.match(/(^|\})\s*input,\s*textarea,\s*select\s*\{[^}]*\}/);
+  assert.ok(floor, 'app.css must set a global font-size floor for input/textarea/select');
+  const floorSize = floor[0].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
+  assert.ok(floorSize && Number(floorSize[1]) >= 16,
+    `the global input floor is ${floorSize ? floorSize[1] : 'unset'}px; under 16px iOS zooms on focus`);
+  const rules = [
+    ['.newproj-panel input', /\.newproj-panel input\s*\{[^}]*\}/],
+    ['.pin', /^\.pin\s*\{[^}]*\}/m],
+  ];
+  for (const [name, rx] of rules) {
+    const block = css.match(rx);
+    assert.ok(block, `app.css must carry a ${name} rule`);
+    const size = block[0].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
+    assert.ok(size, `${name} must set an explicit font-size - inheriting one is how this regresses`);
+    assert.ok(
+      Number(size[1]) >= 16,
+      `${name} is ${size[1]}px; anything under 16px makes iOS zoom the page on focus and leave it zoomed`,
+    );
+  }
+});
+
 test('the stop control has a 48px tap band on every layout, and the single-tile name/status pad clear of it', () => {
   const css = read('app.css');
 

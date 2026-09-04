@@ -1380,16 +1380,21 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   );
   assert.ok(script.includes('CLAUDE_CONFIG_DIR'));
   assert.ok(script.includes('.claude-max'));
-  // The plugin is `whatsapp-channel`; the MARKETPLACE is
-  // `whatsapp-claude-plugin`. An earlier release was `whatsapp-claude-channel`
-  // and that name silently resolves to "plugin not installed" - the channel is
-  // allowlisted, then fails to load, so outbound tools keep working while
-  // inbound messages never arrive. Asserting the whole `--channels=<value>`
-  // token, not just the flag, is what stops the stale name coming back.
-  assert.ok(script.includes('--channels=plugin:whatsapp-channel@whatsapp-claude-plugin'));
+  // --channels must NOT be passed by the PWA launcher. Measured 2026-09-05:
+  // with it, a launched session renders fine and then sits on
+  // `/rc connecting...` forever and never reaches the Code tab; without it,
+  // and with nothing else changed, RC connects quickly. Owner confirmed both
+  // arms. A phone-launched session exists to BECOME a Code-tab row, so the
+  // flag that prevents that cannot be here - the desk aliases keep it, which
+  // is where WhatsApp inbound is actually used.
+  // Comments STRIPPED first. The comment above the ArgumentList explains this
+  // rule and necessarily names the flag to do so; a raw source scan then trips
+  // on the explanation and fails the rule it is explaining. Full-line `#`
+  // comments only, which is every comment in this script.
+  const psCode = script.replace(/^\s*#.*$/gm, '');
   assert.ok(
-    !script.includes('whatsapp-claude-channel'),
-    'the pre-rename plugin name must not return',
+    !/--channels/.test(psCode),
+    'passing --channels here stops Remote Control connecting, so the session never appears in the Code tab',
   );
   // THE WHOLE TOKEN, quoting included - not the bare flag. This assertion used
   // to read `script.includes('--remote-control')`, which every form satisfies:
