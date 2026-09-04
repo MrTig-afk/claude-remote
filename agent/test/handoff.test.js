@@ -200,7 +200,9 @@ test('navigator.onLine is only ever read to explain a failure, never to predict 
   // request that has ALREADY come back with nothing.
   const app = codeOnly(read('app.js'));
   const hits = app.match(/navigator\.onLine/g) || [];
-  assert.equal(hits.length, 1, 'one reading, at the one place it is meaningful');
+  // Two: load(), and markUnreachable() for the failures the idle probe and
+  // the session watch decide without going through load() at all.
+  assert.equal(hits.length, 2, 'read only where a request has already come back with nothing');
   assert.match(app, /navigator\.onLine === false/, 'only the false answer is trusted');
 });
 
@@ -363,10 +365,14 @@ test('an idle project list keeps checking the agent is still there', () => {
   assert.match(app, /async function watchHealth\(\)/);
   assert.match(app, /watchHealth\(\);/, 'load() must start it');
 
-  const fn = app.slice(app.indexOf('async function watchHealth()'), app.indexOf('// Gaps between automatic retries'));
-  // One cheap probe, not load()'s four requests, until something actually fails.
-  assert.match(fn, /getStatus\(\)/);
-  assert.doesNotMatch(codeOnly(fn), /await load\(\);[\s\S]*await load\(\)/, 'one escalation, not a loop of them');
+  const fn = app.slice(app.indexOf('async function watchHealth()'), app.indexOf('// What the two watch loops do'));
+  // One cheap probe, not load()'s four requests, and on its own short
+  // deadline: a radio switched off swallows the connection rather than
+  // refusing it, so the timeout IS how long the screen stays wrong.
+  assert.match(fn, /getStatus\(HEALTH_TIMEOUT_MS\)/);
+  assert.match(app, /const HEALTH_TIMEOUT_MS = 3000;/);
+  assert.match(app, /const HEALTH_GAP_MS = 5000;/);
+  assert.doesNotMatch(codeOnly(fn), /load\(\)/, 'it decides from the probe - load() would spend four more timeouts first');
   // It must yield to everything that owns the connection more directly.
   assert.match(fn, /document\.visibilityState === 'visible'/);
   assert.match(fn, /state\.screen === 'list'/);
@@ -376,14 +382,73 @@ test('an idle project list keeps checking the agent is still there', () => {
   assert.match(fn, /if \(healthWatching\) return;/);
   // An agent ANSWERING with a refusal is not a reachability problem, and must
   // not blank the list behind "can't reach your PC".
-  assert.match(fn, /st\.code === 'network' \|\| st\.code === 'timeout'/);
-  // The flag must go DOWN before the escalation, or load()'s own watchHealth()
-  // hits the re-entry guard and the loop unwinds with nothing watching - one
-  // recovered blip and the list is idle and unwatched for good.
+  assert.match(fn, /st\.code !== 'network' && st\.code !== 'timeout'/);
+  // Two strikes. A single lost request is a blip - a cell handover, a radio
+  // waking - and blanking the list on one costs a full reload to undo.
+  assert.match(app, /const STRIKES = 2;/);
+  assert.match(fn, /if \(misses < STRIKES\) continue;/);
+  assert.match(fn, /if \(st\.ok\) \{ misses = 0; continue; \}/, 'a good answer resets the count');
+  // The flag must go DOWN before the escalation, or the waitForAgent ->
+  // load() -> watchHealth() chain hits the re-entry guard and the loop
+  // unwinds with nothing watching - one recovered blip and the list is idle
+  // and unwatched for good.
   assert.ok(
-    fn.indexOf('healthWatching = false;') < fn.indexOf('await load();'),
+    fn.indexOf('healthWatching = false;') < fn.indexOf('markUnreachable();'),
     'clear the guard before escalating, or the watcher never restarts',
   );
+});
+
+test('the session watch says so when the agent goes quiet, instead of returning silently', () => {
+  // RED WHEN: watchSessions does `if (!s.ok) return;`. With a session running
+  // and both radios off, the tile sat there looking live indefinitely - the
+  // loop had simply stopped, and nothing else was watching.
+  const app = read('app.js');
+  const fn = app.slice(app.indexOf('async function watchSessions()'), app.indexOf('// One cheap probe'));
+  assert.match(fn, /markUnreachable\(\);/);
+  assert.match(fn, /if \(s\.code !== 'network' && s\.code !== 'timeout'\) return;/,
+    'an agent ANSWERING with a refusal is not a reachability problem');
+  assert.match(fn, /if \(misses < STRIKES\) continue;/, 'same two strikes as the idle probe');
+  assert.match(fn, /misses = 0;/, 'a good answer resets the count');
+});
+
+test('markUnreachable leaves the screen where load() would have left it', () => {
+  const app = read('app.js');
+  const fn = app.slice(app.indexOf('function markUnreachable()'), app.indexOf('// Gaps between automatic retries'));
+  assert.match(fn, /state\.offline = navigator\.onLine === false;/);
+  assert.match(fn, /state\.projects = \[\];/);
+  assert.match(fn, /state\.reachable = state\.offline \? false : 'waiting';/);
+  // Offline is this device's fault; the `online` listener owns that recovery,
+  // and waitForAgent would back off against a PC that is fine.
+  assert.match(fn, /if \(!state\.offline\) waitForAgent\(\);/);
+  assert.match(fn, /render\(\);/);
+});
+
+test('the Running section is gone while the agent cannot be reached', () => {
+  // RED WHEN: renderProjects leaves #zone-run visible on an unreachable list.
+  // It then reads "RUNNING 0 / nothing running / tap a project to start a
+  // session" over the top of "Can't reach your PC" - two claims the app
+  // cannot make (state.sessions is null, which the footer correctly calls
+  // UNKNOWN) and an invitation to tap something that cannot work. Artifact
+  // Lane 13 draws no Running section on either unreachable frame.
+  const app = read('app.js');
+  const fn = app.slice(app.indexOf('function renderProjects()'), app.indexOf('function renderFooter('));
+  assert.match(fn, /document\.getElementById\('zone-run'\)\.hidden = state\.reachable !== true;/);
+});
+
+test('the wait ladder is capped short enough to notice the PC coming back', () => {
+  // Each retry is a load(), which already spends its own 10s timeout against
+  // a PC that is not answering. A 15s gap on top meant up to 25s of staring
+  // at a machine that had already come back.
+  const app = read('app.js');
+  assert.match(app, /const WAIT_GAPS_MS = \[2000, 3000, 4000\];/);
+});
+
+test('TRY AGAIN restarts the ladder rather than resuming the backoff', () => {
+  const app = read('app.js');
+  const fn = app.slice(app.indexOf('async function onProjectTap('), app.indexOf('function openConfirm('));
+  const branch = fn.slice(fn.indexOf("[data-retry]"), fn.indexOf('const choose ='));
+  assert.match(branch, /state\.waitTries = 0;/, 'someone is watching: the next automatic retry must be the short one');
+  assert.ok(branch.indexOf('state.waitTries = 0;') < branch.indexOf('load();'));
 });
 
 test('the last session ending hands the list back to the idle probe', () => {

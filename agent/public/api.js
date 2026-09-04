@@ -16,8 +16,12 @@ export function onAuthLost(cb) { authLost = cb; }
  *          |{ok:false, status:number|0, code:string}}
  * Never throws. `code` is one of: the server's own `error` string,
  * 'network', 'timeout', 'bad_response', 'http'.
+ * timeoutMs overrides the 10s default for one call. A radio switched off does
+ * not refuse a connection, it swallows it, so every "the PC is gone" answer
+ * costs a full timeout before the screen can change - which is why the idle
+ * probe asks for a short one.
  */
-async function request(path, options = {}) {
+async function request(path, options = {}, timeoutMs = TIMEOUT_MS) {
   let res;
   try {
     res = await fetch(path, {
@@ -28,7 +32,7 @@ async function request(path, options = {}) {
         ...(token ? { 'X-Claude-Remote-Token': token } : {}),
         ...(options.headers || {}),
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     return { ok: false, status: 0, code: err.name === 'TimeoutError' ? 'timeout' : 'network' };
@@ -109,8 +113,8 @@ export function acknowledge() {
   return post('/api/acknowledge', {});
 }
 
-export function getStatus() {
-  return request('/api/status');
+export function getStatus(timeoutMs) {
+  return request('/api/status', {}, timeoutMs);
 }
 
 export function getSessions() {

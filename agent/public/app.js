@@ -323,7 +323,10 @@ function rowState(p) {
       return { zone: 'list', dot: 'dim', status: 'launch unconfirmed', idle: elapsed(session.started_at) };
     }
     if (session.status === 'handoff') {
-      return { zone: 'tile', dot: 'accent', status: 'writing handoff...', idle: '—' };
+      // Vestigial name - see the note in sessions.js. Nothing is being
+      // written any more; this is the brief claim between STOP and the
+      // process actually being gone.
+      return { zone: 'tile', dot: 'accent', status: 'ending...', idle: '—' };
     }
     return { zone: 'tile', dot: 'accent', status: 'starting...', idle: elapsed(session.started_at) };
   }
@@ -381,6 +384,16 @@ function statusLine(rs) {
   return [rs.status, rs.idle && rs.idle !== '—' ? rs.idle : null, rs.suffix || null].filter(Boolean).join(' - ');
 }
 
+// One <use> clone of a symbol from the sprite in index.html.
+// document.createElementNS is deliberately not used anywhere in this app - a
+// shipped asset carrying an absolute namespace URL trips the no-egress test -
+// so every icon comes from cloning this template.
+function glyph(href) {
+  const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  ico.querySelector('use').setAttribute('href', href);
+  return ico;
+}
+
 function buildTile(p, rs) {
   const el = document.createElement('div');
   el.className = 'tile';
@@ -417,6 +430,29 @@ function buildTile(p, rs) {
   el.appendChild(status);
 
   if (state.confirmName === p.name) {
+    // Artifact Lane 2, approved sequence 3. The app writes no handoff, so the
+    // confirm says so and points at the only thing that can - Claude itself,
+    // while the session still has its context. A WARNING, not a gate: END
+    // ANYWAY is one tap, because a stop you cannot perform from a train is
+    // worse than a missing file.
+    const warn = document.createElement('div');
+    warn.className = 'tile-confirm-warn';
+    warn.appendChild(glyph('#i-warn'));
+    const warnText = document.createElement('span');
+    warnText.textContent = rs.desk
+      ? 'Started at the desk. Nothing writes a handoff for you, and someone may be sitting in front of it.'
+      : 'Nothing writes a handoff for you. Ask Claude for one first, or this session’s context is gone.';
+    warn.appendChild(warnText);
+    el.appendChild(warn);
+
+    const open = document.createElement('a');
+    open.className = 'tile-confirm-open ripples';
+    open.href = CLAUDE_APP_LINK;
+    // The glyph is the honest part of this control: it leaves the app.
+    open.appendChild(glyph('#i-ext'));
+    open.appendChild(document.createTextNode('OPEN CLAUDE FIRST'));
+    el.appendChild(open);
+
     const q = document.createElement('div');
     q.className = 'tile-confirm';
     const cancel = document.createElement('button');
@@ -428,7 +464,7 @@ function buildTile(p, rs) {
     go.type = 'button';
     go.className = 'tile-stop-go';
     go.dataset.stopConfirm = p.name;
-    go.textContent = rs.desk ? 'END & WRITE HANDOFF (DESKTOP)' : 'END & WRITE HANDOFF';
+    go.textContent = rs.desk ? 'END ANYWAY (DESKTOP)' : 'END ANYWAY';
     q.append(cancel, go);
     el.appendChild(q);
   } else if (rs.stop) {
@@ -827,16 +863,11 @@ function reportEnded() {
     if (s.status !== 'ended' || reported.has(s.session_name)) continue;
     reported.add(s.session_name);
     dismissEnded(s.session_name); // fire-and-forget: a lost dismiss just re-announces next open
-    if (s.handoff_ok) setBanner('info', [{ text: 'Handoff written for ' }, { b: s.project }, { text: '.' }]);
-    // 'interrupted' means the AGENT lost the verdict (it was restarted while
-    // the handoff ran), NOT that the handoff failed - the file is very often
-    // there. Saying "was not written" for that case is a lie the owner caught
-    // 2026-08-27: email-lint's HANDOFF.md was on disk, written two minutes
-    // before the restart, while the banner claimed it was not.
-    else if (s.handoff_result === 'interrupted') setBanner('error', [
-      { text: '! ' }, { b: s.project }, { text: " ended, but the agent restarted before it could confirm the handoff. Check that project's HANDOFF.md." },
-    ]);
-    else setBanner('error', [{ text: '! Session ended, but the handoff was not written.' }]);
+    // One line, and it is not an error: ending is what was asked for. The
+    // three handoff verdicts this used to carry are gone with the automatic
+    // handoff - including the "was not written" one, which was a lie often
+    // enough that the owner caught it (2026-08-27, the file was on disk).
+    setBanner('info', [{ b: s.project }, { text: ' ended.' }]);
   }
 }
 
@@ -950,13 +981,25 @@ function anyWatchable() {
 async function watchSessions() {
   if (watching) return;
   watching = true;
+  let misses = 0;
   try {
     while (document.visibilityState === 'visible' && anyWatchable()) {
       await sleep(WATCH_GAP_MS);
       if (document.visibilityState !== 'visible') return;
       if (!anyWatchable()) return;
       const s = await getSessions();
-      if (!s.ok) return;
+      if (!s.ok) {
+        // Two strikes, same as the idle probe: one lost request is a blip,
+        // two in a row is the PC. Returning silently (what this did) left a
+        // running session's tile on screen looking live for as long as the
+        // owner cared to watch it.
+        if (s.code !== 'network' && s.code !== 'timeout') return;
+        misses += 1;
+        if (misses < STRIKES) continue;
+        markUnreachable();
+        return;
+      }
+      misses = 0;
       state.sessions = s.data.sessions;
       dropCoveredResults();
       clearSettledLaunchBanner();
@@ -980,16 +1023,27 @@ async function watchSessions() {
 // 2026-09-04: "switching off wifi and data when in the app, it does nothing
 // and shows nothing".
 //
-// One cheap probe, slowly. GET /api/status is a single request rather than
-// load()'s four, and it escalates to a real load() only once a probe has
-// actually failed - so the healthy case costs one request every 20s to a
-// server on the same machine, and the broken case transitions properly
-// through the same path every other failure uses.
+// One cheap probe. GET /api/status is a single request rather than load()'s
+// four, on a 3s deadline rather than the 10s default: the agent is one hop
+// away on the tailnet and answers in milliseconds, so 3s of silence is
+// already an answer. The healthy case costs one small request every 5s.
 //
 // Stops itself the moment anything else takes over: a running session (5s
 // watchSessions), a screen change, the app going to the background, or
 // reachability already being lost (waitForAgent owns the retry from there).
-const HEALTH_GAP_MS = 20_000;
+//
+// The numbers are the owner's, measured on his own phone with both radios
+// off: "been more than 20s with both switched off, still shows agent
+// reachable. It takes around 1-2 minutes." That was a 20s gap, then a 10s
+// timeout, then a full load() of four more 10s requests before anything on
+// screen changed. Now: at most 5s to the first probe, 3s for it to give up,
+// 5s + 3s again for the second, and the screen changes off the probe itself.
+const HEALTH_GAP_MS = 5000;
+const HEALTH_TIMEOUT_MS = 3000;
+// Two consecutive silences before the list is blanked. One is a blip - a
+// handover between cells, a radio waking up - and blanking on a blip is worse
+// than being 8s late, because recovering from it costs a full reload.
+const STRIKES = 2;
 let healthWatching = false;
 
 async function watchHealth() {
@@ -1000,37 +1054,65 @@ async function watchHealth() {
     && !anyWatchable();
   if (!live()) return;
   healthWatching = true;
+  let misses = 0;
   try {
     while (live()) {
       await sleep(HEALTH_GAP_MS);
       if (!live()) return;
-      const st = await getStatus();
-      if (st.ok) continue;
+      const st = await getStatus(HEALTH_TIMEOUT_MS);
+      if (st.ok) { misses = 0; continue; }
       // Only the two codes that mean the agent said nothing at all. An agent
       // ANSWERING with a refusal is not a reachability problem and must not
       // blank the list behind a "can't reach your PC".
-      if (st.code === 'network' || st.code === 'timeout') {
-        // The flag goes down BEFORE the escalation, or load()'s own
-        // watchHealth() call hits the re-entry guard and no-ops - and then
-        // this return unwinds with nothing watching. One recovered blip
-        // (wifi drops for a single probe, comes back before load lands) would
-        // leave the list idle and unwatched for good, which is the exact bug
-        // this loop exists to fix.
-        healthWatching = false;
-        await load();
-        return;
-      }
+      if (st.code !== 'network' && st.code !== 'timeout') continue;
+      misses += 1;
+      if (misses < STRIKES) continue;
+      // The flag goes down BEFORE the escalation, or the waitForAgent ->
+      // load() -> watchHealth() chain hits the re-entry guard and no-ops -
+      // and then this return unwinds with nothing watching.
+      healthWatching = false;
+      markUnreachable();
+      return;
     }
   } finally {
     healthWatching = false;
   }
 }
 
+// What the two watch loops do once the agent has stopped answering. It does
+// NOT call load(): the probe already has the answer, and load()'s four
+// requests would each sit through their own timeout before the screen could
+// change - which is most of the delay the owner actually saw. The state it
+// leaves behind is the same one load() reaches on the same failure, so the
+// screen lands exactly where it would have.
+function markUnreachable() {
+  // R4, same rule as load(): navigator.onLine is read only to explain a
+  // failure that has already happened, never to predict one. Answering
+  // `false` is the case it is reliable for.
+  state.offline = navigator.onLine === false;
+  state.projects = [];
+  state.sessions = null;
+  state.results = new Map();
+  state.waitTries = 0;
+  hideBanner();
+  // Offline is this device's fault and waiting cannot fix it: the `online`
+  // listener owns that recovery. Anything else is the PC, and waitForAgent
+  // retries until it comes back.
+  state.reachable = state.offline ? false : 'waiting';
+  render();
+  if (!state.offline) waitForAgent();
+}
+
 // Gaps between automatic retries while the agent is unreachable; the last
 // one repeats for as long as the app is open and in front. Short at first
 // because a PC that is merely finishing its boot comes back in seconds, then
 // backing off so a machine that is genuinely off is not hammered.
-const WAIT_GAPS_MS = [2000, 3000, 5000, 10000, 15000];
+// Capped at 4s, not 15s: every retry is a load(), and against a PC that is
+// not answering that load already spends its own 10s timeout - so a 15s gap
+// on top of it meant up to 25s of staring at a PC that had already come back.
+// The four requests are parallel and tiny, and only ever fire while this
+// screen is in front, so the ceiling is one small burst every ~14s.
+const WAIT_GAPS_MS = [2000, 3000, 4000];
 let waiting = false;
 
 // A phone cannot tell "the PC is off", "the PC is still booting" and
@@ -1234,6 +1316,15 @@ function renderProjects() {
     for (const { p, rs } of tiles) tilesEl.appendChild(buildTile(p, rs));
   }
   runCount.textContent = String(tiles.length);
+
+  // The whole Running section goes away when the agent cannot be reached, as
+  // both unreachable frames in Artifact Lane 13 draw it. Left up it read
+  // "RUNNING 0 - nothing running - tap a project to start a session", which is
+  // two lies and an invitation: state.sessions is null (UNKNOWN, which is what
+  // the footer says), sessions may well still be running on the PC, and there
+  // is nothing tappable underneath. It was survivable while reachability took
+  // a minute to notice; it is on screen in seconds now.
+  document.getElementById('zone-run').hidden = state.reachable !== true;
 
   // State 2 (T100): additive, above the rows it never blanks. An unreachable
   // agent never gets to accuse a folder of being gone, and the drill-in
@@ -1551,7 +1642,14 @@ async function onProjectTap(e) {
   // can fall through to [data-folder] or [data-project].
   // R4. Same delegate as CHOOSE FOLDERS, and checked first for the same
   // reason: it is a control inside the list, not a project row.
-  if (e.target.closest('[data-retry]')) { load(); return; }
+  if (e.target.closest('[data-retry]')) {
+    // Reset the ladder: a tap means someone is watching, so the next
+    // automatic retry should be the short one, not wherever the backoff had
+    // got to. It also clears the (n) counter on the status line.
+    state.waitTries = 0;
+    load();
+    return;
+  }
   const choose = e.target.closest('[data-choose]');
   if (choose) { onChooseFolders(); return; }
   const remove = e.target.closest('[data-remove-root]');
@@ -1899,8 +1997,9 @@ async function runStop(name) {
   const res = await endSession(endTargetFor(name));
   state.stopping.delete(name);
 
-  if (res.ok && res.data.result === 'handoff_started') {
-    // no banner: the kill gets no toast, the handoff result gets the one line
+  if (res.ok && res.data.result === 'ended') {
+    // No banner. The kill has never had a toast, and there is no handoff
+    // result to report any more - the session simply goes.
   } else if (res.ok && res.data.result === 'already_ended') {
     setBanner('info', [{ b: name }, { text: ' had already ended.' }]);
   } else if (res.ok && res.data.result === 'kill_failed') {

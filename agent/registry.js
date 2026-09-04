@@ -30,10 +30,14 @@ export const REGISTRY_VERSION = 1;
 // PWA. Not worth an endpoint for one banner.
 export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-// A handoff run the agent is no longer watching (it restarted mid-run) is
-// reported as an ended-with-failure record past this window, so a `handoff`
-// entry can never block a relaunch forever.
-export const HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
+// How long a STOP claim (the vestigially-named `handoff` status - see
+// endSession) may sit before the prune decides the agent died mid-STOP and
+// drops it. It used to be 10 minutes because a real handoff runner was
+// working behind it; the claim now spans one taskkill plus the 5s liveness
+// poll, so a minute is already generous. Dropping is the whole recovery:
+// discovery re-reports the process if it is still alive, and the entry
+// simply vanishes if it is not.
+export const CLAIM_STALE_MS = 60_000;
 
 /** process.kill(pid, 0): true if a process with that pid exists. Never throws. */
 // Known ceiling: Windows recycles pids, and nothing in node's builtins can tell a
@@ -347,20 +351,6 @@ function newestRecordAt(ctx, targetPath) {
   return best;
 }
 
-/** { sessionId, configDir } of the newest live interactive session whose
- *  cwd IS EXACTLY targetPath (owner, 2026-08-27: a subfolder session is now
- *  its own tile with its own STOP, not folded into an ancestor's), or
- *  { sessionId: null, configDir: null } when none matches. Called with the
- *  view's OWN path in both callers (a launched session's root, or a desk
- *  session's own cwd - see endSession), never with a path a client
- *  supplied. configDir is set whenever a record matched at all, even if
- *  that record's own sessionId failed validation, because the profile (not
- *  the id) is what --continue also needs to run in the right place. */
-export function resolveDeskSessionId(ctx, targetPath) {
-  const best = newestRecordAt(ctx, targetPath);
-  return best ? { sessionId: best.sessionId, configDir: best.configDir } : { sessionId: null, configDir: null };
-}
-
 /**
  * Inserts a `handoff` registry entry for a session the agent did NOT launch,
  * ONLY IF no entry with that session_name exists. Returns true iff it wrote.
@@ -556,67 +546,26 @@ export function listSessions(ctx) {
         drop(sessionName);
         continue;
       }
-      const eff = Math.max(0, age);
-      if (eff < HANDOFF_TIMEOUT_MS) {
-        survivors.push(entry);
-        views.push({
-          session_name: sessionName,
-          project,
-          path: resolvedPath,
-          status: 'handoff',
-          started_at: startedAt,
-          pid: null,
-          source: 'launched',
-          session_id: null,
-        });
-      } else if (eff >= FAILED_RETENTION_MS) {
+      if (Math.max(0, age) >= CLAIM_STALE_MS) {
         drop(sessionName);
         continue;
-      } else {
-        // Past the timeout but inside 24h: the agent restarted mid-run and
-        // never got to record a verdict. Report it as an interrupted end
-        // rather than leaving the entry stuck as `handoff` forever.
-        //
-        // The entry is REWRITTEN, not merely re-reported. dismissSession is a
-        // compare-and-swap on the STORED status (dropSession, fromStatus
-        // 'ended'), so an entry still saying `handoff` matched nothing and the
-        // record could never be dismissed: the PWA re-announced "the handoff
-        // was not written" on EVERY open for a full 24h (owner hit this
-        // 2026-08-27). Normalising the stored status is what lets the one
-        // banner be the last one.
-        const settled = {
-          ...entry,
-          status: 'ended',
-          ended_at: entry.handoff_started_at,
-          handoff_ok: false,
-          handoff_result: 'interrupted',
-        };
-        delete settled.handoff_started_at;
-        survivors.push(settled);
-        rewroteAny = true;
-        views.push({
-          session_name: sessionName,
-          project,
-          path: resolvedPath,
-          status: 'ended',
-          started_at: startedAt,
-          pid: null,
-          ended_at: entry.handoff_started_at,
-          handoff_ok: false,
-          handoff_result: 'interrupted',
-          source: 'launched',
-          session_id: null,
-        });
       }
+      survivors.push(entry);
+      views.push({
+        session_name: sessionName,
+        project,
+        path: resolvedPath,
+        status: 'handoff',
+        started_at: startedAt,
+        pid: null,
+        source: 'launched',
+        session_id: null,
+      });
       continue;
     }
 
     if (entry.status === 'ended') {
-      if (!Number.isFinite(Date.parse(entry.ended_at)) || typeof entry.handoff_ok !== 'boolean') {
-        drop(sessionName);
-        continue;
-      }
-      if (typeof entry.handoff_result !== 'string' || entry.handoff_result === '') {
+      if (!Number.isFinite(Date.parse(entry.ended_at))) {
         drop(sessionName);
         continue;
       }
@@ -636,8 +585,6 @@ export function listSessions(ctx) {
         started_at: startedAt,
         pid: null,
         ended_at: entry.ended_at,
-        handoff_ok: entry.handoff_ok,
-        handoff_result: entry.handoff_result,
         source: 'launched',
         session_id: null,
       });

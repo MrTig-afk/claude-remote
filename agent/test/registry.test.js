@@ -8,7 +8,7 @@ import { deriveSessionName } from '../sessions.js';
 import {
   STARTING_GRACE_MS,
   FAILED_RETENTION_MS,
-  HANDOFF_TIMEOUT_MS,
+  CLAIM_STALE_MS,
   REGISTRY_VERSION,
   isPidAlive,
   listSessions,
@@ -18,7 +18,6 @@ import {
   markSessionState,
   dropSession,
   discoverDeskSessions,
-  resolveDeskSessionId,
   claimDeskSession,
   pidFileNameFor,
 } from '../registry.js';
@@ -576,14 +575,12 @@ test('listSessions - handoff entry with no pid file -> status handoff, pid null'
   assert.equal(views[0].session_id, null);
 });
 
-test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_result', () => {
+test('listSessions - ended entry -> view carries ended_at and NO handoff verdict', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - 1000).toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -591,8 +588,10 @@ test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_r
   assert.equal(views.length, 1);
   assert.equal(views[0].status, 'ended');
   assert.equal(views[0].ended_at, entry.ended_at);
-  assert.equal(views[0].handoff_ok, true);
-  assert.equal(views[0].handoff_result, 'written');
+  // Nothing writes a handoff any more, so nothing may report one: the ended
+  // banner says the session ended and stops there.
+  assert.equal(views[0].handoff_ok, undefined);
+  assert.equal(views[0].handoff_result, undefined);
   assert.equal(views[0].source, 'launched');
   assert.equal(views[0].session_id, null);
 });
@@ -626,8 +625,6 @@ test('listSessions - ended record inside FAILED_RETENTION_MS survives', () => {
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - (FAILED_RETENTION_MS - 60_000)).toISOString(),
-    handoff_ok: false,
-    handoff_result: 'not_written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -641,8 +638,6 @@ test('listSessions - ended record past FAILED_RETENTION_MS is pruned and written
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - (FAILED_RETENTION_MS + 1000)).toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -651,52 +646,26 @@ test('listSessions - ended record past FAILED_RETENTION_MS is pruned and written
   assert.equal(onDisk.sessions.length, 0);
 });
 
-test('listSessions - handoff past HANDOFF_TIMEOUT_MS but inside 24h -> ended / interrupted', () => {
+test('listSessions - a claim past CLAIM_STALE_MS is DROPPED, not settled as an interrupted end', () => {
+  // It used to be rewritten to `ended` with handoff_ok:false so the owner got
+  // told the handoff was lost. There is no handoff to lose now: the claim only
+  // spans a taskkill, so a stale one means the agent died mid-STOP. Dropping
+  // it lets discovery re-report the process if it is still alive.
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
-  const handoffStarted = new Date(now - (HANDOFF_TIMEOUT_MS + 60_000)).toISOString();
-  const entry = validEntry('Pull Requests', new Date(now - (HANDOFF_TIMEOUT_MS + 120_000)).toISOString(), {
+  const entry = validEntry('Pull Requests', new Date(now - (CLAIM_STALE_MS + 120_000)).toISOString(), {
     status: 'handoff',
-    handoff_started_at: handoffStarted,
+    handoff_started_at: new Date(now - (CLAIM_STALE_MS + 60_000)).toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
 
-  const views = listSessions(ctx);
-  assert.equal(views.length, 1);
-  assert.equal(views[0].status, 'ended');
-  assert.equal(views[0].handoff_ok, false);
-  assert.equal(views[0].handoff_result, 'interrupted');
-  assert.equal(views[0].ended_at, handoffStarted);
+  assert.deepEqual(listSessions(ctx), []);
+  assert.equal(JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions.length, 0);
 });
 
-test('listSessions - an interrupted handoff is REWRITTEN to ended on disk, so it can be dismissed', () => {
-  // dismissSession -> dropSession(ctx, name, 'ended') is a compare-and-swap on
-  // the STORED status. While the entry stayed `handoff` the filter matched
-  // nothing, the record was never removed, and the PWA re-announced it on
-  // every open for 24h. The owner hit exactly this on 2026-08-27.
-  const now = Date.now();
-  const ctx = makeCtx({ now: () => now });
-  const handoffStarted = new Date(now - (HANDOFF_TIMEOUT_MS + 60_000)).toISOString();
-  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - (HANDOFF_TIMEOUT_MS + 120_000)).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: handoffStarted,
-  })]);
-
-  listSessions(ctx);
-
-  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
-  assert.equal(onDisk.sessions.length, 1, 'still retained - the owner has not seen it yet');
-  const e = onDisk.sessions[0];
-  assert.equal(e.status, 'ended', 'the STORED status is what dismiss compares against');
-  assert.equal(e.handoff_ok, false);
-  assert.equal(e.handoff_result, 'interrupted');
-  assert.equal(e.ended_at, handoffStarted);
-  assert.equal(e.handoff_started_at, undefined, 'the handoff key is gone: the ended branch validates a different shape');
-});
-
-test('listSessions - a LIVE handoff inside the timeout is left alone on disk', () => {
-  // The mirror of the test above: normalising early would let a dismiss race
-  // delete a handoff that is still running.
+test('listSessions - a claim inside the window is left alone on disk', () => {
+  // The mirror of the test above: dropping early would delete the mutex out
+  // from under a STOP that is still polling for the process to die.
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const handoffStarted = new Date(now - 1000).toISOString();
@@ -712,24 +681,11 @@ test('listSessions - a LIVE handoff inside the timeout is left alone on disk', (
   assert.equal(e.handoff_started_at, handoffStarted);
 });
 
-test('listSessions - handoff entry past FAILED_RETENTION_MS is pruned', () => {
-  const now = Date.now();
-  const ctx = makeCtx({ now: () => now });
-  const entry = validEntry('Pull Requests', new Date(now - (FAILED_RETENTION_MS + 120_000)).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date(now - (FAILED_RETENTION_MS + 60_000)).toISOString(),
-  });
-  writeSessions(ctx.registryPath, [entry]);
-
-  assert.deepEqual(listSessions(ctx), []);
-});
-
 test('listSessions - drop table for malformed handoff/ended/unknown status entries', () => {
   const now = Date.now();
   const rows = [
     { status: 'handoff', handoff_started_at: 'not-a-date' },
-    { status: 'ended', ended_at: 'not-a-date', handoff_ok: true, handoff_result: 'written' },
-    { status: 'ended', ended_at: new Date(now).toISOString(), handoff_ok: 'yes', handoff_result: 'written' },
+    { status: 'ended', ended_at: 'not-a-date' },
     { status: 'nonsense' },
   ];
   for (const overrides of rows) {
@@ -760,8 +716,6 @@ test('findLiveSession - null for an ended record (does not block relaunch)', () 
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - 1000).toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -773,8 +727,6 @@ test('recordLaunch - replaces an ended record with the same session_name rather 
   const ended = validEntry('Pull Requests', new Date(Date.now() - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date().toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [ended]);
 
@@ -797,17 +749,13 @@ test('markSessionState - patches when fromStatus matches, returns true', () => {
   });
   writeSessions(ctx.registryPath, [entry]);
 
-  const patched = markSessionState(ctx, PULL_REQUESTS, 'handoff', {
-    status: 'ended',
-    ended_at: new Date().toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
-  });
+  const endedAt = new Date().toISOString();
+  const patched = markSessionState(ctx, PULL_REQUESTS, 'handoff', { status: 'ended', ended_at: endedAt });
 
   assert.equal(patched, true);
   const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
   assert.equal(onDisk.sessions[0].status, 'ended');
-  assert.equal(onDisk.sessions[0].handoff_result, 'written');
+  assert.equal(onDisk.sessions[0].ended_at, endedAt);
 });
 
 test('markSessionState - returns false and leaves the file byte-identical when fromStatus does not match', () => {
@@ -1069,7 +1017,7 @@ test('discoverDeskSessions - a registry entry still wins even when its status is
   const now = Date.now();
   const ctx = makeCtx({ now: () => now, livePids: new Set([4248]) });
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
-    status: 'ended', ended_at: new Date(now - 1000).toISOString(), handoff_ok: true, handoff_result: 'written',
+    status: 'ended', ended_at: new Date(now - 1000).toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
   writeDeskFile(ctx.sessionDirs[0], { pid: 4248, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
@@ -1287,46 +1235,7 @@ test('LAUNCHED session - no matching session file -> no activity key', () => {
   assert.equal('activity' in views[0], false);
 });
 
-test('resolveDeskSessionId - { sessionId, configDir } of the newest live EXACT match, null when dead/subfolder/dir missing', () => {
-  const cwd = path.join(base, 'Pull Requests');
-
-  {
-    const ctx = makeCtx({ livePids: new Set([4290, 4291]) });
-    writeDeskFile(ctx.sessionDirs[0], {
-      pid: 4290, sessionId: 'older', cwd, startedAt: new Date(Date.now() - 60_000).toISOString(),
-    });
-    writeDeskFile(ctx.sessionDirs[0], {
-      pid: 4291, sessionId: 'newer', cwd, startedAt: new Date().toISOString(),
-    });
-    assert.deepEqual(
-      resolveDeskSessionId(ctx, cwd),
-      { sessionId: 'newer', configDir: path.dirname(ctx.sessionDirs[0]) },
-    );
-  }
-
-  {
-    const ctx = makeCtx({ livePids: new Set() });
-    writeDeskFile(ctx.sessionDirs[0], { pid: 4292, sessionId: 'dead', cwd });
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
-  }
-
-  {
-    const ctx = makeCtx({ livePids: new Set([4293]) });
-    writeDeskFile(ctx.sessionDirs[0], { pid: 4293, sessionId: 'sub', cwd: path.join(cwd, 'sub') });
-    // A subfolder session is its own tile now (owner, 2026-08-27,
-    // supersedes 2ed64f5) - it must NOT be picked up as the launched
-    // session's underlying conversation.
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
-  }
-
-  {
-    const ctx = makeCtx({ livePids: new Set() });
-    ctx.sessionDirs = [path.join(base, 'no-such-dir')];
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
-  }
-});
-
-test('claimDeskSession - writes a handoff entry listSessions then reports, and returns false when already claimed', () => {
+test('claimDeskSession - writes a claim listSessions then reports, and returns false when already claimed', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const projectPath = path.join(base, 'Pull Requests');

@@ -8,13 +8,12 @@ import { fileURLToPath } from 'node:url';
 import { getPidDirPath, getRegistryFilePath } from './config.js';
 import {
   findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
-  isPidAlive, HANDOFF_TIMEOUT_MS, claimDeskSession, resolveDeskSessionId,
+  isPidAlive, claimDeskSession,
   pidFileNameFor,
 } from './registry.js';
 import { containerChildrenOf, rootsFrom, listProjects } from './projects.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
-const HANDOFF_SCRIPT = fileURLToPath(new URL('./handoff-session.ps1', import.meta.url));
 
 // The kill is confirmed by polling the pid, not by trusting taskkill's exit.
 // Bounded by ITERATIONS, not wall clock, so an injected fast interval cannot
@@ -758,15 +757,6 @@ export function launchSession(ctx, project) {
   return { ok: true, reused: false, session: view };
 }
 
-/** mtimeMs of <projectPath>/HANDOFF.md, or null if it does not (yet) exist. */
-function handoffMtime(projectPath) {
-  try {
-    return fs.statSync(path.join(projectPath, 'HANDOFF.md')).mtimeMs;
-  } catch {
-    return null;            // file may simply not exist yet
-  }
-}
-
 /**
  * Force tree-kills pid via ctx.killSpawner (default child_process.spawn) and
  * attaches an error logger if the returned child supports it. label
@@ -785,57 +775,12 @@ function killTree(ctx, pid, label) {
   }
   return killChild;
 }
-
-// The session id is resolved from the Claude Code profile sessions file
-// (endSession, above) and passed to handoff-session.ps1 as -SessionId, so
-// the handoff resumes THAT conversation, not merely the most recent one in
-// the folder. `--continue` remains the fallback when no live record matches.
-//
-// Races the runner's exit against a timeout and never rejects: whichever
-// settles first wins, and the loser is a no-op.
-function watchHandoff(ctx, sessionName, projectPath, mtimeBefore, runner) {
-  return new Promise((resolve) => {
-    let settled = false;
-
-    const finish = (handoffOk, handoffResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      markSessionState(ctx, sessionName, 'handoff', {
-        status: 'ended',
-        ended_at: new Date((ctx.now || Date.now)()).toISOString(),
-        handoff_ok: handoffOk,
-        handoff_result: handoffResult,
-      });
-      resolve({ handoff_ok: handoffOk, handoff_result: handoffResult });
-    };
-
-    const timer = setTimeout(() => {
-      if (Number.isInteger(runner.pid) && runner.pid > 0) {
-        killTree(ctx, runner.pid, `handoff runner of '${sessionName}'`);
-      }
-      finish(false, 'timeout');
-    }, ctx.handoffTimeoutMs ?? HANDOFF_TIMEOUT_MS);
-
-    runner.on('exit', () => {
-      // The exit code is never consulted - a declined write exits 0 having
-      // written nothing (verified on this host 2026-08-26). The file is the
-      // verdict.
-      const after = handoffMtime(projectPath);
-      const written = after !== null && (mtimeBefore === null || after > mtimeBefore);
-      finish(written, written ? 'written' : 'not_written');
-    });
-
-    runner.on('error', () => {
-      finish(false, 'spawn_failed');
-    });
-  });
-}
-
 /**
- * Force tree-kills the session's process, then spawns a hidden handoff run
- * in the project folder. ctx.killSpawner and ctx.handoffSpawner are the two
- * injectable seams, mirroring ctx.spawner; both default to child_process.spawn.
+ * Force tree-kills the session's process. ctx.killSpawner is the injectable
+ * seam, mirroring ctx.spawner; it defaults to child_process.spawn.
+ *
+ * It used to spawn a handoff run afterwards. It does not any more - see the
+ * note where that spawn was.
  *
  * `target` is either a project name (string, the original contract - a
  * launched session, a desk session sitting at a project ROOT, and SINCE T68
@@ -951,8 +896,8 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   }
 
   // Not wrapped in try/catch: a missing seam (helper-auth's refusePidImageName)
-  // must propagate and fail loudly, same as a missing killSpawner/
-  // handoffSpawner. A genuine real-world lookup failure is handled INSIDE
+  // must propagate and fail loudly, same as a missing killSpawner. A genuine
+  // real-world lookup failure is handled INSIDE
   // defaultPidImageName, which never throws - it resolves to null, and null
   // is not 'cmd.exe', so it already falls into the mismatch branch below.
   const pidImageName = ctx.pidImageName || defaultPidImageName;
@@ -972,18 +917,6 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
     dropSession(ctx, sessionName, 'handoff');
     return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
   }
-
-  // Resolved BEFORE the kill: after the kill the process is gone and its
-  // sessions file with it. A desk session's id and profile are the ones
-  // findLiveSession already carries; a launched session resolves both by
-  // matching cwd against the profile sessions files (its registry pid is
-  // the cmd.exe wrapper, so it cannot be matched by pid). configDir matters
-  // even when sessionId does not: --continue still has to run in the SAME
-  // profile the desk session lived in, or it resumes the wrong store's most
-  // recent conversation.
-  const { sessionId, configDir } = isDesk
-    ? { sessionId: existing.session_id, configDir: existing.config_dir }
-    : resolveDeskSessionId(ctx, projectPath);
 
   killTree(ctx, pid, `'${sessionName}'`);
 
@@ -1010,31 +943,30 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   // Registry is already at `status: 'handoff'` from the claim above - no
   // second write needed here.
 
-  const mtimeBefore = handoffMtime(projectPath);  // read BEFORE the spawn
-
-  const handoffSpawn = ctx.handoffSpawner || spawn;
-  const handoffArgs = [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', HANDOFF_SCRIPT,
-    '-ProjectPath', projectPath,
-  ];
-  // Only appended when there is one - never `-SessionId ''` / `-ConfigDir ''`.
-  if (typeof sessionId === 'string' && sessionId !== '') handoffArgs.push('-SessionId', sessionId);
-  if (typeof configDir === 'string' && configDir !== '') handoffArgs.push('-ConfigDir', configDir);
-  const runner = handoffSpawn('powershell.exe', handoffArgs, {
-    // NO shell, NO detached, NO unref() - the agent must still get the exit
-    // event. windowsHide is what keeps a console window off the owner's desk.
-    stdio: 'ignore',
-    windowsHide: true,
-    cwd: projectPath,
+  // THE HANDOFF USED TO BE SPAWNED HERE, and no longer is. It ran
+  // `claude -p --resume <id> /handoff` against the conversation this function
+  // had just killed, with nobody reading the result, and then reported
+  // success. Owner, 2026-09-04: "the handoff thing is genuinely bad." A file
+  // whose only real claim is that it exists, written at the exact moment
+  // someone stops paying attention.
+  //
+  // The app writes nothing now. The stop confirm asks for one from Claude
+  // first (Artifact Lane 2, approved sequence 3) and this ends the session and
+  // stops.
+  //
+  // VESTIGIAL NAME, deliberately not renamed in this pass: the claim status
+  // above is still the string 'handoff'. It is the concurrency mutex that
+  // stops two STOPs racing, it is never shown to anyone, and renaming it
+  // reaches ~300 references across registry.js and the suites - not a change
+  // to make in the same commit as a behaviour removal. Filed in tasks.md.
+  markSessionState(ctx, sessionName, 'handoff', {
+    status: 'ended',
+    ended_at: new Date((ctx.now || Date.now)()).toISOString(),
   });
 
   return {
     ok: true,
     status: 200,
-    body: { result: 'handoff_started', project, session_name: sessionName },
-    handoff: watchHandoff(ctx, sessionName, projectPath, mtimeBefore, runner),
+    body: { result: 'ended', project, session_name: sessionName },
   };
 }

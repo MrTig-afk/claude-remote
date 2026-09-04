@@ -735,22 +735,32 @@ test('the stop control has a 48px tap band on every layout, and the single-tile 
   assert.match(nameRule[0], /padding-right:\s*48px/);
 });
 
-test('the confirm carries exactly CANCEL and END & WRITE HANDOFF, and no other kill-button wording exists', () => {
+test('the confirm carries CANCEL, the warning, the route out, and END ANYWAY - and no other kill-button wording', () => {
   const js = read('app.js');
   const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
   assert.match(buildTile, /'CANCEL'/);
-  assert.match(buildTile, /'END & WRITE HANDOFF'/);
-  for (const forbidden of ['END IT', 'KILL', 'FORCE', 'input type="checkbox"']) {
+  assert.match(buildTile, /'END ANYWAY'/);
+  // Artifact lane 2, approved sequence 3: the confirm warns that nothing
+  // writes a handoff and points at the only thing that can, then still lets
+  // the owner through. A warning, not a gate.
+  assert.match(buildTile, /'OPEN CLAUDE FIRST'/);
+  assert.match(buildTile, /Nothing writes a handoff for you/);
+  for (const forbidden of ['END IT', 'KILL', 'FORCE', 'input type="checkbox"', 'END & WRITE HANDOFF']) {
     assert.ok(!js.includes(forbidden), `app.js must not contain "${forbidden}"`);
   }
 });
 
-test('the four stop/handoff banner strings from the brief appear verbatim in app.js', () => {
+test('the stop banner strings appear verbatim in app.js, and no handoff verdict is announced', () => {
   const js = read('app.js');
   assert.ok(js.includes("' had already ended.'"), 'already-ended banner text');
   assert.ok(js.includes("'! Could not end '") && js.includes("'. It is still running - close it at the desk.'"), 'kill-failed banner text');
-  assert.ok(js.includes("'Handoff written for '"), 'handoff-written banner text');
-  assert.ok(js.includes("'! Session ended, but the handoff was not written.'"), 'handoff-not-written banner text');
+  assert.ok(js.includes("{ text: ' ended.' }"), 'the one ended banner');
+  // The app writes no handoff, so it may not report on one. The 'was not
+  // written' line in particular was a lie often enough that the owner caught
+  // it with the file on disk (2026-08-27).
+  for (const gone of ["'Handoff written for '", 'was not written.']) {
+    assert.ok(!js.includes(gone), `app.js must no longer contain ${gone}`);
+  }
 });
 
 test('the end-session request is issued only from api.js, never from app.js', () => {
@@ -943,8 +953,8 @@ test('endTargetFor sends session_name for a synthetic (non-project) tile name, p
 test('buildTile carries the desktop confirm label and still carries the plain one', () => {
   const js = read('app.js');
   const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
-  assert.match(buildTile, /'END & WRITE HANDOFF \(DESKTOP\)'/);
-  assert.match(buildTile, /'END & WRITE HANDOFF'/);
+  assert.match(buildTile, /'END ANYWAY \(DESKTOP\)'/);
+  assert.match(buildTile, /'END ANYWAY'/);
 });
 
 test("rowState's running branch carries source === 'desk' and the 'desktop' suffix literal", () => {
@@ -1210,18 +1220,15 @@ test('dropCoveredResults runs BEFORE clearSettledLaunchBanner in both loops', ()
   }
 });
 
-// --- an interrupted handoff must not claim the file was never written -----
+// --- the ended banner reports the end, and nothing else -------------------
 
-test("reportEnded distinguishes 'interrupted' from a genuine handoff failure", () => {
+test('reportEnded announces one line and carries no handoff verdict at all', () => {
   const js = read('app.js');
   const fn = js.slice(js.indexOf('function reportEnded('), js.indexOf('function failedSessions('));
-  assert.match(fn, /s\.handoff_result === 'interrupted'/,
-    'the agent losing the verdict is not the same as the handoff failing');
-  assert.match(fn, /restarted before it could confirm/);
-  assert.ok(
-    fn.indexOf("=== 'interrupted'") < fn.indexOf('the handoff was not written'),
-    'the interrupted branch must be reached before the blunt fallback',
-  );
+  assert.match(fn, /setBanner\('info', \[\{ b: s\.project \}, \{ text: ' ended\.' \}\]\)/);
+  for (const gone of ['handoff_result', 'handoff_ok']) {
+    assert.ok(!fn.includes(gone), `reportEnded must not read ${gone} - the agent no longer writes one`);
+  }
 });
 
 // --- the folder row -------------------------------------------------------
@@ -1615,7 +1622,7 @@ test('renderProjects: with a folder open, only that folder\'s children render an
     ],
     launching: new Set(), stopping: new Set(), results: new Map(), confirmName: null, focusName: null,
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const rowsSeen = [];
   const tilesSeen = [];
@@ -1864,7 +1871,7 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
     ],
     launching: new Set(), stopping: new Set(), results: new Map(),
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const seen = [];
   const buildRow = (p) => { seen.push(p); return { tag: 'ROW' }; };
@@ -1948,7 +1955,7 @@ function makeProjectsEls() {
     tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
     // Lane 9's row zone renames or hides the ALL PROJECTS header depending on
     // how many shared folders there are, so these three are read every render.
-    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(),
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(),
   };
 }
 
@@ -3244,7 +3251,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
   const rowsSeen = [];
   const els = {
     tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
-    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(),
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(),
   };
   const projDocument = {
     getElementById: (id) => els[id],

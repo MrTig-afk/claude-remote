@@ -77,19 +77,12 @@ function refuseSpawn() {
   );
 }
 
-// The two seams endSession() uses. Same reasoning as refuseSpawn above: a
-// fixture with neither would tree-kill a real pid and start a real handoff
-// run on the owner's account.
+// The seam endSession() uses. Same reasoning as refuseSpawn above: a fixture
+// without it would tree-kill a real pid on this machine.
 function refuseKill() {
   throw new Error(
     'helper-auth: this fixture server has no killSpawner, so ending a session would run a REAL '
     + 'taskkill against a pid on this machine. Pass an explicit killSpawner to the ctx.',
-  );
-}
-function refuseHandoff() {
-  throw new Error(
-    'helper-auth: this fixture server has no handoffSpawner, so ending a session would start a REAL '
-    + "handoff run on the owner's account. Pass an explicit handoffSpawner to the ctx.",
   );
 }
 function refusePidImageName() {
@@ -142,7 +135,6 @@ export function fixtureServer(ctx) {
   // A typeof check covers both the missing and the undefined case.
   if (typeof ctx.spawner !== 'function') ctx.spawner = refuseSpawn;
   if (typeof ctx.killSpawner !== 'function') ctx.killSpawner = refuseKill;
-  if (typeof ctx.handoffSpawner !== 'function') ctx.handoffSpawner = refuseHandoff;
   if (typeof ctx.pidImageName !== 'function') ctx.pidImageName = refusePidImageName;
   if (typeof ctx.driveExec !== 'function') ctx.driveExec = refuseDriveExec;
   return createAgentServer(ctx);

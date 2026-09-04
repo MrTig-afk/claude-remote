@@ -1447,3 +1447,46 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
      430px column; at this width it belongs at the main column's right edge. */
   .newproj { right: max(13px, calc(50% - 520px + 13px)); }
 }
+
+/* The stop confirm's warning and its way out, per Artifact Lane 2. The app
+   writes no handoff; this says so and points at the only thing that can. */
+.tile-confirm-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--warn);
+}
+/* Both glyphs come from the same template, which carries .set-ico and its
+   accent green - the wrong colour on a warning, and the wrong colour on a
+   control whose own border is already accent. currentColor via .ico, so
+   naming the row's own colour is the whole override. 12px, not the
+   template's 15: it sits beside 10px text. */
+.tile-confirm-warn .ico {
+  width: 12px;
+  height: 12px;
+  margin-top: 2px;
+  color: var(--warn);
+}
+.tile-confirm-open .ico {
+  width: 12px;
+  height: 12px;
+  margin-right: 7px;
+  color: var(--accent);
+}
+.tile-confirm-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 9px;
+  min-height: 44px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  border: 1px solid var(--accent-2);
+  border-radius: 4px;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
