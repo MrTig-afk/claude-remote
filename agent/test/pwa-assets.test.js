@@ -745,18 +745,49 @@ test('every text input is at least 16px, or iOS zooms the page and stays zoomed'
   // that are known to land on one. Add to it when a new input gets a bare
   // class; the sweep covers everything else automatically.
   const CLASS_ONLY_INPUTS = ['.pin'];
+  // At-rule WRAPPERS removed first, not skipped. `[^}]*` happily eats a `{`, so
+  // `@media (...) { .filter input {...} ... }` used to match as one rule whose
+  // selector was the @media line and whose body swallowed the first inner rule
+  // - which was then never rescanned. The first rule inside every at-rule was
+  // invisible, and a breakpoint is the likeliest place to shrink an input.
+  // Dropping just the opening `@... {` leaves the inner rules at top level; the
+  // now-unbalanced `}` cannot match the rule pattern, so it is inert.
+  const flat = css.replace(/@[a-zA-Z-]+[^{]*\{/g, '');
   const sized = [];
-  for (const m of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+  for (const m of flat.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
     const selector = m[1].trim().replace(/\s+/g, ' ');
-    const namesElement = /(^|[\s,>+~])(input|textarea|select)\b/.test(selector);
-    if (!namesElement && !CLASS_ONLY_INPUTS.includes(selector)) continue;
-    const size = m[2].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
-    if (size) sized.push({ selector, px: Number(size[1]) });
+    const parts = selector.split(',').map((p) => p.trim());
+    const namesElement = /(^|[\s>+~])(input|textarea|select)\b/.test(selector.replace(/,/g, ' '));
+    // Per SELECTOR PART, not whole-string equality: `.pin:focus` and `.pin.dense`
+    // are the same element, and :focus is the state iOS actually zooms on.
+    const classOnly = CLASS_ONLY_INPUTS.some((cls) =>
+      parts.some((p) => new RegExp(`(^|[\\s>+~])\\${cls}(?![\\w-])`).test(p)));
+    if (!namesElement && !classOnly) continue;
+    // `font:` shorthand and non-px units count too. `font: 12px/1.4 monospace`
+    // sizes an input just as well as `font-size`, and rem/em/%/pt all resolve
+    // to something the browser compares against 16px. Only px is checked
+    // numerically; any other unit is reported rather than silently skipped,
+    // because this file has no business guessing a root font size.
+    const decl = m[2].match(/font(?:-size)?:\s*[^;}]*?(\d+(?:\.\d+)?)(px|rem|em|%|pt)/);
+    if (decl) sized.push({ selector, px: decl[2] === 'px' ? Number(decl[1]) : null, unit: decl[2] });
   }
+  // The floor must be UNQUALIFIED. This assertion previously accepted any rule
+  // whose selector merely contained the three words, which a prior "cut a dead
+  // alternative" pass introduced: `.app input, .app textarea, .app select`
+  // satisfied it while leaving every input outside `.app` on the UA ~13.33px.
+  // The three bare element names, nothing else.
   assert.ok(
-    sized.some((r) => /\binput\b/.test(r.selector)
-      && /\btextarea\b/.test(r.selector) && /\bselect\b/.test(r.selector)),
-    'app.css must set a global font-size floor on input/textarea/select, so an input with no rule of its own is safe by default',
+    sized.some((r) => {
+      const parts = r.selector.split(',').map((p) => p.trim()).sort();
+      return parts.length === 3 && parts.join(',') === 'input,select,textarea';
+    }),
+    'app.css must set an UNQUALIFIED font-size floor on `input, textarea, select` - a qualified one (e.g. `.app input`) leaves every input outside it on the UA default',
+  );
+  const wrongUnit = sized.filter((r) => r.px === null);
+  assert.deepEqual(
+    wrongUnit, [],
+    `these rules size an input in a unit this test cannot compare to the 16px floor - use px: ${
+      wrongUnit.map((r) => `${r.selector} (${r.unit})`).join('; ')}`,
   );
   const tooSmall = sized.filter((r) => r.px < 16);
   assert.deepEqual(
