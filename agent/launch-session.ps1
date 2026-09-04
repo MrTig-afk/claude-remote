@@ -52,14 +52,21 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     # `Pull Requests` would otherwise arrive as `--name=Pull` plus a stray
     # `Requests` that claude reads as an initial prompt.
     "--name=`"$(Split-Path -Leaf $ProjectPath)`"",
-    # QUOTED, for exactly the reason the --name comment above gives. Until
-    # 2026-09-04 this value was the slug (`f-dev-projects-repos-...`), which can
-    # never contain a space, so passing it bare was safe. It is now the folder
-    # LEAF - so `Pull Requests` would arrive as `--remote-control Pull` plus a
-    # stray `Requests` that claude reads as an initial prompt, and the
-    # collision form `email-lint (Work)` would lose its qualifier the same way.
-    # The node-side test asserts the ARGUMENT VALUE, so it cannot see this;
-    # only reading these two lines together can.
+    # ONE ARGUMENT, and the `=` matters. Start-Process joins ArgumentList with
+    # spaces and adds no quoting of its own, so passing the flag and the value
+    # as two separate array entries splits any name containing a space:
+    # `Video Editing` arrives as the flag plus `Video`, and then a stray
+    # `Editing`, which claude reads as an INITIAL PROMPT and types into the
+    # session. Any project whose folder name contains a space hits this, as
+    # does the collision form `email-lint (Work)`.
+    #
+    # HISTORY, so nobody re-runs it: the two-argument form was reverted to on
+    # 2026-09-04 as a diagnostic for an outage and did NOT fix it - the form
+    # was never the cause. Full account in .pipeline/spec.md.
+    #
+    # The value FORM is pinned in sessions.test.js's recipe-integrity test and
+    # in detachment.test.js's requiredTokens - it was the bare flag until
+    # 2026-09-04, which is how a change here passed 992 green tests.
     "--remote-control=`"$SessionName`""
 )
 

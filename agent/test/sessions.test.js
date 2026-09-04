@@ -12,6 +12,9 @@ import {
   STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION, listSessions, pidFileNameFor,
   deriveDeskSessionName,
 } from '../registry.js';
+// The heuristic itself, so the regression tests below can state their
+// precondition instead of asserting it by proxy.
+import { containerChildrenOf } from '../projects.js';
 import { seedPasscode, issueTestToken, authHeaders, fixtureServer, testSessionDirs } from './helper-auth.js';
 import { nameUnder } from './helper-names.js';
 
@@ -29,6 +32,12 @@ fs.mkdirSync(path.join(base, 'Pull Requests', 'Vercel'), { recursive: true });
 fs.mkdirSync(path.join(base, 'Vercel'));                           // the collision partner
 fs.mkdirSync(path.join(base, 'email-lint', 'sub'));                // ordinary project WITH a subfolder
 fs.writeFileSync(path.join(base, 'email-lint', 'notes.md'), 'x');  // ...the file that keeps it a project
+// A FILE-FREE folder inside a container. listProjects does not classify a
+// container's children at all - it pushes them straight from
+// containerChildrenOf - so the PWA draws this as an ordinary launchable
+// project. containerChildrenOf(Nested) would nonetheless call it a container,
+// which is exactly the divergence the launch guard must not reintroduce.
+fs.mkdirSync(path.join(base, 'Pull Requests', 'Nested', 'inner'), { recursive: true });
 
 // Rooted session names, computed once - `base` is a random mkdtemp path, so
 // the root slug can never be a literal (see helper-names.js). Every child
@@ -540,29 +549,29 @@ test('pidFileNameFor - a nested session name stays a direct child of pidDir', ()
 
 test('launchSession - one call spawns exactly one process', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(calls.length, 1);
 });
 
 test('launchSession - spawns powershell.exe', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(calls[0].file, 'powershell.exe');
 });
 
 test('launchSession - exact args array', () => {
   const { spawner, calls } = makeFakeSpawner();
   const regCtx = makeRegCtx();
-  launchSession({ baseDir: base, spawner, ...regCtx }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...regCtx }, 'Video Editing');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
     '-NoProfile',
     '-NonInteractive',
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
-    '-ProjectPath', path.join(base, 'Pull Requests'),
-    '-SessionName', 'Pull Requests',   // leaf, spaces and all - the same form --name has always used
-    '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(PULL_REQUESTS)),
+    '-ProjectPath', path.join(base, 'Video Editing'),
+    '-SessionName', 'Video Editing',   // leaf, spaces and all - the same form --name has always used
+    '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(VIDEO_EDITING)),
   ]);
 });
 
@@ -592,32 +601,99 @@ test('remoteControlName - the comparison is case-insensitive, because Windows is
 
 test('launchSession - exact options (detachment contract)', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.deepEqual(calls[0].options, {
     stdio: 'ignore',
     windowsHide: true,
-    cwd: path.join(base, 'Pull Requests'),
+    cwd: path.join(base, 'Video Editing'),
   });
 });
 
 test('launchSession - child.unref() called exactly once', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(calls[0].child.unrefCount, 1);
 });
 
 test('launchSession - error handler wired', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(typeof calls[0].child.handlers.error, 'function');
 });
 
 test('launchSession - no shell string-building leaked into args', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.ok(!calls[0].args.includes('-Command'));
   assert.ok(!calls[0].args.some((a) => a.includes('&')));
   assert.ok(!calls[0].args.some((a) => a.includes(';')));
+});
+
+test('launchSession - REFUSES a container folder, and spawns NOTHING', () => {
+  // `Pull Requests` holds only directories and no file of its own, which is
+  // exactly containerChildrenOf's definition of a container: a folder OF
+  // projects, not a project. listProjects already marks it container:true and
+  // the PWA draws it as a drill-in row, so a TAP can never reach here. This
+  // covers everything that is not a tap - a stale saved name, a client bug, a
+  // direct API call - on the one route that starts a process with the owner's
+  // full account access.
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 400);
+  assert.equal(res.error, 'project_is_container');
+  assert.equal(calls.length, 0, 'nothing may be spawned for a container - that IS the rule');
+});
+
+test('launchSession - an ordinary project still launches (the guard is not a blanket refusal)', () => {
+  // Control for the test above. Without it a guard that refused EVERYTHING
+  // would pass, and so would a typo that broke launching outright.
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
+  assert.equal(res.ok, true);
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - a project INSIDE a container still launches', () => {
+  // The second control, and the one that matters most: a container exists to
+  // hold projects, so refusing the container must not refuse what is in it.
+  // `Pull Requests/Vercel` is the drill-in case the PWA actually offers.
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests/Vercel');
+  assert.equal(res.ok, true, 'blocking a container must never block what is inside it');
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - a FILE-FREE folder inside a container still launches', () => {
+  // REGRESSION (code-review, 2026-09-05). The guard first asked
+  // containerChildrenOf directly, which applies the heuristic at EVERY depth.
+  // listProjects applies it at exactly one: top-level children of a container
+  // root. So a file-free folder inside a container - which the PWA lists as a
+  // perfectly ordinary project - was refused with 400 project_is_container.
+  // The guard now reads listProjects, so the two cannot disagree.
+  assert.ok(containerChildrenOf(path.join(base, 'Pull Requests', 'Nested')),
+    'precondition: the heuristic alone DOES call this a container');
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests/Nested');
+  assert.equal(res.ok, true, 'the list offers it, so the launch must accept it');
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - a file-free SINGLE-mode root still launches', () => {
+  // The other half of the same finding: a `single` root is listed as one
+  // project with no classification at all, so "this folder only" on a folder
+  // whose top level holds no loose file must still launch. Same folder as the
+  // container test above - which is the point: what it IS depends on how it
+  // was shared, and only listProjects knows that.
+  const { spawner, calls } = makeFakeSpawner();
+  const ctx = {
+    sharedFolders: [{ path: path.join(base, 'Pull Requests'), mode: 'single', excludes: [], new_folders: 'show' }],
+    spawner,
+    ...makeRegCtx(),
+  };
+  const res = launchSession(ctx, 'Pull Requests');
+  assert.equal(res.ok, true, 'shared as "this folder only", it is a project, not a container');
+  assert.equal(calls.length, 1);
 });
 
 test('launchSession - clearPidFile genuinely fires BEFORE the spawn call, not merely before return', () => {
@@ -747,14 +823,14 @@ test('HTTP - POST /api/sessions launches and returns the flat SessionView body',
     const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
+      body: JSON.stringify({ project: 'Video Editing' }),
     });
     assert.equal(res.status, 202);
     const body = await res.json();
     assert.deepEqual(body, {
-      session_name: PULL_REQUESTS,
-      project: 'Pull Requests',
-      path: path.join(base, 'Pull Requests'),
+      session_name: VIDEO_EDITING,
+      project: 'Video Editing',
+      path: path.join(base, 'Video Editing'),
       status: 'starting',
       started_at: new Date(fixedNow).toISOString(),
       pid: null,
@@ -915,7 +991,7 @@ test('HTTP - GET /api/sessions after a launch -> one entry, exactly the SessionV
     await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
+      body: JSON.stringify({ project: 'Video Editing' }),
     });
     const res = await authedFetch(regCtx, `${origin}/api/sessions`);
     assert.equal(res.status, 200);
@@ -1286,7 +1362,7 @@ test('HTTP - a corrupt sessions.json does not break the endpoints', async () => 
     const postRes = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
+      body: JSON.stringify({ project: 'Video Editing' }),
     });
     assert.equal(postRes.status, 202);
     assert.equal(calls.length, 1);
@@ -1315,7 +1391,36 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
     !script.includes('whatsapp-claude-channel'),
     'the pre-rename plugin name must not return',
   );
-  assert.ok(script.includes('--remote-control'));
+  // THE WHOLE TOKEN, quoting included - not the bare flag. This assertion used
+  // to read `script.includes('--remote-control')`, which every form satisfies:
+  // `=`, space-separated, quoted, unquoted, even an empty value. On 2026-09-04
+  // this line was changed from the two-argument form to the `=` form and 992
+  // tests stayed green, because nothing here looked at the VALUE or its
+  // PAIRING. That is the exact hole, and this closes it.
+  //
+  // Why the `=` form is the correct one: Start-Process joins ArgumentList with
+  // spaces and quotes nothing itself, so `'--remote-control', $SessionName`
+  // splits any name containing a space - `Video Editing` arrives as
+  // `--remote-control Video` plus a stray `Editing` that claude reads as an
+  // initial prompt and types into the session. Real folders hit this: Video
+  // Editing, Backend Engineering, Whatsapp Plugin, Y Combinator-qm.
+  //
+  // HONEST LIMIT: this is a SOURCE assertion. It proves the recipe still says
+  // what it should; it cannot prove claude ACTS on it. Only a live launch does
+  // that, and on 2026-09-04 the owner confirmed one (Video Editing, correct
+  // row name, no stray word typed).
+  assert.ok(
+    script.includes('"--remote-control=`"$SessionName`""'),
+    'the Code-tab row name must be ONE argument with its value quoted, or a name with a space splits',
+  );
+  // Regex, not includes(): the ArgumentList is one entry per line with comments
+  // interleaved, so a reintroduction would be written across TWO lines and the
+  // single-line string this used to test for would never have matched it. A
+  // guard that cannot fail is worse than no guard - it reads as protection.
+  assert.ok(
+    !/'--remote-control'\s*,/.test(script),
+    'the two-argument form must not come back - it splits every name containing a space',
+  );
   // --remote-control names the Code-tab row, NOT the terminal title: a
   // PWA-launched tab read "Claude Code" until --name was added (owner's
   // screenshot, 2026-08-27). The folder leaf, not $SessionName - the owner
@@ -1825,15 +1930,15 @@ test('endSession - a launch landing during the kill poll returns reused with the
   const killer = makeKillingSpawner(9993);
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'cmd.exe';
-  makeRunningEntry(regCtx, 'Pull Requests', 9993);
+  makeRunningEntry(regCtx, 'Video Editing', 9993);
   const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
-  const endPromise = endSession(ctx, 'Pull Requests');
+  const endPromise = endSession(ctx, 'Video Editing');
 
   // The claim (status: 'handoff') is written synchronously before endSession
   // ever awaits, so a launch landing in this window - the exact race the
   // comments in sessions.js worry about - sees it immediately.
-  const launchResult = launchSession(ctx, 'Pull Requests');
+  const launchResult = launchSession(ctx, 'Video Editing');
   assert.equal(launchResult.ok, true);
   assert.equal(launchResult.reused, true);
   assert.equal(launchResult.session.status, 'handoff');

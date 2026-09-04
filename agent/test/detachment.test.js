@@ -123,7 +123,12 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     // Whole token, not the bare flag: the plugin is `whatsapp-channel` and the
     // marketplace is `whatsapp-claude-plugin`, which is the easy confusion.
     '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',
-    '--remote-control',
+    // WHOLE token, same reason as --channels above and for a bug that actually
+    // happened: this entry was the bare flag `'--remote-control'` on
+    // 2026-09-04, so changing the argument FORM stripped nothing this list
+    // guards and the mutation test below stayed green. A name with a space
+    // then splits in two, and the leftover word is typed into the session.
+    '"--remote-control=`"$SessionName`""',
     'Activate.ps1',
     'Start-Process',
     '-LiteralPath',

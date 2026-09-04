@@ -567,7 +567,7 @@ const IN_FLIGHT_CEILING_MS = 10 * 60 * 1000;
  * next test's launch of the same project name.
  */
 function inFlightKey(ctx, sessionName) {
-  return `${ctx.registryPath || getRegistryFilePath()} ${sessionName}`;
+  return `${ctx.registryPath || getRegistryFilePath()}\u0000${sessionName}`;
 }
 
 /**
@@ -646,6 +646,28 @@ export function launchSession(ctx, project) {
   const existing = findLiveSession(ctx, sessionName);
   if (existing) {
     return { ok: true, reused: true, session: existing };
+  }
+
+  // A container is a folder OF projects, not a project. The PWA draws one as a
+  // drill-in row, so a tap cannot reach here; this is the second lock on the
+  // one route that starts a process with the owner's full account access, for
+  // everything that is NOT a tap - a stale saved name, a client bug, a direct
+  // API call.
+  //
+  // Asked of listProjects, NOT of containerChildrenOf directly, and that is the
+  // whole correctness of it. The heuristic applies at every depth; listProjects
+  // applies it at exactly ONE - top-level children of a `container` root - so
+  // re-deriving here refuses folders the list draws as tappable, such as a
+  // file-free child inside a container. Reading the same list the phone reads
+  // means the two cannot disagree by construction. Regression-tested.
+  //
+  // BELOW findLiveSession on purpose: refusing to START one is the whole
+  // change. A session that already exists must still be reported as `reused`
+  // and must stay endable - endSession and registry.js's prune share
+  // resolveProjectPath, which is deliberately untouched.
+  const resolved = path.resolve(r.path);
+  if (listProjects(roots).some((e) => e.container && path.resolve(e.path) === resolved)) {
+    return { ok: false, status: 400, error: 'project_is_container' };
   }
 
   // Checked AFTER findLiveSession, not before: once the pid file exists the
