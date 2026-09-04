@@ -11,7 +11,7 @@ import {
   isPidAlive, HANDOFF_TIMEOUT_MS, claimDeskSession, resolveDeskSessionId,
   pidFileNameFor,
 } from './registry.js';
-import { containerChildrenOf, rootsFrom } from './projects.js';
+import { containerChildrenOf, rootsFrom, listProjects } from './projects.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
 const HANDOFF_SCRIPT = fileURLToPath(new URL('./handoff-session.ps1', import.meta.url));
@@ -579,6 +579,51 @@ function inFlightKey(ctx, sessionName) {
  * ctx also threads the registry seams (registryPath, pidDir, isPidAlive, now)
  * straight through to findLiveSession/clearPidFile/recordLaunch untouched.
  */
+/**
+ * The name the Claude app's Code tab shows for a session.
+ *
+ * The FOLDER LEAF, not the derived session name. The owner opened email-lint
+ * on 2026-09-04 and found the row reading
+ * `f-dev-projects-repos-02b052.email-lint` - so the hand-off banner, whose one
+ * job is telling someone where their session is, was naming a label that does
+ * not exist.
+ *
+ * Safe to change: NOTHING in the agent reads this value back. Launched
+ * sessions are correlated by pid file and resolved path, and the registry key
+ * keeps the root-qualified `sessionName` untouched (B2). `--name` has always
+ * passed the raw leaf quoted - that is why the window title reads `MingleHub`
+ * - so a leaf with spaces is already proven to survive the argument list.
+ *
+ * COLLISIONS. Two shared projects can share a leaf: `Work/email-lint` and
+ * `Repos/email-lint`. The Code tab has no room for the dim parent eyebrow the
+ * project list uses, so the name carries it: `email-lint (Work)`. BOTH sides
+ * are qualified, never just the second one - otherwise a row's name would
+ * depend on which was launched first, which is exactly the kind of thing that
+ * is impossible to debug later. Everything else stays a bare leaf.
+ *
+ * `paths` is every project path the shared set can reach; comparison is
+ * case-insensitive because Windows paths are.
+ */
+export function remoteControlName(targetPath, paths) {
+  const leaf = path.basename(targetPath);
+  const same = (paths || []).filter((p) => path.basename(p).toLowerCase() === leaf.toLowerCase());
+  if (same.length <= 1) return leaf;
+  return `${leaf} (${path.basename(path.dirname(targetPath))})`;
+}
+
+/** Every project path the shared set can reach, containers' children included. */
+function allProjectPaths(roots) {
+  const out = [];
+  for (const p of listProjects(roots)) {
+    if (Array.isArray(p.children) && p.children.length > 0) {
+      for (const c of p.children) out.push(c.path);
+    } else {
+      out.push(p.path);
+    }
+  }
+  return out;
+}
+
 export function launchSession(ctx, project) {
   const { spawner = spawn } = ctx;
   const roots = rootsFrom(ctx);
@@ -652,8 +697,9 @@ export function launchSession(ctx, project) {
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', r.path,
-    // The LAUNCHER ARGUMENT ONLY - the registry key keeps its '/', because
-    // recordLaunch below is still passed the untouched `sessionName`.
+    // THE CODE-TAB ROW NAME, and nothing else - see remoteControlName above.
+    // The registry key keeps the root-qualified `sessionName`, because
+    // recordLaunch below is still passed the untouched value.
     // launch-session.ps1 hands this value straight to
     // `claude.cmd --remote-control`. Whether that CLI accepts a '/' inside a
     // session name could not be established: node's spawn, PowerShell,
@@ -668,7 +714,7 @@ export function launchSession(ctx, project) {
     // 'pull-requests.vercel' is unreachable by any flat project. If a launch
     // is ever seen working with a '/', this replace can simply go - nothing
     // else in the agent reads the --remote-control name back.
-    '-SessionName', sessionName.replace(/\//g, '.'),
+    '-SessionName', remoteControlName(r.path, allProjectPaths(roots)),
     '-PidFile', pidFilePath,
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,

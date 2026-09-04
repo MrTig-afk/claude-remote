@@ -123,6 +123,26 @@ export const NOTHING_SHARED = {
  * phone has signal, the tailnet is simply not up. "Check your connection" on
  * its own would leave someone staring at a full signal bar.
  */
+/**
+ * The COMMON failure, and the honest one.
+ *
+ * The app cannot tell "this phone has no route" from "that PC is asleep".
+ * Anything that could needs a request to something other than the agent, and
+ * nothing leaves this machine - that is the product, not a limitation to work
+ * around. The failure CODE does not separate them either: a booting PC
+ * produces both a fast reject and a timeout, which is why the retry ladder
+ * treats them alike.
+ *
+ * So it leads with the likeliest cause - the PC waking, the daily case - and
+ * names the phone-side causes second, blaming neither. The old wording said
+ * only "no answer from the PC yet", and that is what sent the owner to go and
+ * check a machine that was working (2026-09-04).
+ */
+export const CANNOT_REACH = {
+  title: 'Can’t reach your PC.',
+  body: 'It may still be waking up. If it has been a while, check this phone’s connection and that Tailscale is on.',
+};
+
 export const PHONE_OFFLINE = {
   title: 'This phone is offline.',
   body: 'Nothing is wrong with your PC. Check your connection, then check Tailscale is on.',

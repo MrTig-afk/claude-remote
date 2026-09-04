@@ -652,6 +652,12 @@ body {
    The crumb: 'Settings' with a back chevron, naming the screen it returns
    to. A 44px tap floor with the padding pulled back so it costs the header
    no vertical space, the same trick .settings-open uses. */
+/* The way OUT of a sub-screen, and it has to look like one. It shipped at
+   10px in var(--muted) - grey fine print sitting above a bold white title -
+   which is why it was reported as absent entirely: "there is no go back arrow
+   when you click settings" (owner, 2026-09-04). It was there; it did not look
+   like anything. The Artifact draws this crumb in the accent colour, which is
+   the palette's one signal for "this is live". */
 .set-back {
   display: flex;
   align-items: center;
@@ -660,9 +666,9 @@ body {
   margin: -13px 0 0 -6px;
   padding: 13px 10px 13px 6px;
   font: inherit;
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--accent-2);
   background: none;
   border: 0;
   appearance: none;

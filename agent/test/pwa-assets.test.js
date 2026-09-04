@@ -1570,7 +1570,7 @@ function makeRenderProjectsIntegration(stubs) {
     'listZoneState', 'missingRoots', 'buildEmptyState', 'buildGoneNotice', 'crumbSegments',
     // R4's offline branch reads it; without this the one list state added by
     // R4 is the only one that cannot be integration-tested.
-    'PHONE_OFFLINE',
+    'PHONE_OFFLINE', 'CANNOT_REACH',
     'SHARED_UNKNOWN', 'NOTHING_SHARED', 'ALL_ROOTS_GONE', 'EMPTY_DAY_ONE_BODY', 'emptyDayOneTitle',
     // Lane 9's grouping runs inside renderProjects now, so the row zone's own
     // dependency comes in here too.
@@ -1584,6 +1584,7 @@ function makeRenderProjectsIntegration(stubs) {
     stubs.buildGoneNotice || (() => makeStubEl()),
     stubs.crumbSegments || folders.crumbSegments,
     stubs.PHONE_OFFLINE || copy.PHONE_OFFLINE,
+    stubs.CANNOT_REACH || copy.CANNOT_REACH,
     stubs.SHARED_UNKNOWN || copy.SHARED_UNKNOWN,
     stubs.NOTHING_SHARED || copy.NOTHING_SHARED,
     stubs.ALL_ROOTS_GONE || copy.ALL_ROOTS_GONE,
@@ -1905,9 +1906,14 @@ function makeEmptyGoneBuilders() {
   const src = js.slice(start, end);
   return new Function(
     'document', 'CHOOSE_FOLDERS_BUTTON', 'REMOVE_BUTTON', 'rootGoneTitle', 'ROOT_GONE_BODY', 'crumbSegments',
+    // buildEmptyState takes an ACTION name since R4 - 'choose' or 'retry' -
+    // and reads the label for each. Same rule as the renderProjects harness
+    // above: a constant it references has to be injected here too.
+    'RETRY_BUTTON',
     `${src}; return { buildEmptyState, buildGoneNotice };`,
   )(
     makeStubDocumentForBuild(), copy.CHOOSE_FOLDERS_BUTTON, copy.REMOVE_BUTTON, copy.rootGoneTitle, copy.ROOT_GONE_BODY, folders.crumbSegments,
+    copy.RETRY_BUTTON,
   );
 }
 
@@ -2062,10 +2068,19 @@ test('D5 - reachable:\'waiting\' with shared:[]: the waiting .msg renders and NO
 
   renderProjects();
 
+  // THE claim of this test, unchanged: an unreachable agent must never be
+  // reported as "nothing shared yet", which would send the owner into a picker
+  // that could wipe a set the PC never reported.
   assert.equal(countByDataset(els.projects, 'choose'), 0, 'the app must never say "nothing shared yet" while the PC is asleep');
-  const msgNodes = collectByClass(els.projects, 'msg');
-  assert.equal(msgNodes.length, 1);
-  assert.match(msgNodes[0].textContent, /Waiting for the PC/);
+  // CHANGED 2026-09-04: it is an empty state with a retry now, not a bare
+  // .msg, and the words no longer assert the PC is on its way - the app cannot
+  // see that, and with Tailscale up and the phone's radios off it was wrong.
+  assert.equal(countByDataset(els.projects, 'retry'), 1, 'and it offers the retry that is already happening');
+  const title = collectByClass(els.projects, 'empty-title').map((n) => n.textContent).join(' ');
+  const body = collectByClass(els.projects, 'empty-body').map((n) => n.textContent).join(' ');
+  assert.match(title, /reach your PC/);
+  assert.match(body, /Tailscale/, 'the phone-side cause has to be named, not just the PC');
+  assert.match(body, /waking up/, 'and the likeliest cause still leads');
 });
 
 test('D6 - renderBackBar receives canCreate=false for nothing-shared and true for empty-day-one', () => {
@@ -2164,7 +2179,11 @@ test('the waiting state has its own status line, its own dot and its own empty-s
   const js = read('app.js');
   const conn = js.slice(js.indexOf('function renderConn()'), js.indexOf('function renderProjects('));
   assert.match(conn, /state\.reachable === 'waiting'/);
-  assert.match(conn, /WAITING FOR PC/);
+  // "CANNOT REACH PC", not "WAITING FOR PC". Waiting asserts the PC is coming
+  // back, which is a claim about a machine this app cannot see.
+  assert.match(conn, /CANNOT REACH PC/);
+  assert.doesNotMatch(codeOnly(conn), /WAITING FOR PC/,
+    'codeOnly: the comment beside it names the wording it replaced');
   assert.match(conn, /setDot\(dot, 'accent'\)/, 'a dim dot reads as "nothing is happening"; something is');
   assert.ok(
     !/text\.classList\.add\('reachable'\)[\s\S]*?state\.reachable === true/.test(conn),
@@ -2172,13 +2191,17 @@ test('the waiting state has its own status line, its own dot and its own empty-s
   );
 
   const rp = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
-  assert.match(rp, /Waiting for the PC\./);
-  // T100 moved the literal comparison into listZoneState (folders-ui.js,
-  // pinned there by S1/S2's own RED WHEN) - renderProjects now branches on
-  // the zone it returns, but the ordering property this test exists for
-  // ("waiting" wins over "unreachable") must still hold here too.
+  // The two kinds now share ONE screen, because the app cannot honestly tell
+  // "this phone has no route" from "that PC is asleep" without asking
+  // something other than the agent - and nothing leaves this machine. The
+  // ordering property this test was written for is therefore satisfied by
+  // construction: neither can win over the other when there is only one
+  // branch. listZoneState still pins that both outrank every shared-set state
+  // (S1/S2), which is the half that actually protects the owner's folders.
+  assert.match(rp, /zone\.kind === 'waiting' \|\| zone\.kind === 'unreachable'/);
+  assert.match(rp, /CANNOT_REACH/);
   assert.ok(
-    rp.indexOf("zone.kind === 'waiting'") < rp.indexOf("zone.kind === 'unreachable'"),
+    rp.indexOf("zone.kind === 'waiting' || zone.kind === 'unreachable'") > 0,
     'the waiting message must win over "Cannot reach the agent."',
   );
 });

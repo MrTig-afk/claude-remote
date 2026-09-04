@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test, after } from 'node:test';
 
 import {
-  deriveSessionName, resolveProjectPath, launchSession, endSession, rootSlug, sessionNameFor,
+  deriveSessionName, resolveProjectPath, launchSession, endSession, rootSlug, sessionNameFor, remoteControlName,
   MAX_PROJECT_SEGMENTS,
 } from '../sessions.js';
 import {
@@ -41,6 +41,11 @@ const PULL_REQUESTS_VERCEL = nameUnder(base, 'pull-requests', 'vercel');
 // The launcher '-SessionName' argument collapses EVERY '/' to '.' - every
 // rooted name now carries at least one '/' (the root prefix), so this
 // collapse is exercised even for a depth-1 project, unlike before T95.
+// What -SessionName carries: the Code-tab ROW name, which is the folder leaf.
+// It was the derived session name collapsed on '/' until 2026-09-04, when the
+// owner opened a session and found the row reading
+// `f-dev-projects-repos-02b052.email-lint` - a label the hand-off banner was
+// telling him to look for and which does not exist.
 const argForm = (sessionName) => sessionName.replace(/\//g, '.');
 
 // A SECOND root, for the T95 multi-root acceptance tests (AT-12/14/15/19).
@@ -311,7 +316,10 @@ test('launchSession - nested identifier: exact args array, and the registry key 
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', path.join(base, 'Pull Requests', 'Vercel'),
-    '-SessionName', argForm(PULL_REQUESTS_VERCEL),   // collapsed for the launcher
+    // The Code-tab row name. This fixture has BOTH 'Pull Requests/Vercel' and a
+    // top-level 'Vercel' - the collision partner two lines from the mkdir - so
+    // the leaf alone would put two identical rows in the Code tab.
+    '-SessionName', 'Vercel (Pull Requests)',
     '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(PULL_REQUESTS_VERCEL)),
   ]);
   // The registry key must NOT change - this is the pin that a future
@@ -560,9 +568,33 @@ test('launchSession - exact args array', () => {
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', path.join(base, 'Pull Requests'),
-    '-SessionName', argForm(PULL_REQUESTS),
+    '-SessionName', 'Pull Requests',   // leaf, spaces and all - the same form --name has always used
     '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(PULL_REQUESTS)),
   ]);
+});
+
+test('remoteControlName - a unique leaf is the whole name', () => {
+  // The daily case: `email-lint`, not `f-dev-projects-repos-02b052.email-lint`.
+  const paths = [path.join(base, 'email-lint'), path.join(base, 'Video Editing')];
+  assert.equal(remoteControlName(path.join(base, 'email-lint'), paths), 'email-lint');
+  assert.equal(remoteControlName(path.join(base, 'Video Editing'), paths), 'Video Editing',
+    'spaces survive - --name has always passed the raw leaf quoted');
+});
+
+test('remoteControlName - a collision qualifies BOTH sides, not just the second', () => {
+  // Qualifying only the newcomer would make a row's name depend on which was
+  // launched first, which is the kind of thing that is impossible to debug
+  // months later. Format is the owner's, 2026-09-04: `email-lint (Work)`.
+  const a = path.join(base, 'Work', 'email-lint');
+  const b = path.join(base, 'Repos', 'email-lint');
+  assert.equal(remoteControlName(a, [a, b]), 'email-lint (Work)');
+  assert.equal(remoteControlName(b, [a, b]), 'email-lint (Repos)');
+});
+
+test('remoteControlName - the comparison is case-insensitive, because Windows is', () => {
+  const a = path.join(base, 'Work', 'Email-Lint');
+  const b = path.join(base, 'Repos', 'email-lint');
+  assert.equal(remoteControlName(a, [a, b]), 'Email-Lint (Work)', 'a case-only difference is still a collision');
 });
 
 test('launchSession - exact options (detachment contract)', () => {

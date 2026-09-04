@@ -5,7 +5,7 @@ import { showGate, messageFor, setPinRevealed } from './lock.js';
 import {
   TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
   CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON, RETRY_BUTTON,
-  NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle, PHONE_OFFLINE,
+  NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle, PHONE_OFFLINE, CANNOT_REACH,
   emptyDayOneTitle, EMPTY_DAY_ONE_BODY,
 } from './copy.js';
 import {
@@ -1018,8 +1018,12 @@ function renderConn() {
     // something IS happening - the app is retrying on its own. The counter
     // is the proof of that to someone watching a screen that would otherwise
     // look identical to a frozen one.
+    // "CANNOT REACH PC", not "WAITING FOR PC". Waiting asserts the PC is on
+    // its way back, which is a claim about a machine this app cannot see - and
+    // with Tailscale up and the phone's radios off it was simply wrong, which
+    // is what sent the owner to check a working machine (2026-09-04).
     setDot(dot, 'accent');
-    text.textContent = state.waitTries > 0 ? `WAITING FOR PC (${state.waitTries})` : 'WAITING FOR PC';
+    text.textContent = state.waitTries > 0 ? `CANNOT REACH PC (${state.waitTries})` : 'CANNOT REACH PC';
     text.classList.remove('reachable');
   } else if (state.reachable === true) {
     setDot(dot, 'filled');
@@ -1166,16 +1170,15 @@ function renderProjects() {
     // The one empty state with a retry rather than a picker: there is nothing
     // to choose, only something to fix, and it is on this device.
     listEl.appendChild(buildEmptyState(PHONE_OFFLINE, 'retry'));
-  } else if (zone.kind === 'waiting') {
-    const msg = document.createElement('div');
-    msg.className = 'msg';
-    msg.textContent = 'Waiting for the PC. This screen will fill in on its own as soon as the agent answers.';
-    listEl.appendChild(msg);
-  } else if (zone.kind === 'unreachable') {
-    const msg = document.createElement('div');
-    msg.className = 'msg';
-    msg.textContent = 'Cannot reach the agent.';
-    listEl.appendChild(msg);
+  } else if (zone.kind === 'waiting' || zone.kind === 'unreachable') {
+    // ONE screen for both, because the app cannot honestly tell them apart -
+    // see CANNOT_REACH. "Waiting for the PC" asserted the PC was on its way,
+    // which is a claim about a machine this app cannot see; with Tailscale up
+    // and the phone's radios off it was simply wrong, and it sent the owner to
+    // go and check a working machine (2026-09-04). It retries either way, so
+    // TRY AGAIN just repeats what is already happening rather than offering
+    // something new.
+    listEl.appendChild(buildEmptyState(CANNOT_REACH, 'retry'));
   } else if (zone.kind === 'folder-empty') {
     // a marked container can legitimately hold no project folders
     const msg = document.createElement('div');
@@ -1427,7 +1430,10 @@ async function load() {
     // keep the old dead-end banner, correctly.
     state.projects = [];
     state.reachable = 'waiting';
-    setBanner('info', [{ text: 'No answer from the PC yet - it may still be waking up, or Tailscale may not be connected. Retrying automatically.' }]);
+    // No banner: the empty state below now carries this message, and two
+    // copies of it is how one of them ends up saying something the other does
+    // not. The retry is still automatic; the screen says so.
+    hideBanner();
     waitForAgent();
   } else {
     state.projects = [];
