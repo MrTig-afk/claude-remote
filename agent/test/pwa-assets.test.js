@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 import { readServiceWorker } from '../static.js';
+import { codeOnly } from './helper-source.js';
 import * as folders from '../public/folders-ui.js';
 import * as copy from '../public/copy.js';
 import * as update from '../public/update-ui.js';
@@ -966,14 +967,6 @@ test('statusLine appends an optional suffix on top of its existing behaviour', (
   );
 });
 
-// Strips comments before asserting on copy. The claim below is about what the
-// app SAYS, and a source-wide grep also reads what the source EXPLAINS - which
-// is how a comment describing this very rule can fail the test enforcing it.
-// Third time this project has been bitten by that; see HANDOFF's gotchas.
-function codeOnly(js) {
-  return js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-}
-
 test("app.js never asks the owner to go and VERIFY a launch in the Claude app", () => {
   // T47's invariant, and it still holds: the owner's words were "it should
   // just know". The agent proves the pid, so the app must never send someone
@@ -1575,6 +1568,9 @@ function makeRenderProjectsIntegration(stubs) {
   return new Function(
     'document', 'state', 'buildTile', 'buildRow', 'renderBackBar',
     'listZoneState', 'missingRoots', 'buildEmptyState', 'buildGoneNotice', 'crumbSegments',
+    // R4's offline branch reads it; without this the one list state added by
+    // R4 is the only one that cannot be integration-tested.
+    'PHONE_OFFLINE',
     'SHARED_UNKNOWN', 'NOTHING_SHARED', 'ALL_ROOTS_GONE', 'EMPTY_DAY_ONE_BODY', 'emptyDayOneTitle',
     // Lane 9's grouping runs inside renderProjects now, so the row zone's own
     // dependency comes in here too.
@@ -1587,6 +1583,7 @@ function makeRenderProjectsIntegration(stubs) {
     stubs.buildEmptyState || (() => makeStubEl()),
     stubs.buildGoneNotice || (() => makeStubEl()),
     stubs.crumbSegments || folders.crumbSegments,
+    stubs.PHONE_OFFLINE || copy.PHONE_OFFLINE,
     stubs.SHARED_UNKNOWN || copy.SHARED_UNKNOWN,
     stubs.NOTHING_SHARED || copy.NOTHING_SHARED,
     stubs.ALL_ROOTS_GONE || copy.ALL_ROOTS_GONE,

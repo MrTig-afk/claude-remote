@@ -200,19 +200,6 @@
       <footer class="footer" id="footer"></footer>
       </div><!-- /#pane-bottom -->
 
-      <!-- Lane 10 / R2. The once-only sheet, shown after the FIRST successful
-           launch on this device - not during onboarding, where there is no
-           session yet to go and look at. Inside #picker so it covers the list
-           it is explaining. Copy comes from handoff-ui.js; this is chrome. -->
-      <div class="sheet" id="handoff-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
-        <div class="sheet-card">
-          <svg class="ico sheet-tick" width="30" height="30" aria-hidden="true"><use href="#i-check"/></svg>
-          <div class="sheet-title" id="sheet-title"></div>
-          <ol class="sheet-steps" id="sheet-steps"></ol>
-          <button class="sheet-go ripples" id="sheet-go" type="button"></button>
-          <div class="sheet-note" id="sheet-note"></div>
-        </div>
-      </div>
     </main>
 
     <main id="accept" hidden>
@@ -604,6 +591,27 @@
       </div>
       <div class="spacer"></div>
     </main>
+
+    <!-- Lane 10 / R2. The once-only sheet explaining the two-app flow.
+         A SIBLING of the screens, never inside one. It used to live in
+         #picker, which meant Settings > About could "open" it into a
+         display:none subtree: nothing drew, focus() did nothing, but the
+         history entry and the inert header still happened - and the back
+         crumb was then swallowed by the sheet's own popstate branch, which
+         stranded the owner on About with no way out but a force-quit.
+         It is position:fixed, so being outside the screen it covers costs
+         nothing; what it buys is that no screen can hide it by accident.
+         Because of that it must be closed EXPLICITLY when the app re-locks -
+         see onAuthLost. -->
+    <div class="sheet" id="handoff-sheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="sheet-card">
+        <svg class="ico sheet-tick" width="30" height="30" aria-hidden="true"><use href="#i-check"/></svg>
+        <div class="sheet-title" id="sheet-title"></div>
+        <ol class="sheet-steps" id="sheet-steps"></ol>
+        <button class="sheet-go ripples" id="sheet-go" type="button"></button>
+        <div class="sheet-note" id="sheet-note"></div>
+      </div>
+    </div>
   </div>
 </body>
 </html>

@@ -13,19 +13,13 @@ import { fileURLToPath } from 'node:url';
 import {
   CLAUDE_APP_LINK, handoffReady, handoffCopy, SHEET_SEEN_KEY, SHEET,
 } from '../public/handoff-ui.js';
+import { codeOnly } from './helper-source.js';
 import { listZoneState } from '../public/folders-ui.js';
 import { PHONE_OFFLINE } from '../public/copy.js';
 
 const PUBLIC = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const read = (f) => fs.readFileSync(path.join(PUBLIC, f), 'utf8');
 
-// Strips comments. Claims about what the CODE does must not be answered by
-// what the source EXPLAINS - a comment describing a rule kept failing the
-// test enforcing it. Fourth time in this project; see HANDOFF's gotchas.
-const codeOnly = (js) => js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-
-/** load()'s body. `state.offline` branches exist in renderConn too. */
-const loadBody = (js) => js.slice(js.indexOf('async function load()'), js.indexOf('async function onProjectTap('));
 
 // --- handoffReady: which statuses mean "go and type in it" ----------------
 
@@ -214,7 +208,8 @@ test('the offline state retries on the online event, not on a ladder of its own'
   // waitForAgent backs off against a PC that is almost certainly fine.
   const app = read('app.js');
   assert.match(app, /addEventListener\('online'/);
-  const load = loadBody(app);
+  // sliced, because `state.offline` branches exist in renderConn too
+  const load = app.slice(app.indexOf('async function load()'), app.indexOf('async function onProjectTap('));
   const branch = codeOnly(load.slice(load.indexOf('} else if (state.offline) {'), load.indexOf("} else if (p.code === 'network'")));
   assert.ok(branch.length > 0, 'load() must carry an offline branch');
   // codeOnly, because the branch's own comment explains why waitForAgent is
@@ -243,7 +238,7 @@ test('the install row is absent once the app is already installed', () => {
   assert.match(app, /function isInstalled\(\)/);
   assert.match(app, /display-mode: standalone/);
   const about = app.slice(app.indexOf('function renderAbout('), app.indexOf('function renderUpdateDot('));
-  assert.match(about, /if \(!isInstalled\(\)\)/, 'renderAbout must gate the row on it');
+  assert.match(about, /if \(!isInstalled\(\) && !installDeclined\)/, 'renderAbout must gate the row on it');
 });
 
 test('the install row is only tappable when there is a dialog to raise', () => {
@@ -252,9 +247,8 @@ test('the install row is only tappable when there is a dialog to raise', () => {
   // states the gesture rather than pretending to perform it.
   const app = read('app.js');
   const about = app.slice(app.indexOf('function renderAbout('), app.indexOf('function renderUpdateDot('));
-  assert.match(about, /installPrompt\s*\?/, 'the row has two shapes');
-  assert.match(about, /enterable: false/, 'the no-API form must not be enterable');
-  assert.match(about, /Add to Home Screen/, 'and must name the platform gesture');
+  assert.match(about, /enterable: !!installPrompt/, 'tappable only when a dialog exists');
+  assert.match(about, /Add to Home Screen/, 'and it must name the platform gesture otherwise');
 });
 
 // ---------------------------------------------------------------------------
@@ -300,6 +294,20 @@ test('the main column is placed explicitly, not left to auto-placement', () => {
   // the browser, not by a test.
   const css = read('app.css');
   const desktop = css.slice(css.indexOf('@media (min-width: 900px)'));
-  assert.match(desktop, /#pane-top \{ grid-column: 2; grid-row: 1;/);
-  assert.match(desktop, /#pane-bottom \{ grid-column: 2; grid-row: 2;/);
+  assert.match(desktop, /#pane-top \{ grid-column: 2; grid-row: 2;/);
+  assert.match(desktop, /#pane-bottom \{ grid-column: 2; grid-row: 3;/);
+  // The drill-in back bar spans both columns in row 1. Without a cell of its
+  // own it auto-placed below the sidebar, at the bottom-left of the page.
+  assert.match(desktop, /#backbar \{ grid-column: 1 \/ -1; grid-row: 1;/);
+});
+
+test('the offline empty state can actually be reached in the harness', () => {
+  // The harness's own rule: a copy.js constant renderProjects references must
+  // be in BOTH the parameter list and the call arguments, or the first test to
+  // reach that branch dies with a ReferenceError instead of an assertion.
+  // R4's branch was the one that had been left out.
+  const t = fs.readFileSync(path.resolve(PUBLIC, '../test/pwa-assets.test.js'), 'utf8');
+  const harness = t.slice(t.indexOf('function makeRenderProjectsIntegration'), t.indexOf('function makeStubEl'));
+  assert.match(harness, /'PHONE_OFFLINE',/, 'parameter list');
+  assert.match(harness, /stubs\.PHONE_OFFLINE \|\| copy\.PHONE_OFFLINE/, 'call arguments');
 });

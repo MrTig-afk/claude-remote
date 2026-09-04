@@ -1273,10 +1273,17 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   justify-content: center;
   gap: 8px;
   margin: 8px 12px 0;
+  /* The shared rule's `width: 100%` resolves against the CONTAINER, so with
+     side margins this box was 24px wider than its column and hung past the
+     right edge - 40px at desktop, where the margins are 20px. The other
+     members of that rule sit in padded containers with no side margins,
+     which is why only this one broke. As a flex item it stretches to
+     container-minus-margins on its own, which is what .banner does and what
+     makes the two line up. */
+  width: auto;
   border-color: var(--accent-2);
   text-decoration: none;
 }
-.handoff-go .ico { width: 14px; height: 14px; }
 
 /* R2. FIXED, not absolute. It was absolute inside #picker so the header
    stayed visible, as the Artifact's frame draws it - but #picker is
@@ -1359,11 +1366,6 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
    for free by being in the main column. Break that and this becomes a second
    app to maintain.
 
-   Column placement, not named grid areas: several elements share the main
-   column, and items placed in the same NAMED area stack on top of each other.
-   Giving them a column and letting auto-rows do the rest keeps the DOM order
-   and needs no wrapper element.
-
    900px: two panes need ~264px of sidebar plus a main column wide enough to
    read. Below that the split costs more than it gives, and a tablet in
    portrait is better off with the phone layout.
@@ -1374,22 +1376,26 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   #picker {
     display: grid;
     grid-template-columns: 264px minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto 1fr;
     align-content: start;
-    flex-grow: 1;
   }
   /* Explicit placement, not auto: the sidebar spans both rows, and letting
      the main column auto-place put its first child in the SIDEBAR'S row -
      which is as tall as the project list, so the banner stretched to 792px
      and pushed everything else below the fold. */
-  #pane-top { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; }
-  #pane-bottom { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; }
+  /* The drill-in back bar spans both columns above everything. It is a direct
+     child of #picker with no placement of its own, so it was auto-placing
+     into an implicit row BELOW the sidebar - the "< folder" control rendered
+     at the bottom-left of the page. Its row collapses to 0 when hidden. */
+  #backbar { grid-column: 1 / -1; grid-row: 1; }
+  #pane-top { grid-column: 2; grid-row: 2; display: flex; flex-direction: column; }
+  #pane-bottom { grid-column: 2; grid-row: 3; display: flex; flex-direction: column; }
 
   /* The sidebar: one column, every row, its own scroll. A long project list
      scrolls here instead of pushing the main column's content off screen. */
   #zone-list {
     grid-column: 1;
-    grid-row: 1 / span 2;
+    grid-row: 2 / span 2;
     border-right: 1px solid var(--line);
     padding-right: 4px;
     overflow-y: auto;

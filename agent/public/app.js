@@ -664,11 +664,6 @@ function showSheet() {
   document.getElementById('sheet-go').textContent = SHEET.button;
   document.getElementById('sheet-note').textContent = SHEET.note;
 
-  // Marked seen on OPEN, not on dismiss. If it is shown and the app is killed
-  // mid-read, it has still done its job; re-showing it on the next launch
-  // would be the app nagging about something already read.
-  markSheetSeen();
-
   history.pushState({ handoffSheet: true }, '');   // Android back = GOT IT
   sheetPushed = true;
   // The sheet is viewport-fixed and covers the header, so nothing behind it
@@ -693,7 +688,27 @@ function showSheet() {
 function maybeShowSheet() {
   if (sheetSeen()) return;
   if (state.screen !== 'list') return;
+  // Marked seen HERE, not in showSheet: the flag belongs to the automatic
+  // showing only. Writing it in the shared function meant opening
+  // Settings > About before ever launching anything consumed the onboarding,
+  // so the one moment it exists for - just after the first launch - never
+  // came. Read and write now live in the same function.
+  // On open rather than on dismiss: shown once and then killed mid-read, it
+  // has still done its job, and re-showing it would be the app nagging.
+  markSheetSeen();
   showSheet();
+}
+
+/**
+ * Put the sheet away without touching history - for the paths that are not a
+ * dismissal: the app re-locking under it. The entry is left on the stack and
+ * disowned, which the popstate branch above tolerates by checking that the
+ * sheet is actually open.
+ */
+function closeSheetHard() {
+  document.getElementById('handoff-sheet').hidden = true;
+  document.querySelector('.hdr').inert = false;
+  sheetPushed = false;
 }
 
 // Count first, mutate after. The flag must go false BEFORE back() is issued,
@@ -1713,6 +1728,14 @@ function onPopState() {
   // closed before anything else can be reached. Its own pop lands here, so
   // the flag is cleared WITHOUT a second history move - closeSheet() would
   // issue one and traverse an entry that has already gone.
+  // Keyed on the flag alone, deliberately. Gating it on the sheet being
+  // VISIBLE does not work: closeSheet hides first (its double-tap guard), so
+  // the pop it then issues would miss this branch and be read by the settings
+  // branch below - which popped About out from under the owner.
+  // The flag cannot go stale: the only two paths that put the sheet away
+  // WITHOUT a pop - closeSheetHard on re-lock, and goHome - both clear it.
+  // And while the sheet is up it covers the viewport with the header inert,
+  // so no other control can push an entry above its own.
   if (sheetPushed) {
     sheetPushed = false;
     document.getElementById('handoff-sheet').hidden = true;
@@ -2690,12 +2713,14 @@ function renderAbout() {
   // screen the Artifact does not draw would be worse than either. Chromium
   // hands us a real dialog to raise, so the row is a button. iOS Safari
   // exposes no API whatsoever, so the row states the gesture instead of
-  // pretending to perform it - informational, no chevron, nothing to tap and
-  // have nothing happen.
-  if (!isInstalled()) {
-    rows.push(installPrompt
-      ? { id: 'install', icon: 'i-dl', name: 'Add to home screen', state: 'opens like an app', enterable: true }
-      : { id: 'install', icon: 'i-dl', name: 'Add to home screen', state: 'Share, then Add to Home Screen', enterable: false });
+  // pretending to perform it - nothing to tap and have nothing happen.
+  // Gone entirely once installed, or once the dialog has been declined.
+  if (!isInstalled() && !installDeclined) {
+    rows.push({
+      id: 'install', icon: 'i-dl', name: 'Add to home screen',
+      state: installPrompt ? 'opens like an app' : 'Share, then Add to Home Screen',
+      enterable: !!installPrompt,
+    });
   }
   for (const row of rows) listEl.appendChild(buildSettingsRow(row));
 }
@@ -3594,16 +3619,6 @@ function wireEvents() {
   // is silent by design: load() clears the banner and the dim, and a "you
   // are back" toast is a notification nobody asked for.
   window.addEventListener('online', () => { if (state.offline) load(); });
-  // R5. preventDefault stops Chromium's own mini-infobar, which is the
-  // interruption the owner rejected; the saved event is what the About row
-  // raises instead, at a moment the owner chose.
-  window.addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    installPrompt = e;
-  });
-  // Fires on a real install. The row is gone on the next render either way
-  // via isInstalled(), but dropping the stale event keeps the two in step.
-  window.addEventListener('appinstalled', () => { installPrompt = null; });
   window.addEventListener('popstate', onPopState);
 }
 
@@ -3623,6 +3638,29 @@ function wireEvents() {
 // means "tell them how", not "something failed".
 let installPrompt = null;
 
+// Set once the owner has opened the dialog and declined. The row is dropped
+// for the rest of the session rather than falling back to the other
+// platform's copy - Chromium will not re-raise a consumed event, and telling
+// a Chrome user to "Share, then Add to Home Screen" is an instruction for a
+// gesture their browser does not have.
+let installDeclined = false;
+
+// REGISTERED AT MODULE SCOPE, not in wireEvents(). wireEvents runs after
+// `await unlocked`, and the gate does not resolve until six digits have been
+// typed - Chromium fires beforeinstallprompt about a second after load, so
+// the listener would have missed it every time and the whole feature would be
+// dead on the only platform with the API. registerServiceWorker is hoisted
+// above the gate for the same class of reason.
+// preventDefault stops Chromium's own mini-infobar, which is the interruption
+// the owner rejected; the saved event is raised only from the About row.
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+// A real install. isInstalled() drops the row on the next render anyway, but
+// releasing the stale event keeps the two in step.
+window.addEventListener('appinstalled', () => { installPrompt = null; });
+
 /** Already running as an installed app? Then there is nothing to offer. */
 function isInstalled() {
   return window.matchMedia('(display-mode: standalone)').matches
@@ -3640,8 +3678,14 @@ function isInstalled() {
 async function runInstall() {
   const prompt = installPrompt;
   if (!prompt) return;
-  installPrompt = null;
-  try { await prompt.prompt(); } catch { /* dismissed, or already consumed */ }
+  installPrompt = null;          // single-use: Chromium will not re-raise it
+  try {
+    await prompt.prompt();
+    const choice = await prompt.userChoice;
+    if (!choice || choice.outcome !== 'accepted') installDeclined = true;
+  } catch {
+    installDeclined = true;      // dismissed, or the event was already spent
+  }
   renderAbout();
 }
 
@@ -3703,7 +3747,11 @@ async function boot() {
   // which also hides #settings - a screen this callback never named - but
   // three tests pin the three hides verbatim, so they stay, in this order,
   // before it.
-  onAuthLost(async () => { hideConn(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
+  // closeSheetHard() first: the sheet is a sibling of the screens now, so
+  // hiding #picker no longer takes it with it. Without this a 401 in the
+  // seconds it is up leaves the header inert and a stale history entry
+  // behind, and neither recovers without a reload.
+  onAuthLost(async () => { hideConn(); closeSheetHard(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on
