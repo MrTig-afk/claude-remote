@@ -48,7 +48,7 @@ test('handoffReady is false while the session is still starting', () => {
 test('handoffReady is false for a session that is going away or gone', () => {
   // Sending someone to look for a session that failed or is tearing down is
   // worse than saying nothing - they go, find nothing, and stop trusting it.
-  for (const status of ['handoff', 'ended', 'failed']) {
+  for (const status of ['ending', 'ended', 'failed']) {
     assert.equal(handoffReady({ status }), false, status);
   }
 });

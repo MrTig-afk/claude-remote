@@ -5,7 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { getPidDirPath, getRegistryFilePath } from './config.js';
+import { getPidDirPath, getRegistryFilePath, resolveClaudeConfigDir } from './config.js';
 import {
   findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
   isPidAlive, claimDeskSession,
@@ -698,6 +698,20 @@ export function launchSession(ctx, project) {
 
   const pidDir = ctx.pidDir || getPidDirPath();
 
+  // hasOwn, not `??`: a test passing an explicit null means "assert no
+  // -ConfigDir is passed", and `??` would send that back to the real config and
+  // read the developer's own machine instead.
+  // ctx.configPath, NOT the bare default: without it this read the machine's
+  // LIVE config even under test, so every launch test that did not pin
+  // claudeConfigDir behaved differently here than on a fresh clone - and
+  // because readConfig THROWS on invalid JSON, one stray comma in that
+  // hand-editable file failed a batch of unrelated tests with a message
+  // pointing nowhere near them. `undefined` falls through to the parameter
+  // default, which is that same file. Same convention shared.js already uses.
+  const claudeConfigDir = Object.hasOwn(ctx, 'claudeConfigDir')
+    ? ctx.claudeConfigDir
+    : resolveClaudeConfigDir(ctx.configPath);
+
   // Production never created this directory - only tests did, which is why 98
   // green tests missed it. Without it, launch-session.ps1's Set-Content fails
   // with DirectoryNotFoundException, its catch{} swallows the error and
@@ -739,6 +753,12 @@ export function launchSession(ctx, project) {
     // else in the agent reads the --remote-control name back.
     '-SessionName', remoteControlName(r.path, allProjectPaths(roots)),
     '-PidFile', pidFilePath,
+    // Only when configured. An absent claude_config_dir must pass NO -ConfigDir
+    // at all, so launch-session.ps1 leaves CLAUDE_CONFIG_DIR unset and Claude
+    // Code uses its own default profile (T56). Passing an empty string here
+    // would defeat that - PowerShell would bind it and the `if ($ConfigDir)`
+    // guard is what turns it back into "absent".
+    ...(claudeConfigDir ? ['-ConfigDir', claudeConfigDir] : []),
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,
     // and powershell.exe 5.1 spawned that way exits 0 IMMEDIATELY WITHOUT
@@ -884,9 +904,9 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   const claimed = isDesk
     ? claimDeskSession(ctx, {
         sessionName, project, projectPath,
-        startedAt: existing.started_at, handoffStartedAt: startedIso,
+        startedAt: existing.started_at, endingStartedAt: startedIso,
       })
-    : markSessionState(ctx, sessionName, null, { status: 'handoff', handoff_started_at: startedIso });
+    : markSessionState(ctx, sessionName, null, { status: 'ending', ending_started_at: startedIso });
   if (!claimed) {
     return { ok: false, status: 409, error: 'session_not_running' };
   }
@@ -899,8 +919,8 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   // dropping the claim instead restores the truth: no registry entry, and
   // the next listSessions rediscovers the still-live process.
   const revertClaim = () => (isDesk
-    ? dropSession(ctx, sessionName, 'handoff')
-    : markSessionState(ctx, sessionName, 'handoff', { status: undefined, handoff_started_at: undefined }));
+    ? dropSession(ctx, sessionName, 'ending')
+    : markSessionState(ctx, sessionName, 'ending', { status: undefined, ending_started_at: undefined }));
 
   // Guard against pid reuse before taskkill ever runs. The pid file is
   // written once at launch and never re-checked; if the session already
@@ -913,7 +933,7 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
     // was never the agent's own pid to begin with), so leaving it
     // status-less would just have listSessions age it into a false `failed`
     // for a session that in fact ran and ended.
-    dropSession(ctx, sessionName, 'handoff');
+    dropSession(ctx, sessionName, 'ending');
     return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
   }
 
@@ -936,7 +956,7 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
     // there is no real process here whose truth the entry should keep
     // deriving. Drop rather than revert, same reasoning as above.
     clearPidFile(ctx, sessionName);
-    dropSession(ctx, sessionName, 'handoff');
+    dropSession(ctx, sessionName, 'ending');
     return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
   }
 
@@ -962,7 +982,7 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   // For a desk session there is no pid file to begin with - this is a
   // documented no-op (clearPidFile never throws), not branched around.
   clearPidFile(ctx, sessionName);
-  // Registry is already at `status: 'handoff'` from the claim above - no
+  // Registry is already at `status: 'ending'` from the claim above - no
   // second write needed here.
 
   // THE HANDOFF USED TO BE SPAWNED HERE, and no longer is. It ran
@@ -976,12 +996,12 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   // first (Artifact Lane 2, approved sequence 3) and this ends the session and
   // stops.
   //
-  // VESTIGIAL NAME, deliberately not renamed in this pass: the claim status
-  // above is still the string 'handoff'. It is the concurrency mutex that
-  // stops two STOPs racing, it is never shown to anyone, and renaming it
-  // reaches ~300 references across registry.js and the suites - not a change
-  // to make in the same commit as a behaviour removal. Filed in tasks.md.
-  markSessionState(ctx, sessionName, 'handoff', {
+  // The claim status is the string 'ending' - the concurrency mutex that stops
+  // two STOPs racing, never shown to anyone. It was called 'handoff' until
+  // T101 (2026-09-05), left that way on purpose for one release because
+  // renaming it reaches the whole of registry.js and two suites, and that is
+  // not a change to bury in the same commit as a behaviour removal.
+  markSessionState(ctx, sessionName, 'ending', {
     status: 'ended',
     ended_at: new Date((ctx.now || Date.now)()).toISOString(),
   });

@@ -22,13 +22,77 @@ export function getPidDirPath() {
   return path.join(path.dirname(getConfigFilePath()), 'session-pids');
 }
 
-/** The two Claude Code profile session directories, newest-profile-first order
- *  is irrelevant - both are read. Only <pid>.json is ever opened from them. */
-export function getSessionDirPaths() {
-  return [
-    path.join(os.homedir(), '.claude-max', 'sessions'),
-    path.join(os.homedir(), '.claude-pro', 'sessions'),
+/**
+ * The Claude Code profile directory launched sessions should use, or null to
+ * leave it alone and let Claude Code pick its own default (`~/.claude`).
+ *
+ * T56: this used to be the owner's `.claude-max` hardcoded into
+ * launch-session.ps1. A stranger got every session launched against a profile
+ * directory that does not exist on their machine. ABSENT BY DEFAULT is the
+ * point - an unset config means "do not set CLAUDE_CONFIG_DIR at all", not
+ * "set it to something we guessed".
+ */
+let warnedRelativeConfigDir = false;
+let warnedMissingConfigDir = false;
+export function resolveClaudeConfigDir(configPath = getConfigFilePath()) {
+  const value = readConfig(configPath).claude_config_dir;
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  if (!path.isAbsolute(value)) {
+    // ONCE. getSessionDirPaths calls this from readSessionFiles, which runs on
+    // every 5s status poll - so an unguarded warn here would put roughly 17k
+    // identical lines a day in the agent's terminal for one misconfiguration,
+    // and bury anything worth reading.
+    if (!warnedRelativeConfigDir) {
+      warnedRelativeConfigDir = true;
+      console.warn(`claude-remote agent: config '${configPath}' has a relative claude_config_dir; ignoring it`);
+    }
+    return null;
+  }
+  const resolved = path.resolve(value);
+  // MUST EXIST. Absolute is not enough: a typo like `.claude-mx` is absolute,
+  // so it passed, reached `-ConfigDir`, and Claude Code created that profile
+  // from scratch - with no `hasTrustDialogAccepted` for the project. The
+  // session then stops on the workspace-trust modal, which is the exact
+  // unanswerable-from-a-phone hang the launcher's else-branch exists to avoid,
+  // and it is INVISIBLE: getSessionDirPaths scans the same empty directory, so
+  // no session file is ever found and the tile just ages into `failed`.
+  // Falling back to null means "no profile configured", which is the safe
+  // default rather than a guess.
+  if (!fs.existsSync(resolved)) {
+    if (!warnedMissingConfigDir) {
+      warnedMissingConfigDir = true;
+      console.warn(`claude-remote agent: config '${configPath}' points claude_config_dir at '${resolved}', which does not exist; ignoring it`);
+    }
+    return null;
+  }
+  return resolved;
+}
+
+/** Claude Code profile session directories to scan. Only <pid>.json is ever
+ *  opened from them, so listing a directory that does not exist costs nothing
+ *  and every entry here is a candidate rather than a requirement.
+ *  A configured profile is scanned first; the default `~/.claude` is included
+ *  for anyone who never configured one (T56 - it was missing entirely, so a
+ *  stranger's sessions were launched into a profile nothing then looked in),
+ *  and the owner's two named profiles stay because this machine runs both. */
+export function getSessionDirPaths(configPath = getConfigFilePath()) {
+  // Swallows a corrupt config ON PURPOSE, and only here. readSessionFiles
+  // (registry.js) documents "Never throws" and degrades to fewer records on
+  // every other fault; a config this function cannot parse must therefore cost
+  // the configured directory, not the whole session list. The LAUNCH path calls
+  // resolveClaudeConfigDir directly and does let that error through, which is
+  // where a corrupt config should actually be felt.
+  let configured = null;
+  try {
+    configured = resolveClaudeConfigDir(configPath);
+  } catch { /* fall through to the default profiles below */ }
+  const dirs = [
+    ...(configured ? [configured] : []),
+    path.join(os.homedir(), '.claude'),
+    path.join(os.homedir(), '.claude-max'),
+    path.join(os.homedir(), '.claude-pro'),
   ];
+  return [...new Set(dirs)].map((d) => path.join(d, 'sessions'));
 }
 
 /** Absolute path of the passcode hash file, beside the config. */

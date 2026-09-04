@@ -3,12 +3,32 @@
 param(
     [Parameter(Mandatory)][string]$ProjectPath,
     [Parameter(Mandatory)][string]$SessionName,
-    [string]$PidFile                     # optional ON PURPOSE - see below
+    [string]$PidFile,                    # optional ON PURPOSE - see below
+    [string]$ConfigDir                   # optional: absent = Claude Code's own default
 )
 
 $ErrorActionPreference = 'Stop'
 
-$env:CLAUDE_CONFIG_DIR = Join-Path $HOME '.claude-max'
+# T56. This was `Join-Path $HOME '.claude-max'` - the owner's personal profile,
+# hardcoded. A stranger got every session launched against a profile directory
+# that does not exist on their machine.
+# ABSENT BY DEFAULT is the whole point: when no -ConfigDir is passed this leaves
+# CLAUDE_CONFIG_DIR unset and Claude Code picks its own default (~/.claude).
+# Do not reintroduce a fallback guess here - an unset variable is the correct
+# behaviour, and a wrong guess fails in a way that is hard to see from a phone.
+if ($ConfigDir) {
+    $env:CLAUDE_CONFIG_DIR = $ConfigDir
+} else {
+    # CLEARED, not merely "not set". Start-Process inherits this process's
+    # environment, so without this the launched session would pick up whatever
+    # CLAUDE_CONFIG_DIR the AGENT happened to be started with - making the
+    # default depend on how the agent was launched rather than on config.
+    # That matters more than it looks: workspace trust is per-profile
+    # (`hasTrustDialogAccepted`) and its dialog needs a real terminal, so a
+    # session landing in an unexpected profile can hang on a modal nobody can
+    # answer from a phone.
+    Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+}
 
 Set-Location -LiteralPath $ProjectPath
 

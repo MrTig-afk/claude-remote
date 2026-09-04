@@ -498,9 +498,14 @@ body {
    the bug silently.
    It does NOT make the bug unrepresentable, and do not read it that way: this
    is specificity 0-0-1, so ANY class rule beats it regardless of source order.
-   `.filter input { font-size: 12px }` would win. What actually holds the line
-   is the test, which sweeps every rule that can size an input. Individual rules
-   may go LARGER (.pin is 19px), never smaller. */
+   `.filter input { font-size: 12px }` would win. What holds the line is
+   `scripts/check-input-font-sizes.mjs`, which asks a real browser for the
+   COMPUTED font-size of every input - cascade, specificity and media queries
+   already resolved. Run it after touching any input rule. A test in
+   pwa-assets.test.js separately pins THIS rule's existence and size, because
+   the floor only ever protects an input that has no rule of its own, and an
+   input nobody has written yet has no computed style for the browser to read.
+   Individual rules may go LARGER (.pin is 19px), never smaller. */
 input,
 textarea,
 select {
