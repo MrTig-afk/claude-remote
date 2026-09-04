@@ -5,6 +5,13 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
+import { readServiceWorker } from '../static.js';
+import { codeOnly } from './helper-source.js';
+import * as folders from '../public/folders-ui.js';
+import * as copy from '../public/copy.js';
+import * as update from '../public/update-ui.js';
+import { handoffReady } from '../public/handoff-ui.js';
+
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
 
@@ -178,18 +185,54 @@ const TOKEN_SET = new Set([
   '0a0d0a', '0f150f', 'eafbea', 'c9d1c9', '9aab9a', '4a5a4a',
   '3d4a3d', '2a332a', '7ee787', '5fae6f', '1b231b', '6b7a6b',
   'ff7b72', 'e5534b',
+  // Added with Lane 7's "Reset the app" screen, which needs a CAUTION colour.
+  // design/tokens.md had none - it has an accent and a danger and nothing
+  // between them - so this is the userflow artifact's own amber, now recorded
+  // in tokens.md as well. Caution is not danger: --danger stays reserved for
+  // "this ends something", which clearing a cache is not.
+  'e3b341',
+  // Text drawn ON an accent fill. Not a background and not a text colour in
+  // its own right - it exists only so the solid button has legible ink.
+  '08170c',
 ]);
 
 function assertOnlyTokenColours(source, label) {
-  const hexes = source.match(/#[0-9a-fA-F]{3,8}/g) || [];
+  // A CSS/DOM id selector that happens to start with hex-valid letters
+  // (#accept, #accept-go: a,c,c,e all parse as hex) is not a colour literal -
+  // the regex below stops at the first non-hex character, so `#accept` yields
+  // a false-positive match of `#acce`. A real hex colour is always followed
+  // by a delimiter (`;`, `)`, `,`, whitespace, end of string), never by
+  // another letter - so a match immediately followed by [a-zA-Z] is an
+  // identifier, not a colour, and is excluded.
+  const hexes = [...source.matchAll(/#[0-9a-fA-F]{3,8}/g)]
+    .filter((m) => !/[a-zA-Z]/.test(source[m.index + m[0].length] || ''))
+    .map((m) => m[0]);
   for (const hex of hexes) {
     const normalized = hex.slice(1).toLowerCase();
     assert.ok(TOKEN_SET.has(normalized), `${label} contains an untokenized colour: ${hex}`);
   }
 }
 
-test('app.css uses only tokenized colours', () => {
-  assertOnlyTokenColours(read('app.css'), 'app.css');
+// app.css is held to a STRICTER rule than the other three: not merely "every
+// hex is a token" but "no hex outside the :root block at all". The weaker
+// rule let a correct-but-hard-coded colour spread through 128 declarations,
+// so changing one meant finding all of them. These two tests are what make
+// the token block the single point of change rather than a convention.
+test('app.css declares every colour ONCE, in :root', () => {
+  const css = read('app.css');
+  const rootEnd = css.indexOf('}', css.indexOf(':root {'));
+  assert.ok(rootEnd > 0, 'app.css must open with a :root token block');
+  const body = css.slice(rootEnd);
+  const strays = [...body.matchAll(/#[0-9a-fA-F]{3,8}/g)]
+    .filter((m) => !/[a-zA-Z]/.test(body[m.index + m[0].length] || ''))
+    .map((m) => m[0]);
+  assert.deepEqual(strays, [], 'colours below :root must be var(--token), not hex literals');
+});
+
+test('every colour in app.css :root is a design token', () => {
+  const css = read('app.css');
+  const root = css.slice(css.indexOf(':root {'), css.indexOf('}', css.indexOf(':root {')));
+  assertOnlyTokenColours(root, 'app.css :root');
 });
 
 test('index.html uses only tokenized colours', () => {
@@ -222,6 +265,10 @@ test('app.js never calls fetch() directly; api.js does', () => {
   assert.ok(read('api.js').includes('fetch('), 'api.js must be the one place fetch() is called');
 });
 
+test('folders-ui.js never calls fetch() directly - it is a pure shell module', () => {
+  assert.ok(!read('folders-ui.js').includes('fetch('), 'folders-ui.js must not call fetch() directly');
+});
+
 test('lock.js never calls fetch() directly - it only calls into api.js', () => {
   assert.ok(!read('lock.js').includes('fetch('), 'lock.js must not call fetch() directly');
 });
@@ -229,7 +276,7 @@ test('lock.js never calls fetch() directly - it only calls into api.js', () => {
 // --- No egress ---
 
 test('no shipped asset embeds an absolute http(s) URL', () => {
-  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js']) {
+  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js', 'copy.js']) {
     const source = read(f);
     assert.ok(!source.includes('http://'), `${f} must not contain http://`);
     assert.ok(!source.includes('https://'), `${f} must not contain https://`);
@@ -264,6 +311,21 @@ test('PRECACHE includes /lock.js', () => {
   assert.ok(precache.includes('/lock.js'));
 });
 
+test('PRECACHE includes /copy.js', () => {
+  const source = read('sw.js');
+  const match = source.match(/const PRECACHE = (\[[\s\S]*?\]);/);
+  const precache = new Function(`return ${match[1]};`)();
+  assert.ok(precache.includes('/copy.js'), 'the accept screen cannot render offline without its words');
+});
+
+test('PRECACHE includes /folders-ui.js, and the file exists', () => {
+  const source = read('sw.js');
+  const match = source.match(/const PRECACHE = (\[[\s\S]*?\]);/);
+  const precache = new Function(`return ${match[1]};`)();
+  assert.ok(precache.includes('/folders-ui.js'), 'the picker cannot render offline without its shell module');
+  assert.ok(existsUnderPublic('/folders-ui.js'));
+});
+
 test('api.js carries the token header and never persists the token to the device', () => {
   const source = read('api.js');
   assert.ok(source.includes('X-Claude-Remote-Token'));
@@ -292,8 +354,11 @@ test('app.css force-hides [hidden] - the picker must not render behind the lock 
   // display to is a candidate for this bug. Prove at least the two wrappers
   // are in that state, so the guard is not silently protecting nothing.
   const hiddenIds = [...html.matchAll(/id="([A-Za-z0-9_-]+)"[^>]*\shidden[\s>]/g)].map((m) => m[1]);
-  assert.ok(hiddenIds.includes('picker') && hiddenIds.includes('gate'), 'both wrappers must ship hidden');
-  for (const id of ['picker', 'gate']) {
+  assert.ok(
+    hiddenIds.includes('picker') && hiddenIds.includes('gate') && hiddenIds.includes('accept') && hiddenIds.includes('folders'),
+    'all four wrappers must ship hidden',
+  );
+  for (const id of ['picker', 'gate', 'accept', 'folders']) {
     const rule = css.match(new RegExp(`#${id}\\s*\\{[^}]*\\}`));
     assert.ok(rule, `#${id} should have a rule`);
     assert.match(rule[0], /display:/, `#${id} sets display, which is what makes the guard load-bearing`);
@@ -598,17 +663,26 @@ test('a list row folds its elapsed time into the status line, so the removed idl
 
 // --- STOP / confirm / watch loop ---
 
-test('the danger colours (#ff7b72, #e5534b) appear only in stop/confirm rules, never on a banner', () => {
+// The rule is "var(--danger) means THIS ENDS SOMETHING", not "danger belongs
+// to the session tiles". Lane 3 and Lane 8 of the artifact put red on the
+// shared-folder remove and its confirmation in exactly those words -
+// "destructive, so it asks; red is this palette's one danger colour and
+// appears nowhere else" - so those selectors are on the list below. It stays
+// an ALLOWLIST: a new red thing must be added here on purpose, and the two
+// base banner rules must stay neutral whatever else does.
+const DANGER_SELECTORS = /tile-stop|tile-confirm|shared-remove|set-danger|set-gone|set-btn-danger/;
+
+test('the danger tokens appear only on controls that end something, never on a plain banner', () => {
   const css = read('app.css');
   const blocks = css.split('}').filter((chunk) => chunk.includes('{'));
   for (const chunk of blocks) {
     const selector = chunk.slice(0, chunk.indexOf('{'));
     const body = chunk.slice(chunk.indexOf('{') + 1);
-    if (/#ff7b72|#e5534b/i.test(body)) {
+    if (/var\(--danger(?:-2)?\)/.test(body)) {
       assert.match(
         selector,
-        /tile-stop|tile-confirm/,
-        `selector "${selector.trim()}" carries a danger colour but is not a stop/confirm rule`,
+        DANGER_SELECTORS,
+        `selector "${selector.trim()}" carries a danger colour but is not a destructive control`,
       );
     }
   }
@@ -617,8 +691,8 @@ test('the danger colours (#ff7b72, #e5534b) appear only in stop/confirm rules, n
   const bannerErrorRule = css.match(/\.banner\.error\s*\{[^}]*\}/);
   assert.ok(bannerRule, 'app.css must carry a .banner rule');
   assert.ok(bannerErrorRule, 'app.css must carry a .banner.error rule');
-  assert.ok(!/#ff7b72|#e5534b/i.test(bannerRule[0]), '.banner must not use a danger colour');
-  assert.ok(!/#ff7b72|#e5534b/i.test(bannerErrorRule[0]), '.banner.error must not use a danger colour');
+  assert.ok(!/var\(--danger(?:-2)?\)/.test(bannerRule[0]), '.banner must not use a danger colour');
+  assert.ok(!/var\(--danger(?:-2)?\)/.test(bannerErrorRule[0]), '.banner.error must not use a danger colour');
 });
 
 test('anyWatchable is true for running/handoff/starting, and the watch loop is a bounded 5s poll gated on visibility', () => {
@@ -644,6 +718,43 @@ test('anyWatchable is true for running/handoff/starting, and the watch loop is a
   );
 });
 
+test('every text input is at least 16px, or iOS zooms the page and stays zoomed', () => {
+  // NOT a type-scale rule - a functional one. Mobile Safari zooms the whole
+  // page in when a focused text input is smaller than 16px, and does not zoom
+  // back out when it loses focus. The owner hit this naming a project on
+  // 2026-09-05: the panel zoomed, the header was cut off both sides, and it
+  // stayed that way afterwards. .pin was always safe at 19px, which is why
+  // only the new-project field ever showed it.
+  // Comments STRIPPED first. The rule below carries a 7-line comment that
+  // explains the bug and names the wrong size; without this the block regex
+  // spans it and `.match(font-size)` takes the FIRST hit, which would report
+  // the number from the prose rather than the number the browser uses.
+  const css = read('app.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  // The global floor first: it is what makes a too-small input unrepresentable
+  // rather than merely absent today. A bare <input> inherits ~13.33px from the
+  // UA stylesheet, so a THIRD text input added later is unsafe by default -
+  // this rule is what catches it, not the two selectors below.
+  const floor = css.match(/(^|\})\s*input,\s*textarea,\s*select\s*\{[^}]*\}/);
+  assert.ok(floor, 'app.css must set a global font-size floor for input/textarea/select');
+  const floorSize = floor[0].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
+  assert.ok(floorSize && Number(floorSize[1]) >= 16,
+    `the global input floor is ${floorSize ? floorSize[1] : 'unset'}px; under 16px iOS zooms on focus`);
+  const rules = [
+    ['.newproj-panel input', /\.newproj-panel input\s*\{[^}]*\}/],
+    ['.pin', /^\.pin\s*\{[^}]*\}/m],
+  ];
+  for (const [name, rx] of rules) {
+    const block = css.match(rx);
+    assert.ok(block, `app.css must carry a ${name} rule`);
+    const size = block[0].match(/font-size:\s*(\d+(?:\.\d+)?)px/);
+    assert.ok(size, `${name} must set an explicit font-size - inheriting one is how this regresses`);
+    assert.ok(
+      Number(size[1]) >= 16,
+      `${name} is ${size[1]}px; anything under 16px makes iOS zoom the page on focus and leave it zoomed`,
+    );
+  }
+});
+
 test('the stop control has a 48px tap band on every layout, and the single-tile name/status pad clear of it', () => {
   const css = read('app.css');
 
@@ -661,22 +772,32 @@ test('the stop control has a 48px tap band on every layout, and the single-tile 
   assert.match(nameRule[0], /padding-right:\s*48px/);
 });
 
-test('the confirm carries exactly CANCEL and END & WRITE HANDOFF, and no other kill-button wording exists', () => {
+test('the confirm carries CANCEL, the warning, the route out, and END ANYWAY - and no other kill-button wording', () => {
   const js = read('app.js');
   const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
   assert.match(buildTile, /'CANCEL'/);
-  assert.match(buildTile, /'END & WRITE HANDOFF'/);
-  for (const forbidden of ['END IT', 'KILL', 'FORCE', 'input type="checkbox"']) {
+  assert.match(buildTile, /'END ANYWAY'/);
+  // Artifact lane 2, approved sequence 3: the confirm warns that nothing
+  // writes a handoff and points at the only thing that can, then still lets
+  // the owner through. A warning, not a gate.
+  assert.match(buildTile, /'OPEN CLAUDE FIRST'/);
+  assert.match(buildTile, /Nothing writes a handoff for you/);
+  for (const forbidden of ['END IT', 'KILL', 'FORCE', 'input type="checkbox"', 'END & WRITE HANDOFF']) {
     assert.ok(!js.includes(forbidden), `app.js must not contain "${forbidden}"`);
   }
 });
 
-test('the four stop/handoff banner strings from the brief appear verbatim in app.js', () => {
+test('the stop banner strings appear verbatim in app.js, and no handoff verdict is announced', () => {
   const js = read('app.js');
   assert.ok(js.includes("' had already ended.'"), 'already-ended banner text');
   assert.ok(js.includes("'! Could not end '") && js.includes("'. It is still running - close it at the desk.'"), 'kill-failed banner text');
-  assert.ok(js.includes("'Handoff written for '"), 'handoff-written banner text');
-  assert.ok(js.includes("'! Session ended, but the handoff was not written.'"), 'handoff-not-written banner text');
+  assert.ok(js.includes("{ text: ' ended.' }"), 'the one ended banner');
+  // The app writes no handoff, so it may not report on one. The 'was not
+  // written' line in particular was a lie often enough that the owner caught
+  // it with the file on disk (2026-08-27).
+  for (const gone of ["'Handoff written for '", 'was not written.']) {
+    assert.ok(!js.includes(gone), `app.js must no longer contain ${gone}`);
+  }
 });
 
 test('the end-session request is issued only from api.js, never from app.js', () => {
@@ -739,11 +860,58 @@ test('renderProjects reconciles a stale confirmName before tiles are built', () 
 
 // --- desk-started sessions in the PWA --------------------------------------
 
-test('sw.js CACHE is claude-remote-shell-v17', () => {
+// --- the cache key is derived, never hand-bumped ----------------------------
+// These replace a test that pinned a literal `-v27` and asserted the same
+// number in its own name. That test could only ever fail when someone had
+// ALREADY remembered to bump the constant - which is precisely the moment it
+// was not needed. It never once caught the failure it existed for: a shell
+// change shipped with the key untouched, which is what put a stale app on the
+// owner's phone twice.
+
+test('sw.js carries the hash PLACEHOLDER, never a literal version', () => {
+  // RED WHEN: someone reintroduces a hand-maintained version. That is the
+  // whole regression - the mechanism below only works on a placeholder.
   const source = read('sw.js');
   const match = source.match(/const CACHE = '([^']+)'/);
   assert.ok(match, 'sw.js must declare CACHE');
-  assert.equal(match[1], 'claude-remote-shell-v17');
+  assert.equal(match[1], 'claude-remote-shell-__SHELL_HASH__');
+});
+
+test('the agent stamps a real hash into sw.js on the way out', () => {
+  const stamped = readServiceWorker().toString('utf8');
+  const key = stamped.match(/const CACHE = '([^']+)'/)[1];
+  assert.match(key, /^claude-remote-shell-[0-9a-f]{16}$/,
+    'the placeholder must be replaced by a 16-hex digest before it is served');
+  assert.ok(!stamped.includes('__SHELL_HASH__'), 'no placeholder may survive to a client');
+});
+
+test('the stamped hash CHANGES when a shell file changes, and is stable otherwise', () => {
+  // RED WHEN: the hash is memoised, or stops covering a file people actually
+  // edit. This is the one assertion that proves the phone gets new code.
+  const key = () => readServiceWorker().toString('utf8').match(/const CACHE = '([^']+)'/)[1];
+  const target = path.join(PUBLIC_DIR, 'app.css');
+  const original = fs.readFileSync(target);
+  const before = key();
+  try {
+    fs.appendFileSync(target, '/* cache-key probe */');
+    assert.notEqual(key(), before, 'editing app.css must change the cache key');
+  } finally {
+    fs.writeFileSync(target, original);
+  }
+  assert.equal(key(), before, 'restoring the file must restore the key - the hash is content, not a clock');
+});
+
+test("static.js's SHELL_FILES and sw.js's PRECACHE name the same files", () => {
+  // RED WHEN: a file is added to one list and not the other, which would let
+  // a precached file change without moving the key - a stale asset that
+  // nothing would ever evict.
+  const src = fs.readFileSync(path.join(AGENT_DIR, 'static.js'), 'utf8');
+  const shell = [...src.match(/const SHELL_FILES = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const precache = [...read('sw.js').match(/const PRECACHE = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)]
+    .map((m) => m[1])
+    .filter((f) => f !== '/')        // the navigation alias for /index.html
+    .map((f) => f.replace(/^\//, ''));
+  assert.deepEqual(shell.slice().sort(), precache.slice().sort());
 });
 
 // The shell must be answered from the cache without waiting on the network.
@@ -822,8 +990,8 @@ test('endTargetFor sends session_name for a synthetic (non-project) tile name, p
 test('buildTile carries the desktop confirm label and still carries the plain one', () => {
   const js = read('app.js');
   const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
-  assert.match(buildTile, /'END & WRITE HANDOFF \(DESKTOP\)'/);
-  assert.match(buildTile, /'END & WRITE HANDOFF'/);
+  assert.match(buildTile, /'END ANYWAY \(DESKTOP\)'/);
+  assert.match(buildTile, /'END ANYWAY'/);
 });
 
 test("rowState's running branch carries source === 'desk' and the 'desktop' suffix literal", () => {
@@ -846,11 +1014,33 @@ test('statusLine appends an optional suffix on top of its existing behaviour', (
   );
 });
 
-test("app.js never tells the owner to open the Claude app after a launch, except the failed banner", () => {
+test("app.js never asks the owner to go and VERIFY a launch in the Claude app", () => {
+  // T47's invariant, and it still holds: the owner's words were "it should
+  // just know". The agent proves the pid, so the app must never send someone
+  // to another app to check whether a launch worked.
   const js = read('app.js');
   assert.doesNotMatch(js, /not confirmed/);
-  assert.equal((js.match(/Claude app/g) || []).length, 1,
-    "only maybeFailedBanner may mention the Claude app (owner, T47 interview Q1)");
+
+  // NARROWED by Lane 10 / R1, 2026-09-04. This used to assert that only
+  // maybeFailedBanner could mention the Claude app at all. That is no longer
+  // right, and the two decisions do not actually conflict:
+  //   T47 cut "open the Code tab to CHECK IT APPEARED" - verification the app
+  //        can do itself, which is what "just knows" killed.
+  //   R1  adds "Ready in the Claude app... to START TYPING" - fired only once
+  //        handoffReady() confirms the session is running, i.e. exactly after
+  //        the app has done the knowing. It names a destination, not a check.
+  // What survives is the real rule: no verification prompts. The hand-off copy
+  // lives in handoff-ui.js, so app.js itself still carries exactly one mention.
+  assert.equal((codeOnly(js).match(/Claude app/g) || []).length, 1,
+    'in app.js code, only maybeFailedBanner may name the Claude app');
+});
+
+test('the hand-off copy names a destination, never a check', () => {
+  // The distinction above, enforced on the copy itself rather than on a count.
+  const src = read('handoff-ui.js');
+  for (const verify of [/check it appeared/i, /to check/i, /confirm it/i, /make sure/i]) {
+    assert.doesNotMatch(src, verify, "R1 must not reintroduce T47's verification prompt");
+  }
 });
 
 test("rowState's running branch shows the session's busy/idle activity", () => {
@@ -861,7 +1051,7 @@ test("rowState's running branch shows the session's busy/idle activity", () => {
 
 // --- the launch banner clears itself once the session settles --------------
 
-function makeClearSettled(hideBannerSpy, state, launchBannerFor) {
+function makeClearSettled(hideBannerSpy, state, launchBannerFor, showHandoffSpy = () => {}) {
   const js = read('app.js');
   const src = js.slice(
     js.indexOf('function clearSettledLaunchBanner('),
@@ -871,11 +1061,14 @@ function makeClearSettled(hideBannerSpy, state, launchBannerFor) {
   // row resolves to its session, or to null when there is none yet.
   const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path) ?? null;
   if (!state.results) state.results = new Map();
+  // handoffReady is the REAL implementation, not a stub: which statuses count
+  // as "go and open it" is the whole decision this branch turns on, and a
+  // stub here would let the two drift apart silently.
   const make = new Function(
-    'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff',
     src + '; return clearSettledLaunchBanner;',
   );
-  return make(state, sessionFor, hideBannerSpy, launchBannerFor);
+  return make(state, sessionFor, hideBannerSpy, launchBannerFor, handoffReady, showHandoffSpy);
 }
 
 function spy() {
@@ -909,16 +1102,29 @@ test('clearSettledLaunchBanner keeps the banner while the session is still start
   assert.equal(hide.calls.length, 0);
 });
 
-test('clearSettledLaunchBanner drops the banner as soon as the session is running', () => {
+test('clearSettledLaunchBanner hands off as soon as the session is running', () => {
+  // CHANGED by Lane 10 / R1. This used to assert hideBanner(). The launch
+  // banner still must not sit there until a manual refresh - the original
+  // bug - but "landed and live" is now the one moment the hand-off to the
+  // Claude app is worth saying, so the line is REPLACED rather than cleared.
+  // Clearing it here again would put the app back to saying nothing at the
+  // only point where it has something useful to say.
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, 'Sherlock')();
-  assert.equal(hide.calls.length, 1, 'this is the bug: it used to sit there until a manual refresh');
+  const handoff = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, 'Sherlock', handoff)();
+  assert.equal(handoff.calls.length, 1, 'a live launch must hand off');
+  assert.equal(hide.calls.length, 0, 'and must not blank the banner on the way');
 });
 
 test('clearSettledLaunchBanner drops the banner for a failed session too, so maybeFailedBanner can replace it', () => {
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'failed' }] }, 'Sherlock')();
+  const handoff = spy();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'failed' }] }, 'Sherlock', handoff)();
   assert.equal(hide.calls.length, 1);
+  // Lane 10 / R1: a failed launch must NEVER hand off. Sending someone to the
+  // Claude app to look for a session that did not start is worse than silence
+  // - they go, find nothing, and stop trusting what the app tells them.
+  assert.equal(handoff.calls.length, 0, 'a failed launch must not offer to open it');
 });
 
 test('both banner primitives release the launch handle, so no other message can be hidden by it', () => {
@@ -1051,18 +1257,15 @@ test('dropCoveredResults runs BEFORE clearSettledLaunchBanner in both loops', ()
   }
 });
 
-// --- an interrupted handoff must not claim the file was never written -----
+// --- the ended banner reports the end, and nothing else -------------------
 
-test("reportEnded distinguishes 'interrupted' from a genuine handoff failure", () => {
+test('reportEnded announces one line and carries no handoff verdict at all', () => {
   const js = read('app.js');
   const fn = js.slice(js.indexOf('function reportEnded('), js.indexOf('function failedSessions('));
-  assert.match(fn, /s\.handoff_result === 'interrupted'/,
-    'the agent losing the verdict is not the same as the handoff failing');
-  assert.match(fn, /restarted before it could confirm/);
-  assert.ok(
-    fn.indexOf("=== 'interrupted'") < fn.indexOf('the handoff was not written'),
-    'the interrupted branch must be reached before the blunt fallback',
-  );
+  assert.match(fn, /setBanner\('info', \[\{ b: s\.project \}, \{ text: ' ended\.' \}\]\)/);
+  for (const gone of ['handoff_result', 'handoff_ok']) {
+    assert.ok(!fn.includes(gone), `reportEnded must not read ${gone} - the agent no longer writes one`);
+  }
 });
 
 // --- the folder row -------------------------------------------------------
@@ -1179,9 +1382,9 @@ test("the folder row's left-edge break comes from the missing dot, not a nudge",
 
 test('the folder row uses the three tokenized colours the design names', () => {
   const css = read('app.css');
-  assert.match(css, /\.row\.folder \.row-name\s*\{[^}]*#c9d1c9/);
-  assert.match(css, /\.row\.folder \.row-status\s*\{[^}]*#4a5a4a/);
-  assert.match(css, /\.folder-chev\s*\{[^}]*#5fae6f/);
+  assert.match(css, /\.row\.folder \.row-name\s*\{[^}]*var\(--text-2\)/);
+  assert.match(css, /\.row\.folder \.row-status\s*\{[^}]*var\(--dim\)/);
+  assert.match(css, /\.folder-chev\s*\{[^}]*var\(--accent-2\)/);
 });
 
 test('TOTAL counts what can be started - a container\'s children, not the container', () => {
@@ -1308,12 +1511,18 @@ test('a nested launch banner clears once the nested session is running', () => {
   // what lets this resolve at all.
   const sessionFor = (p) => (state.sessions || []).find((s) => s.path === p.path || (s.project === p.name && s.source !== 'desk')) ?? null;
   const hide = spy();
+  const handoff = spy();
   const clearSettledLaunchBanner = new Function(
-    'state', 'sessionFor', 'hideBanner', 'launchBannerFor',
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff',
     src + '; return clearSettledLaunchBanner;',
-  )(state, sessionFor, hide, 'Pull Requests/Vercel');
+  )(state, sessionFor, hide, 'Pull Requests/Vercel', handoffReady, handoff);
   clearSettledLaunchBanner();
-  assert.equal(hide.calls.length, 1, 'without the pathless stand-in, a nested launch banner never clears - the same bug fixed for top-level projects');
+  // CHANGED by Lane 10 / R1, same as the top-level case: a running session
+  // hands off rather than blanking. The claim under test is unchanged and is
+  // still about the pathless stand-in - without it this nested launch resolves
+  // to no session at all and the banner is left up forever.
+  assert.equal(handoff.calls.length, 1, 'without the pathless stand-in, a nested launch banner never settles - the same bug fixed for top-level projects');
+  assert.equal(hide.calls.length, 0);
 });
 
 // The two chrome taps that could open a folder / leave a folder under a live
@@ -1342,6 +1551,25 @@ test('onProjectTap: a folder-row tap with no confirm open opens the folder', () 
   assert.equal(opened, 'Pull Requests');
 });
 
+test("D11 - onProjectTap's [data-choose] branch returns before any [data-project] work and never calls launchSession", () => {
+  const js = read('app.js');
+  // Stops BEFORE onChooseFolders' own declaration, not at cancelOpenConfirm:
+  // a function declaration inside the sliced source would shadow the
+  // injected stub of the same name, silently calling the REAL onChooseFolders
+  // (which needs state/document/etc that this test never provides) instead
+  // of the stub - exactly the ReferenceError trap this task's brief warns
+  // about, one level removed.
+  const src = js.slice(js.indexOf('async function onProjectTap('), js.indexOf('async function onChooseFolders('));
+  let chosen = false;
+  const onProjectTap = new Function(
+    'onChooseFolders',
+    src + '; return onProjectTap;',
+  )(() => { chosen = true; });
+  const e = { target: { closest: (sel) => (sel === '[data-choose]' ? { dataset: { choose: '1' } } : null) } };
+  onProjectTap(e);
+  assert.equal(chosen, true, 'a misplaced or missing check would leave onChooseFolders uncalled, the same failure a launch attempt would need to be caught by');
+});
+
 // The back bar's click handler is an inline arrow inside wireEvents, not a
 // named function - lifted by its own literal id/text anchor, same guard.
 function callBackBarHandler(cancelOpenConfirmStub, closeFolderScreenStub) {
@@ -1367,6 +1595,13 @@ test('backbar click: with no confirm open, the tap closes the folder', () => {
 
 // Integration-level: renderProjects itself, with a folder open, scoped to
 // only that folder's children and sessions - not the piecewise helpers.
+// T100's trap: renderProjects now also references listZoneState, missingRoots,
+// buildEmptyState, buildGoneNotice and five copy.js constants at module
+// scope - every one of them has to be added to BOTH the parameter list and
+// the call arguments below, or a test that reaches those branches dies with
+// a ReferenceError instead of a useful failure. Each defaults to the REAL
+// implementation so every pre-existing call site (which passes none of
+// these) keeps working unedited.
 function makeRenderProjectsIntegration(stubs) {
   const js = read('app.js');
   const helpers = js.slice(js.indexOf('function elapsed('), js.indexOf('function setDot('));
@@ -1376,8 +1611,31 @@ function makeRenderProjectsIntegration(stubs) {
   const src = helpers + child + rp;
   return new Function(
     'document', 'state', 'buildTile', 'buildRow', 'renderBackBar',
+    'listZoneState', 'missingRoots', 'buildEmptyState', 'buildGoneNotice', 'crumbSegments',
+    // R4's offline branch reads it; without this the one list state added by
+    // R4 is the only one that cannot be integration-tested.
+    'PHONE_OFFLINE', 'CANNOT_REACH',
+    'SHARED_UNKNOWN', 'NOTHING_SHARED', 'ALL_ROOTS_GONE', 'EMPTY_DAY_ONE_BODY', 'emptyDayOneTitle',
+    // Lane 9's grouping runs inside renderProjects now, so the row zone's own
+    // dependency comes in here too.
+    'projectSections',
     src + '; return renderProjects;',
-  )(stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar);
+  )(
+    stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar,
+    stubs.listZoneState || folders.listZoneState,
+    stubs.missingRoots || folders.missingRoots,
+    stubs.buildEmptyState || (() => makeStubEl()),
+    stubs.buildGoneNotice || (() => makeStubEl()),
+    stubs.crumbSegments || folders.crumbSegments,
+    stubs.PHONE_OFFLINE || copy.PHONE_OFFLINE,
+    stubs.CANNOT_REACH || copy.CANNOT_REACH,
+    stubs.SHARED_UNKNOWN || copy.SHARED_UNKNOWN,
+    stubs.NOTHING_SHARED || copy.NOTHING_SHARED,
+    stubs.ALL_ROOTS_GONE || copy.ALL_ROOTS_GONE,
+    stubs.EMPTY_DAY_ONE_BODY || copy.EMPTY_DAY_ONE_BODY,
+    stubs.emptyDayOneTitle || copy.emptyDayOneTitle,
+    stubs.projectSections || folders.projectSections,
+  );
 }
 
 function makeStubEl() {
@@ -1401,7 +1659,7 @@ test('renderProjects: with a folder open, only that folder\'s children render an
     ],
     launching: new Set(), stopping: new Set(), results: new Map(), confirmName: null, focusName: null,
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const rowsSeen = [];
   const tilesSeen = [];
@@ -1424,8 +1682,16 @@ test('renderProjects: with a folder open, only that folder\'s children render an
 function makePopState(state, historyStub) {
   const js = read('app.js');
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
-  return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed',
-    src + '; return onPopState;')(state, historyStub, () => {}, true, true);
+  // The settings stack is EMPTY in these tests: they exercise the drill/confirm
+  // branches, which sit below the settings branch and must be unaffected by it.
+  // 'sheetPushed' is Lane 10's flag, injected false: its branch is first in
+  // onPopState and would otherwise swallow every pop these tests issue.
+  return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
+    'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
+    'sheetPushed',
+    src + '; return onPopState;')(state, historyStub, () => {}, true, true, false, () => {},
+    [], () => null, false, new Set(['see', 'agent', 'reset', 'about', 'update']), () => {}, () => {},
+    false);
 }
 
 test('back with only the drill-in open returns to the list', () => {
@@ -1642,7 +1908,7 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
     ],
     launching: new Set(), stopping: new Set(), results: new Map(),
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const seen = [];
   const buildRow = (p) => { seen.push(p); return { tag: 'ROW' }; };
@@ -1658,11 +1924,240 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
   assert.equal(sherlock.parent, undefined);
 });
 
+// --- T100: the empty/broken project list ------------------------------
+
+// Same createElement shape makeBuildRow uses - dataset/className/textContent
+// plain objects, enough for buildEmptyState/buildGoneNotice to build a real
+// tree that D1-D6 can walk.
+function makeStubDocumentForBuild() {
+  return {
+    createElement(tag) {
+      return {
+        tag, children: [], attrs: {}, dataset: {}, className: '', textContent: '',
+        setAttribute(k, v) { this.attrs[k] = v; },
+        appendChild(c) { this.children.push(c); return c; },
+      };
+    },
+  };
+}
+
+// The REAL buildEmptyState/buildGoneNotice, sliced straight out of app.js -
+// so D1/D2/D3/D4 exercise the actual DOM shape, not a description of it.
+function makeEmptyGoneBuilders() {
+  const js = read('app.js');
+  const start = js.indexOf('function buildEmptyState(');
+  const end = js.indexOf('function setBanner(');
+  const src = js.slice(start, end);
+  return new Function(
+    'document', 'CHOOSE_FOLDERS_BUTTON', 'REMOVE_BUTTON', 'rootGoneTitle', 'ROOT_GONE_BODY', 'crumbSegments',
+    // buildEmptyState takes an ACTION name since R4 - 'choose' or 'retry' -
+    // and reads the label for each. Same rule as the renderProjects harness
+    // above: a constant it references has to be injected here too.
+    'RETRY_BUTTON',
+    `${src}; return { buildEmptyState, buildGoneNotice };`,
+  )(
+    makeStubDocumentForBuild(), copy.CHOOSE_FOLDERS_BUTTON, copy.REMOVE_BUTTON, copy.rootGoneTitle, copy.ROOT_GONE_BODY, folders.crumbSegments,
+    copy.RETRY_BUTTON,
+  );
+}
+
+function countByDataset(root, key) {
+  let n = 0;
+  const walk = (node) => {
+    if (node.dataset && node.dataset[key] !== undefined) n += 1;
+    for (const c of (node.children || [])) walk(c);
+  };
+  walk(root);
+  return n;
+}
+
+function baseEmptyListState(overrides) {
+  return {
+    projects: [],
+    openFolder: null,
+    reachable: true,
+    shared: [],
+    sessions: [],
+    launching: new Set(),
+    stopping: new Set(),
+    results: new Map(),
+    confirmName: null,
+    focusName: null,
+    ...overrides,
+  };
+}
+
+function makeProjectsEls() {
+  return {
+    tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
+    // Lane 9's row zone renames or hides the ALL PROJECTS header depending on
+    // how many shared folders there are, so these three are read every render.
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(),
+  };
+}
+
+// getElementById off the persistent `els` map, PLUS a real createElement -
+// every D-test below has zero running tiles, so renderProjects always builds
+// the "nothing running" placeholder too, and that also calls
+// document.createElement/append on the injected document.
+function makeProjectsDocument(els) {
+  return {
+    getElementById: (id) => els[id],
+    createElement(tag) {
+      return {
+        tag,
+        children: [],
+        dataset: {},
+        className: '',
+        textContent: '',
+        classList: { toggle() {}, add() {} },
+        setAttribute() {},
+        appendChild(c) { this.children.push(c); return c; },
+        append(...nodes) { this.children.push(...nodes); },
+      };
+    },
+  };
+}
+
+test('D1 - state 1: #projects holds exactly one [data-choose] and zero rows', () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({ shared: [] });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.equal(countByDataset(els.projects, 'choose'), 1, 'the empty project list must have exactly one way out');
+  assert.equal(countByDataset(els.projects, 'project'), 0);
+});
+
+test("D2 - state 4 also renders [data-choose], and its title text differs from state 1's", () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  function run(sharedVal) {
+    const state = baseEmptyListState({ shared: sharedVal });
+    const els = makeProjectsEls();
+    const document = makeProjectsDocument(els);
+    const renderProjects = makeRenderProjectsIntegration({
+      document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+    });
+    renderProjects();
+    return els.projects;
+  }
+  const state1 = run([]);
+  const state4 = run([{
+    path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+  }]);
+
+  assert.equal(countByDataset(state1, 'choose'), 1);
+  assert.equal(countByDataset(state4, 'choose'), 1);
+  const title1 = collectByClass(state1, 'empty-title')[0].textContent;
+  const title4 = collectByClass(state4, 'empty-title')[0].textContent;
+  assert.notEqual(title1, title4, 'state 1 and state 4 must not render the same words - they are not the same screen');
+});
+
+test('D3 - shared: null, 0 projects: #projects holds NO [data-choose]', () => {
+  // The real builders, NOT the harness defaults: makeStubEl() carries no
+  // dataset, so countByDataset() would read 0 no matter what the code passed
+  // and this pin could never fail. It is the only live cover for the rule.
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({ shared: null });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.equal(countByDataset(els.projects, 'choose'), 0, 'the picker must never be enterable blind - a SAVE from there would wipe every shared folder');
+});
+
+test('D4 - one missing root + two live projects: a [data-remove-root] node exists AND both project rows were built', () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({
+    projects: [{ name: 'Alpha', path: 'F:\\Dev\\Alpha' }, { name: 'Beta', path: 'F:\\Dev\\Beta' }],
+    shared: [{
+      path: 'F:\\Gone', mode: 'container', excludes: [], new_folders: 'show', missing: true,
+    }],
+  });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const rowsSeen = [];
+  const buildRow = (p) => { rowsSeen.push(p.name); return makeStubEl(); };
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow, renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  assert.deepEqual(rowsSeen.sort(), ['Alpha', 'Beta'], 'a gone root must never blank a list that still has projects');
+  const removeNode = findByDataset(els.projects, 'removeRoot');
+  assert.ok(removeNode, 'a gone root must render its REMOVE control');
+  assert.equal(removeNode.dataset.removeRoot, 'F:\\Gone');
+});
+
+test('D5 - reachable:\'waiting\' with shared:[]: the waiting .msg renders and NO [data-choose]', () => {
+  // Real builders, same reason as D3 - the [data-choose] half of this test is
+  // vacuous against the harness stubs.
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  const state = baseEmptyListState({ reachable: 'waiting', shared: [] });
+  const els = makeProjectsEls();
+  const document = makeProjectsDocument(els);
+  const renderProjects = makeRenderProjectsIntegration({
+    document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+  });
+
+  renderProjects();
+
+  // THE claim of this test, unchanged: an unreachable agent must never be
+  // reported as "nothing shared yet", which would send the owner into a picker
+  // that could wipe a set the PC never reported.
+  assert.equal(countByDataset(els.projects, 'choose'), 0, 'the app must never say "nothing shared yet" while the PC is asleep');
+  // CHANGED 2026-09-04: it is an empty state with a retry now, not a bare
+  // .msg, and the words no longer assert the PC is on its way - the app cannot
+  // see that, and with Tailscale up and the phone's radios off it was wrong.
+  assert.equal(countByDataset(els.projects, 'retry'), 1, 'and it offers the retry that is already happening');
+  const title = collectByClass(els.projects, 'empty-title').map((n) => n.textContent).join(' ');
+  const body = collectByClass(els.projects, 'empty-body').map((n) => n.textContent).join(' ');
+  assert.match(title, /reach your PC/);
+  assert.match(body, /Tailscale/, 'the phone-side cause has to be named, not just the PC');
+  assert.match(body, /waking up/, 'and the likeliest cause still leads');
+});
+
+test('D6 - renderBackBar receives canCreate=false for nothing-shared and true for empty-day-one', () => {
+  function canCreateFor(sharedVal) {
+    const state = baseEmptyListState({ shared: sharedVal });
+    const els = makeProjectsEls();
+    const document = makeProjectsDocument(els);
+    let seen;
+    const renderBackBar = (open, canCreate) => { seen = canCreate; };
+    const renderProjects = makeRenderProjectsIntegration({
+      document,
+      state,
+      buildTile: () => makeStubEl(),
+      buildRow: () => makeStubEl(),
+      renderBackBar,
+      buildEmptyState: () => makeStubEl(),
+      buildGoneNotice: () => makeStubEl(),
+    });
+    renderProjects();
+    return seen;
+  }
+
+  assert.equal(canCreateFor([]), false, "'nothing-shared' - + can only fail with no usable root");
+  assert.equal(canCreateFor([{
+    path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+  }]), true, "'empty-day-one' - a live root exists to create into");
+});
+
 test('the eyebrow is the dimmest token, clamps to one line, and clears the corner STOP chip', () => {
   const css = read('app.css');
   const rule = css.match(/\.tile-eyebrow\s*\{([^}]*)\}/);
   assert.ok(rule, 'app.css must carry a .tile-eyebrow rule');
-  assert.match(rule[0], /#4a5a4a/);
+  assert.match(rule[0], /var\(--dim\)/);
   assert.match(rule[0], /font-size:\s*8px/);
   assert.match(rule[0], /text-transform:\s*uppercase/);
   assert.match(rule[0], /white-space:\s*nowrap/);
@@ -1688,10 +2183,19 @@ test('load() waits and retries only on network/timeout, and dead-ends on every o
   assert.match(load, /p\.code === 'network' \|\| p\.code === 'timeout'/);
   assert.match(load, /state\.reachable = 'waiting'/);
   assert.match(load, /waitForAgent\(\)/);
-  assert.ok(
-    load.indexOf("state.reachable = 'waiting'") < load.indexOf('state.reachable = false'),
-    'the waiting branch must be checked before the dead-end branch',
-  );
+  // Three branches since R4, and their ORDER is the precedence:
+  //   offline  - this device has no network      (beats everything)
+  //   waiting  - the PC has not answered yet
+  //   else     - the agent answered with a refusal, which waiting cannot fix
+  // This used to compare the two `state.reachable =` assignments, but the
+  // offline branch also assigns false, so that proxy stopped meaning what it
+  // said. Pin the branch conditions instead.
+  const iOffline = load.indexOf('} else if (state.offline) {');
+  const iWaiting = load.indexOf("} else if (p.code === 'network' || p.code === 'timeout') {");
+  const iDead = load.indexOf('setErrorBanner(p.code, p.status)');
+  assert.ok(iOffline > 0, 'load() must have an offline branch');
+  assert.ok(iWaiting > iOffline, 'offline must be checked before waiting - it blames the right end');
+  assert.ok(iDead > iWaiting, 'the waiting branch must be checked before the dead-end branch');
   assert.match(load, /if \(state\.reachable === true\) maybeFailedBanner\(\);/,
     "'waiting' is truthy, so this test pins the explicit comparison");
 });
@@ -1719,7 +2223,11 @@ test('the waiting state has its own status line, its own dot and its own empty-s
   const js = read('app.js');
   const conn = js.slice(js.indexOf('function renderConn()'), js.indexOf('function renderProjects('));
   assert.match(conn, /state\.reachable === 'waiting'/);
-  assert.match(conn, /WAITING FOR PC/);
+  // "CANNOT REACH PC", not "WAITING FOR PC". Waiting asserts the PC is coming
+  // back, which is a claim about a machine this app cannot see.
+  assert.match(conn, /CANNOT REACH PC/);
+  assert.doesNotMatch(codeOnly(conn), /WAITING FOR PC/,
+    'codeOnly: the comment beside it names the wording it replaced');
   assert.match(conn, /setDot\(dot, 'accent'\)/, 'a dim dot reads as "nothing is happening"; something is');
   assert.ok(
     !/text\.classList\.add\('reachable'\)[\s\S]*?state\.reachable === true/.test(conn),
@@ -1727,9 +2235,17 @@ test('the waiting state has its own status line, its own dot and its own empty-s
   );
 
   const rp = js.slice(js.indexOf('function renderProjects('), js.indexOf('function renderFooter('));
-  assert.match(rp, /Waiting for the PC\./);
+  // The two kinds now share ONE screen, because the app cannot honestly tell
+  // "this phone has no route" from "that PC is asleep" without asking
+  // something other than the agent - and nothing leaves this machine. The
+  // ordering property this test was written for is therefore satisfied by
+  // construction: neither can win over the other when there is only one
+  // branch. listZoneState still pins that both outrank every shared-set state
+  // (S1/S2), which is the half that actually protects the owner's folders.
+  assert.match(rp, /zone\.kind === 'waiting' \|\| zone\.kind === 'unreachable'/);
+  assert.match(rp, /CANNOT_REACH/);
   assert.ok(
-    rp.indexOf("state.reachable === 'waiting'") < rp.indexOf('state.reachable === false'),
+    rp.indexOf("zone.kind === 'waiting' || zone.kind === 'unreachable'") > 0,
     'the waiting message must win over "Cannot reach the agent."',
   );
 });
@@ -1810,4 +2326,1294 @@ test('sw.js does not fail a good network response because the cache write failed
 
   const res = await responded;
   assert.equal(res.status, 200, 'the served response must survive a failing cache write');
+});
+
+// --- the accept screen (T96) -----------------------------------------------
+
+test('boot() awaits ensureAccepted() between the unlock and wireEvents(), so the project list cannot show ahead of the warning', () => {
+  const js = read('app.js');
+  const boot = js.slice(js.indexOf('async function boot()'), js.indexOf('boot().finally'));
+  const unlockedIdx = boot.indexOf('await unlocked;');
+  // The onAuthLost callback declared earlier in the function ALSO calls
+  // ensureAccepted() (see the "hideAccept() is not decoration" test) - search
+  // from unlockedIdx so that occurrence is not mistaken for boot()'s own.
+  assert.ok(unlockedIdx !== -1, 'boot() must await the gate');
+  const ensureIdx = boot.indexOf('await ensureAccepted();', unlockedIdx);
+  const wireIdx = boot.indexOf('wireEvents();', unlockedIdx);
+  assert.ok(ensureIdx !== -1 && wireIdx !== -1, 'boot() must carry all three markers');
+  assert.ok(unlockedIdx < ensureIdx, 'ensureAccepted() must run after the unlock resolves');
+  assert.ok(ensureIdx < wireIdx, 'ensureAccepted() must run before wireEvents()');
+});
+
+test('ensureAccepted sets picker.hidden = true before its first await', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function showAccept()'));
+  const hideIdx = fn.indexOf('picker.hidden = true;');
+  const awaitIdx = fn.indexOf('await ');
+  assert.ok(hideIdx !== -1, 'ensureAccepted must hide the picker');
+  assert.ok(awaitIdx !== -1, 'ensureAccepted must await something');
+  assert.ok(hideIdx < awaitIdx, 'the picker must be hidden synchronously, before any paint can happen between promise ticks');
+});
+
+test('the onAuthLost callback in boot() calls hideAccept() before showGate()', () => {
+  const js = read('app.js');
+  const match = js.match(/onAuthLost\(async \(\) => \{ ([^}]+) \}\);/);
+  assert.ok(match, 'boot() must register an onAuthLost callback');
+  const callback = match[1];
+  const hideIdx = callback.indexOf('hideAccept();');
+  const gateIdx = callback.indexOf('showGate()');
+  assert.ok(hideIdx !== -1, 'onAuthLost callback must call hideAccept()');
+  assert.ok(gateIdx !== -1, 'onAuthLost callback must call showGate()');
+  assert.ok(hideIdx < gateIdx, 'a token expiry on the accept screen must hide it before the gate returns, or two <main>s stack');
+});
+
+test('screenAfterUnlock never fails open - anything other than an explicit acknowledged:true shows the accept screen', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function screenAfterUnlock('), js.indexOf('async function ensureAccepted('));
+  const body = fn.match(/return ([^;]+);/);
+  assert.ok(body, 'app.js must carry screenAfterUnlock');
+  const screenAfterUnlock = new Function('res', `return ${body[1]};`);
+  assert.equal(screenAfterUnlock({ ok: true, data: { acknowledged: true } }), 'list');
+  assert.equal(screenAfterUnlock({ ok: true, data: { acknowledged: false } }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: true, data: {} }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: false, code: 'network' }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: false, code: 'timeout' }), 'accept');
+  assert.equal(screenAfterUnlock({ ok: true, data: { acknowledged: 'yes' } }), 'accept');
+});
+
+test('the accept path pushes no history entry, and onPopState is unchanged', () => {
+  const js = read('app.js');
+  const ensureAccepted = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
+  assert.ok(!ensureAccepted.includes('history.pushState'), 'the accept screen must push no history entry - there is nowhere to go back to');
+  // onPopState's documented ordering invariant (confirm entry always on top of
+  // a drill entry) must not gain a third kind of pushed entry to reconcile.
+  const onPopState = js.slice(js.indexOf('function onPopState()'), js.indexOf('// A synthetic desk-subfolder tile'));
+  assert.match(onPopState, /confirmPushed = false;/);
+  assert.match(onPopState, /folderPushed = false;/);
+  assert.ok(!onPopState.includes('accept'), 'onPopState must know nothing about the accept screen');
+});
+
+// --- the folder picker (T97) ------------------------------------------------
+
+test('A4 - in ensureAccepted, showFolders( runs after await showAccept() and before picker.hidden = false', () => {
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
+  const showAcceptIdx = fn.indexOf('await showAccept()');
+  const showFoldersIdx = fn.indexOf('showFolders(');
+  const revealIdx = fn.indexOf('picker.hidden = false');
+  assert.ok(showAcceptIdx !== -1 && showFoldersIdx !== -1 && revealIdx !== -1, 'ensureAccepted must carry all three markers');
+  assert.ok(showAcceptIdx < showFoldersIdx, 'the picker must not run ahead of the accept screen');
+  assert.ok(showFoldersIdx < revealIdx, 'the picker must run before the project list is revealed');
+});
+
+test('A5 - showFolders adds a popstate listener and the resolve path removes it; onPopState mentions neither folders nor share', () => {
+  // Normalised: the working tree can be CRLF even though the committed blob is
+  // LF, and a multi-line anchor never matches on CRLF - indexOf returns -1 and
+  // slice(start, -1) silently becomes "the rest of the file". Strip CR first
+  // and anchor on a single line, the same fix C8 in accept.test.js already uses.
+  const js = read('app.js').replace(/\r/g, '');
+  const showFolders = js.slice(js.indexOf('function showFolders('), js.indexOf('function screenAfterUnlock('));
+  assert.match(showFolders, /window\.addEventListener\('popstate', onFoldersPop\)/);
+  const finishFolders = js.slice(js.indexOf('function finishFolders('), js.indexOf('async function onSave('));
+  assert.match(finishFolders, /window\.removeEventListener\('popstate', onFoldersPop\)/);
+  const onPopState = js.slice(js.indexOf('function onPopState()'), js.indexOf('// A synthetic desk-subfolder tile'));
+  assert.ok(!onPopState.includes('folders'), 'onPopState must know nothing about the picker');
+  assert.ok(!onPopState.includes('share'), 'onPopState must know nothing about the picker\'s own state');
+});
+
+// A minimal DOM stub - createElement/appendChild/dataset for
+// buildDriveRow/buildFolderRow (loadRowBuilders), extended below with
+// getElementById (one persistent stub per id), addEventListener /
+// removeEventListener / listenerCount / fire (same shape lock.test.js's
+// makeEl already uses), closest(), innerHTML, hidden/disabled/checked and
+// createTextNode - enough for loadPicker() below to run the picker's real
+// wiring under a stub DOM and inspect it, not just its row builders.
+function makeShareStubEl(tag) {
+  const listeners = new Map(); // type -> Set<fn>
+  const el = {
+    tag,
+    className: '',
+    dataset: {},
+    children: [],
+    parent: null,
+    hidden: false,
+    disabled: false,
+    checked: false,
+    _text: '',
+    appendChild(child) {
+      child.parent = el;
+      this.children.push(child);
+      return child;
+    },
+    // buildSettingsRow clones an <svg> out of #tpl-row-ico and points its
+    // <use> at an icon id. Both happen on the CLONE, so no row assertion
+    // anywhere in this file is affected by them.
+    cloneNode() { return makeShareStubEl(tag); },
+    querySelector() { return el._use || (el._use = makeShareStubEl('use')); },
+    setAttribute(k, v) { this[`attr_${k}`] = v; },
+    get textContent() { return this._text; },
+    set textContent(v) { this._text = v; this.children = []; },
+    get innerHTML() { return this._text; },
+    set innerHTML(v) { this._text = v; this.children = []; },
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+    listenerCount(type) { return listeners.get(type)?.size ?? 0; },
+    fire(type, ev = {}) {
+      for (const fn of [...(listeners.get(type) ?? [])]) fn(ev);
+    },
+    // sel is always '[data-xxx]' - the five forms the picker's delegates
+    // use. Hand-rolled rather than a regex, so this stub needs no backslash.
+    closest(sel) {
+      if (sel.charAt(0) !== '[' || sel.slice(-1) !== ']') return null;
+      const parts = sel.slice(1, -1).split('-').slice(1); // drop 'data'
+      const key = parts.map((p, i) => (i === 0 ? p : p.charAt(0).toUpperCase() + p.slice(1))).join('');
+      let node = el;
+      while (node) {
+        if (node.dataset && node.dataset[key] !== undefined) return node;
+        node = node.parent;
+      }
+      return null;
+    },
+  };
+  return el;
+}
+
+function fakeDocument() {
+  const registry = new Map(); // id -> element, one persistent stub per id
+  // The icon <template> buildSettingsRow clones from. Registered up front so
+  // every door/picker harness gets it without needing to know it exists.
+  const tpl = makeShareStubEl('template');
+  tpl.content = { firstElementChild: makeShareStubEl('svg') };
+  registry.set('tpl-row-ico', tpl);
+  return {
+    createElement: (tag) => makeShareStubEl(tag),
+    createTextNode: (text) => { const n = makeShareStubEl('#text'); n.textContent = text; return n; },
+    getElementById(id) {
+      if (!registry.has(id)) registry.set(id, makeShareStubEl('div'));
+      return registry.get(id);
+    },
+  };
+}
+
+function flatten(el) {
+  const out = [el];
+  for (const c of el.children) out.push(...flatten(c));
+  return out;
+}
+
+function loadRowBuilders() {
+  const js = read('app.js');
+  const src = js.slice(js.indexOf('function joinShare('), js.indexOf('function buildPickedRow('));
+  return new Function(
+    'document', 'driveRowState', 'coverageOf',
+    `${src}; return { buildDriveRow, buildFolderRow };`,
+  )(fakeDocument(), folders.driveRowState, folders.coverageOf);
+}
+
+function fakeWindow() { return makeShareStubEl('window'); }
+
+function fakeHistory() {
+  return {
+    state: null,
+    pushState(state) { this.state = state; },
+    back() {},
+    go() {},
+  };
+}
+
+function flush() { return new Promise((r) => setImmediate(r)); }
+
+function findByDataset(root, key) {
+  const stack = [root];
+  while (stack.length) {
+    const n = stack.shift();
+    if (n.dataset && n.dataset[key] !== undefined) return n;
+    for (const c of (n.children || [])) stack.push(c);
+  }
+  return null;
+}
+
+function collectByClass(root, cls) {
+  const out = [];
+  const walk = (n) => {
+    if (n.className === cls) out.push(n);
+    for (const c of (n.children || [])) walk(c);
+  };
+  walk(root);
+  return out;
+}
+
+function hasUndefinedText(root) {
+  let found = false;
+  const walk = (n) => {
+    if (n.textContent === 'undefined') found = true;
+    for (const c of (n.children || [])) walk(c);
+  };
+  walk(root);
+  return found;
+}
+
+// Any node in the whole subtree currently carrying at least one live
+// listener of any type the picker actually registers.
+function anyActiveListener(node) {
+  if (!node.listenerCount) return false;
+  return ['change', 'click', 'popstate'].some((t) => node.listenerCount(t) > 0);
+}
+
+function hasListenedAncestor(node) {
+  let n = node.parent;
+  while (n) {
+    if (anyActiveListener(n)) return true;
+    n = n.parent;
+  }
+  return false;
+}
+
+// Runs the picker's real wiring under a stub DOM. Everything the block
+// touches that is not defined inside it - document, window, history, the
+// api calls and the folders-ui imports - is injected, so a mis-wired
+// listener or a stale render shows up as behaviour instead of as a
+// source-text match.
+function loadPicker({ getDrives, getFolders, putShared } = {}) {
+  const js = read('app.js').replace(/\r/g, '');
+  const src = js.slice(js.indexOf('const share = {'), js.indexOf('function screenAfterUnlock('));
+  const doc = fakeDocument();
+  const win = fakeWindow();
+  const hist = fakeHistory();
+  const fn = new Function(
+    'document', 'window', 'history',
+    'getDrives', 'getFolders', 'putShared',
+    'crumbSegments', 'sharedBody', 'coverageOf', 'driveRowState',
+    'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
+    'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
+    `${src}
+return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListClick, onShareListChange, onSharePickedClick, onSkipClick, finishFolders, toggleTick };`,
+  );
+  const picker = fn(
+    doc, win, hist,
+    getDrives || (async () => ({ ok: true, status: 200, data: { drives: [] } })),
+    getFolders || (async () => ({ ok: true, status: 200, data: { path: 'F:', parent: null, folders: [], total: 0 } })),
+    putShared || (async () => ({ ok: true, status: 200, data: {} })),
+    folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
+    folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
+    copy.PICKER_SKIP, copy.PICKER_CANCEL,
+    () => {}, // showFolders' router call (T77) - this helper only exercises the picker's own wiring
+  );
+  picker.document = doc;
+  picker.window = win;
+  picker.history = hist;
+  return picker;
+}
+
+// --- the shared-folders door (T78) ------------------------------------------
+
+// Two slices of app.js, concatenated - function declarations hoist across
+// the whole `new Function` body, so order does not matter. The second slice
+// is exactly loadPicker's own slice (it already carries showFolders,
+// finishFolders, onSave, closeSettings, openPickerFromShared, renderSettings
+// and buildSettingsRow); the first adds onChooseFolders, the ONLY way in for
+// either door.
+// The Settings door is now two screens: the row opens Lane 3's Shared
+// folders screen, and ADD A FOLDER there is what reaches the picker. That
+// button's handler is openPickerFromShared, so it is the door these tests
+// drive - every assertion below is about what the picker does once opened,
+// which is unchanged. openSettings (inside the second slice) references
+// cancelOpenConfirm, which is NOT injected - no test here calls it.
+function loadDoor({
+  getDrives, getFolders, putShared, load,
+} = {}) {
+  const js = read('app.js').replace(/\r/g, '');
+  const onChooseSrc = js.slice(
+    js.indexOf('async function onChooseFolders('),
+    js.indexOf('// Guarded against a double tap the same way onSave is'),
+  );
+  const pickerSrc = js.slice(js.indexOf('const share = {'), js.indexOf('function screenAfterUnlock('));
+  const doc = fakeDocument();
+  const win = fakeWindow();
+  const hist = fakeHistory();
+  const state = { shared: null };
+  const screens = [];
+  const showScreenSpy = (name) => { screens.push(name); };
+  const puts = [];
+  async function putSharedSpy(body) {
+    puts.push(body);
+    return (putShared || (async () => ({ ok: true, status: 200, data: {} })))(body);
+  }
+  let loadCalls = 0;
+  async function loadSpy() {
+    loadCalls += 1;
+    if (load) await load();
+  }
+  const render = () => {};
+
+  const fn = new Function(
+    'document', 'window', 'history',
+    'getDrives', 'getFolders', 'putShared',
+    'crumbSegments', 'sharedBody', 'coverageOf', 'driveRowState',
+    'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
+    'sharedToTicks', 'sharedRowState',
+    'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
+    'SHELL_VERSION', 'agentStateLine', 'aboutRowState',
+    'state', 'render', 'load',
+    `${onChooseSrc}
+${pickerSrc}
+return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, onShareListChange, onShareListClick, onSharePickedClick, onSkipClick, onSave, finishFolders, toggleTick, onChooseFolders, openPickerFromShared, closeSettings, renderSettings, buildSettingsRow };`,
+  );
+
+  const door = fn(
+    doc, win, hist,
+    getDrives || (async () => ({ ok: true, status: 200, data: { drives: [] } })),
+    getFolders || (async () => ({ ok: true, status: 200, data: { path: 'F:', parent: null, folders: [], total: 0 } })),
+    putSharedSpy,
+    folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
+    folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
+    folders.sharedToTicks, folders.sharedRowState,
+    copy.PICKER_SKIP, copy.PICKER_CANCEL, showScreenSpy,
+    // settingsGroups reads both: the About row's sub-line is the shell
+    // version, and the Agent status row's is the connection state.
+    '0.1.0', (r) => (r === true ? 'reachable' : 'checking'), update.aboutRowState,
+    state, render, loadSpy,
+  );
+  door.document = doc;
+  door.window = win;
+  door.history = hist;
+  door.state = state;
+  door.screens = screens;
+  door.puts = puts;
+  Object.defineProperty(door, 'loadCalls', { get: () => loadCalls });
+  return door;
+}
+
+test('A6 - buildDriveRow: a blocked drive carries no data-open, no data-tick and no <button>', () => {
+  const { buildDriveRow } = loadRowBuilders();
+  const row = buildDriveRow({
+    letter: 'C:', label: 'OS', blocked: true, reason: 'system',
+  }, []);
+  assert.match(row.className, /share-off/);
+  const nodes = flatten(row);
+  assert.ok(!nodes.some((n) => n.tag === 'button'), 'a blocked drive must carry no <button>');
+  assert.ok(!nodes.some((n) => n.tag === 'input'), 'a blocked drive must carry no <input>');
+  assert.ok(!nodes.some((n) => n.dataset.open !== undefined), 'a blocked drive must carry no data-open');
+  assert.ok(!nodes.some((n) => n.dataset.tick !== undefined), 'a blocked drive must carry no data-tick');
+});
+
+test('A7 - buildFolderRow: readable:false carries no data-open, no data-tick, and the honest status', () => {
+  const { buildFolderRow } = loadRowBuilders();
+  const row = buildFolderRow({ name: 'Locked', readable: false }, 'F:\\Dev', []);
+  assert.match(row.className, /share-off/);
+  const nodes = flatten(row);
+  assert.ok(!nodes.some((n) => n.tag === 'button'), 'an unreadable folder must carry no <button>');
+  assert.ok(!nodes.some((n) => n.tag === 'input'), 'an unreadable folder must carry no <input>');
+  assert.ok(!nodes.some((n) => n.dataset.open !== undefined));
+  assert.ok(!nodes.some((n) => n.dataset.tick !== undefined));
+  const status = nodes.find((n) => n.className === 'row-status');
+  assert.equal(status.textContent, 'no permission to open this folder');
+});
+
+test('A8 - buildFolderRow: a covered row disables the checkbox, keeps the name, and says why', () => {
+  const { buildFolderRow } = loadRowBuilders();
+  const ticks = [{ path: 'F:\\Dev', name: 'Dev' }];
+  const row = buildFolderRow({ name: 'Projects', readable: true }, 'F:\\Dev', ticks);
+  const nodes = flatten(row);
+  const input = nodes.find((n) => n.tag === 'input');
+  assert.ok(input, 'a coverable row must still carry its checkbox');
+  assert.equal(input.disabled, true);
+  const name = nodes.find((n) => n.className === 'row-name');
+  assert.equal(name.textContent, 'Projects', 'the name must be unchanged');
+  const status = nodes.find((n) => n.className === 'row-status');
+  assert.ok(status && status.textContent.includes('Dev'), 'the status must say which root already covers it');
+});
+
+test('A9 - the onAuthLost callback calls hideFolders() before showGate()', () => {
+  const js = read('app.js');
+  const match = js.match(/onAuthLost\(async \(\) => \{ ([^}]+) \}\);/);
+  assert.ok(match, 'boot() must register an onAuthLost callback');
+  const callback = match[1];
+  const hideIdx = callback.indexOf('hideFolders();');
+  const gateIdx = callback.indexOf('showGate()');
+  assert.ok(hideIdx !== -1, 'onAuthLost callback must call hideFolders()');
+  assert.ok(gateIdx !== -1, 'onAuthLost callback must call showGate()');
+  assert.ok(hideIdx < gateIdx, 'a token expiry mid-picker must hide it before the gate returns, or two <main>s stack');
+});
+
+test('A10 - every control the picker builds sits under a node the picker listens on', async () => {
+  let drivesOk = true;
+  const getDrives = async () => (drivesOk
+    ? { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }, { letter: 'Z:', label: 'Z:', blocked: true, reason: 'system' }] } }
+    : { ok: false, status: 503, code: 'drives_unavailable', data: {} });
+  const getFolders = async () => ({ ok: true, status: 200, data: { path: 'F:/Dev', parent: 'F:', folders: [{ name: 'Alpha', readable: true }], total: 1 } });
+  const putShared = async () => ({ ok: true, status: 200, data: {} });
+  const picker = loadPicker({ getDrives, getFolders, putShared });
+
+  const roots = () => ['share-up', 'share-msg', 'share-picked-zone', 'share-picked', 'share-hide-note', 'share-list', 'share-save']
+    .map((id) => picker.document.getElementById(id));
+
+  function assertAllControlsListened() {
+    for (const root of roots()) {
+      const stack = [root];
+      while (stack.length) {
+        const n = stack.pop();
+        if (n.dataset && Object.keys(n.dataset).length > 0) {
+          assert.ok(hasListenedAncestor(n), `a control with dataset ${JSON.stringify(n.dataset)} has no listened ancestor`);
+        }
+        for (const c of (n.children || [])) stack.push(c);
+      }
+    }
+  }
+
+  // State 1: drives listed.
+  picker.showFolders([]);
+  await flush();
+  assertAllControlsListened();
+
+  // State 2: drives failed with retry.
+  drivesOk = false;
+  picker.openDrives();
+  await flush();
+  assert.ok(picker.share.error && picker.share.error.retry);
+  assertAllControlsListened();
+
+  // State 3: a folder listing.
+  drivesOk = true;
+  picker.openPath('F:/Dev', { push: false });
+  await flush();
+  assertAllControlsListened();
+
+  // State 4: ticks present with errorIndex set.
+  picker.share.ticks = [{ path: 'F:/Dev/Alpha', name: 'Alpha', newFolders: 'show' }];
+  picker.share.errorIndex = 0;
+  picker.renderShare();
+  assertAllControlsListened();
+});
+
+test('A11 - tapping RETRY re-issues the failed request', async () => {
+  let calls = 0;
+  const getDrives = async () => {
+    calls += 1;
+    if (calls === 1) return { ok: false, status: 503, code: 'drives_unavailable', data: {} };
+    return { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } };
+  };
+  const picker = loadPicker({ getDrives });
+  picker.showFolders([]);
+  await flush();
+  assert.equal(calls, 1);
+  assert.ok(picker.share.error && picker.share.error.retry);
+
+  const list = picker.document.getElementById('share-list');
+  const retryNode = findByDataset(list, 'shareRetry');
+  assert.ok(retryNode, 'RETRY control must exist in #share-list');
+
+  picker.onShareListClick({ target: retryNode });
+  await flush();
+
+  assert.equal(calls, 2, 'RETRY must re-issue getDrives');
+  assert.equal(picker.share.error, null);
+  assert.equal(picker.share.rows.length, 1);
+});
+
+test('A12 - a pop from the first drill level renders zero rows until the drives answer', async () => {
+  let drivesCall = 0;
+  let resolveSecond;
+  const getDrives = async () => {
+    drivesCall += 1;
+    if (drivesCall === 1) return { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } };
+    return new Promise((resolve) => { resolveSecond = resolve; });
+  };
+  const getFolders = async () => ({ ok: true, status: 200, data: { path: 'F:', parent: null, folders: [{ name: 'Alpha', readable: true }], total: 1 } });
+  const picker = loadPicker({ getDrives, getFolders });
+
+  picker.showFolders([]);
+  await flush();
+
+  picker.openPath('F:', { push: true });
+  await flush();
+  assert.ok(picker.share.rows.length > 0, 'sanity: the folder listing has rows before the pop');
+
+  picker.history.state = null; // Android back lands on no {folders} entry -> the drive list
+  picker.onFoldersPop();
+
+  const list = picker.document.getElementById('share-list');
+  assert.equal(findByDataset(list, 'tick'), null, '#share-list must hold no [data-tick] node while loading');
+  assert.equal(findByDataset(list, 'open'), null, '#share-list must hold no [data-open] node while loading');
+  const msgNodes = collectByClass(list, 'msg');
+  assert.equal(msgNodes.length, 1);
+  assert.equal(msgNodes[0].textContent, 'Reading the drives on the PC.');
+  assert.equal(hasUndefinedText(list), false, 'no node text content may be the literal "undefined"');
+
+  resolveSecond({ ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } });
+  await flush();
+});
+
+test('A13 - an older response cannot repaint a newer level', async () => {
+  let resolveA;
+  const getFolders = async () => new Promise((resolve) => { resolveA = resolve; });
+  const getDrives = async () => ({ ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } });
+  const picker = loadPicker({ getDrives, getFolders });
+  picker.showFolders([]);
+  await flush();
+
+  picker.openPath('F:/Dev', { push: true }); // deferred - never resolved until after openDrives below
+  await flush();
+  await picker.openDrives();
+  await flush();
+
+  assert.equal(picker.share.path, null, 'the drive list must be showing');
+
+  resolveA({ ok: true, status: 200, data: { path: 'F:/Dev', parent: 'F:', folders: [{ name: 'X', readable: true }], total: 1 } });
+  await flush();
+
+  assert.equal(picker.share.path, null, 'an older openPath response must not repaint over the newer drive list');
+});
+
+test('A14 - a second showFolders while one is pending re-reveals the screen, adds no second listener, and keeps the ticks', async () => {
+  let drivesCalls = 0;
+  const getDrives = async () => {
+    drivesCalls += 1;
+    return { ok: true, status: 200, data: { drives: [{ letter: 'C:', label: 'C:', blocked: false }] } };
+  };
+  const picker = loadPicker({ getDrives });
+
+  const p1 = picker.showFolders([]);
+  await flush();
+  assert.equal(drivesCalls, 1);
+
+  picker.share.ticks = [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }];
+
+  const list = picker.document.getElementById('share-list');
+  const before = list.listenerCount('change') + list.listenerCount('click');
+
+  picker.document.getElementById('folders').hidden = true; // what hideFolders() does
+
+  const p2 = picker.showFolders(picker.share.ticks);
+
+  assert.equal(picker.document.getElementById('folders').hidden, false, 'the screen must be revealed again');
+  assert.equal(list.listenerCount('change') + list.listenerCount('click'), before, 'no second listener set may stack');
+  assert.deepEqual(picker.share.ticks, [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }], 'the ticks must survive');
+  assert.equal(p1, p2, 'the same promise must come back');
+
+  await flush();
+  assert.equal(drivesCalls, 2, 'the current level must be re-fetched on re-entry');
+});
+
+test('A15 - ensureAccepted re-opens the picker when a run is still pending', () => {
+  const js = read('app.js').replace(/\r/g, '');
+  const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
+  const condition = 'if (firstRun || pendingFolders) await showFolders(';
+  assert.ok(fn.includes(condition), 'the re-entrancy condition must be exactly this shape');
+  const gateLine = "if (screenAfterUnlock(res) === 'accept') await showAccept();";
+  assert.ok(fn.includes(gateLine), 'the acknowledgement gate line must still be present verbatim');
+  assert.ok(fn.indexOf(gateLine) < fn.indexOf(condition), 'the gate line must still come before the re-entrancy condition');
+});
+
+test('A16 - finishFolders removes all six listeners and nulls pendingFolders', async () => {
+  const getDrives = async () => ({ ok: true, status: 200, data: { drives: [] } });
+  const putShared = async () => ({ ok: true, status: 200, data: {} });
+  const picker = loadPicker({ getDrives, putShared });
+
+  picker.showFolders([]);
+  await flush();
+  picker.share.ticks = [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }];
+
+  const list = picker.document.getElementById('share-list');
+  const picked = picker.document.getElementById('share-picked');
+  const up = picker.document.getElementById('share-up');
+  const save = picker.document.getElementById('share-save');
+  const win = picker.window;
+
+  assert.equal(list.listenerCount('change'), 1);
+  assert.equal(list.listenerCount('click'), 1);
+  assert.equal(picked.listenerCount('click'), 1);
+  assert.equal(up.listenerCount('click'), 1);
+  assert.equal(save.listenerCount('click'), 1);
+  assert.equal(win.listenerCount('popstate'), 1);
+
+  save.fire('click');
+  await flush();
+
+  assert.equal(list.listenerCount('change'), 0);
+  assert.equal(list.listenerCount('click'), 0);
+  assert.equal(picked.listenerCount('click'), 0);
+  assert.equal(up.listenerCount('click'), 0);
+  assert.equal(save.listenerCount('click'), 0);
+  assert.equal(win.listenerCount('popstate'), 0);
+  assert.equal(picker.document.getElementById('folders').hidden, true);
+
+  picker.showFolders([]);
+  await flush();
+  assert.equal(list.listenerCount('click'), 1, 'a fresh showFolders after teardown must wire a fresh set - pendingFolders really is null');
+});
+
+test('A17 - an enterable drive row is disabled, not removed; a blocked drive still routes to buildInertRow', () => {
+  const { buildDriveRow } = loadRowBuilders();
+  const row = buildDriveRow({ letter: 'F:', label: 'Data', blocked: false }, []);
+  assert.doesNotMatch(row.className, /share-off/);
+  const nodes = flatten(row);
+  const openBtn = nodes.find((n) => n.dataset && n.dataset.open !== undefined);
+  assert.ok(openBtn, 'an enterable drive row must still carry data-open');
+  const input = nodes.find((n) => n.tag === 'input');
+  assert.ok(input, 'an enterable drive row must still carry its checkbox');
+  assert.equal(input.disabled, true, 'a drive root must never be tickable - PUT rejects it with 400 drive_root');
+  const status = nodes.find((n) => n.className === 'row-status');
+  assert.equal(status.textContent, 'F: - pick a folder inside it');
+
+  const blockedRow = buildDriveRow({ letter: 'Z:', label: 'System', blocked: true, reason: 'system' }, []);
+  assert.match(blockedRow.className, /share-off/);
+  assert.ok(!flatten(blockedRow).some((n) => n.tag === 'input'), 'a blocked drive must still carry no input (A6 unaffected)');
+});
+
+test('D7 - picker: #share-skip gains a click listener on showFolders; firing it resolves, putShared is never called, #folders is hidden, and the listener is gone', async () => {
+  let putCalls = 0;
+  const putShared = async () => { putCalls += 1; return { ok: true, status: 200, data: { shared_folders: [] } }; };
+  const picker = loadPicker({ putShared });
+  const skip = picker.document.getElementById('share-skip');
+  assert.equal(skip.listenerCount('click'), 0);
+
+  const p = picker.showFolders([]);
+  await flush();
+  assert.equal(skip.listenerCount('click'), 1);
+
+  skip.fire('click');
+  await p;
+
+  assert.equal(putCalls, 0, 'SKIP must never call putShared');
+  assert.equal(picker.document.getElementById('folders').hidden, true);
+  assert.equal(skip.listenerCount('click'), 0, 'the listener must be torn down with the others');
+});
+
+test('D8 - the cap note sits above the first row, not below it', async () => {
+  const getFolders = async () => ({
+    ok: true,
+    status: 200,
+    data: {
+      path: 'F:/Dev', parent: 'F:', folders: [{ name: 'A', readable: true }, { name: 'B', readable: true }, { name: 'C', readable: true }], total: 600,
+    },
+  });
+  const picker = loadPicker({ getFolders });
+  picker.showFolders([]);
+  await flush();
+  picker.openPath('F:/Dev', { push: false });
+  await flush();
+
+  const list = picker.document.getElementById('share-list');
+  const noteIdx = list.children.findIndex((c) => c.className === 'share-note');
+  const firstOpenIdx = list.children.findIndex((c) => findByDataset(c, 'open'));
+  assert.ok(noteIdx !== -1, 'the cap note must render');
+  assert.ok(firstOpenIdx !== -1, 'a row must render');
+  assert.ok(noteIdx < firstOpenIdx, 'the cap note must sit above the first row, not below 500 of them');
+});
+
+test('D9 - showFolders(initial) opens with the roots already picked, no ticking needed', async () => {
+  const picker = loadPicker({});
+  picker.showFolders([{ path: 'F:\\Dev\\Projects\\Repos', name: 'Repos', newFolders: 'show' }]);
+  await flush();
+  assert.equal(picker.document.getElementById('share-picked-count').textContent, '1');
+  assert.equal(picker.document.getElementById('share-save').disabled, false);
+});
+
+test('D10 - the SKIP/CANCEL label depends on whether anything is already shared', async () => {
+  const picker1 = loadPicker({});
+  picker1.showFolders([]);
+  await flush();
+  assert.equal(picker1.document.getElementById('share-skip').textContent, copy.PICKER_SKIP);
+
+  const picker2 = loadPicker({});
+  picker2.showFolders([{ path: 'F:\\Dev', name: 'Dev', newFolders: 'show' }]);
+  await flush();
+  assert.equal(picker2.document.getElementById('share-skip').textContent, copy.PICKER_CANCEL);
+});
+
+// --- T78: the shared folders door - pins the composite path end to end -----
+
+test("F1 - the Settings row leads to Lane 3's screen, and one place reaches the picker from it", () => {
+  // RED WHEN: the row renders with a chevron and answers a tap with nothing -
+  // the dead control the whole enterable/inert split exists to prevent.
+  // 'shared' used to be an ACTION that jumped straight into the picker; Lane 3
+  // makes it a screen, so what this pins is that it is a real destination and
+  // that exactly one control still reaches the picker from there.
+  const js = read('app.js').replace(/\r/g, '');
+  const declStart = js.indexOf('const SETTINGS_SUBS');
+  const decl = js.slice(declStart, js.indexOf(';', declStart));
+  assert.match(decl, /'shared'/, "'shared' must be a settings sub-screen, not a dead id");
+
+  const marker = 'const id = row.dataset.settings;';
+  const start = js.indexOf(marker);
+  assert.ok(start !== -1, 'wireEvents must delegate settings-row clicks');
+  const body = js.slice(start, js.indexOf('});', start));
+  assert.ok(
+    !/openSharedFolders\(\)/.test(body),
+    'the row must not jump straight into the picker any more - that is what Lane 3 replaced',
+  );
+
+  const callSites = [...js.matchAll(/openPickerFromShared\b/g)].filter((m) => {
+    const before = js.slice(Math.max(0, m.index - 9), m.index);
+    return before !== 'function ';
+  });
+  assert.equal(callSites.length, 1, 'exactly one control may reach the picker from Shared folders');
+});
+
+test('F2 - re-entry seeds the ticks, so the Settings door never opens blank', async () => {
+  // RED WHEN: the Settings door opens the picker EMPTY - the owner sees none
+  // of his folders, and one tap on SAVE writes {shared_folders:[]} and wipes
+  // them all with no error.
+  const door = loadDoor({});
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: ['Archive'], new_folders: 'show',
+  }];
+
+  door.openPickerFromShared();
+  await flush();
+
+  assert.equal(door.document.getElementById('folders').hidden, false);
+  assert.deepEqual(door.screens, ['list', 'folders']);
+  assert.deepEqual(door.share.ticks, [{
+    path: 'F:\\Dev\\Projects', name: 'Projects', newFolders: 'show', mode: 'container', excludes: ['Archive'],
+  }]);
+  assert.equal(door.document.getElementById('share-picked-count').textContent, '1');
+  const picked = door.document.getElementById('share-picked');
+  const statuses = collectByClass(picked, 'row-status');
+  assert.ok(statuses.some((s) => s.textContent === 'F:\\Dev\\Projects'), 'a .row-status under #share-picked must hold the full path');
+  assert.equal(door.document.getElementById('share-skip').textContent, copy.PICKER_CANCEL);
+  assert.equal(door.document.getElementById('share-save').disabled, false);
+});
+
+test('F3 - an unknown shared set cannot enter the picker from the Settings door', () => {
+  // RED WHEN: either guard layer is bypassed by the second door. This is the
+  // merge gate T100's review set.
+  const door = loadDoor({});
+  door.state.shared = null;
+
+  door.renderSettings();
+  // Named explicitly. findByDataset returns the FIRST tappable row in the
+  // tree, and since Lane 6 landed that is 'What this app can see' - a row
+  // that SHOULD be enterable. Asserting "no tappable row at all" would now be
+  // asserting the settings screen is broken, which is not this test's claim:
+  // the claim is that the SHARED row specifically refuses to open the picker
+  // when the agent has not said what is shared.
+  const rows = [];
+  (function walk(n) {
+    if (n.dataset && n.dataset.settings !== undefined) rows.push(n.dataset.settings);
+    for (const c of (n.children || [])) walk(c);
+  }(door.document.getElementById('settings-list')));
+  assert.ok(!rows.includes('shared'), 'no row may carry data-settings="shared" when the set is unknown');
+  assert.ok(rows.length > 0, 'the rest of the settings root must still render');
+
+  // #folders ships with the `hidden` attribute in index.html; the stub
+  // element defaults to unhidden, so set it explicitly to model that.
+  door.document.getElementById('folders').hidden = true;
+  door.openPickerFromShared();
+  assert.equal(door.document.getElementById('folders').hidden, true);
+  assert.deepEqual(door.share.ticks, []);
+  assert.equal(door.puts.length, 0);
+});
+
+test('F4 - SAVE writes the right PUT body, and the list reload runs only after the PUT resolves', async () => {
+  // RED WHEN: the body rewrites a `single` root as `container` or drops
+  // excludes; or the app never reloads and the list keeps showing the old
+  // root's children.
+  const getFolders = async (p) => (p === 'F:\\Dev\\Projects'
+    ? { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Repos', readable: true }], total: 1 } }
+    : { ok: true, status: 200, data: { path: p, parent: null, folders: [], total: 0 } });
+  let resolvePut;
+  const putShared = () => new Promise((resolve) => { resolvePut = () => resolve({ ok: true, status: 200, data: {} }); });
+  const door = loadDoor({ getFolders, putShared });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openPickerFromShared();
+  await flush();
+
+  await door.openPath('F:\\Dev\\Projects', { push: true });
+
+  const untick = findByDataset(door.document.getElementById('share-picked'), 'untick');
+  assert.ok(untick, 'the SELECTED row must carry the x control');
+  door.onSharePickedClick({ target: untick });
+
+  const tick = findByDataset(door.document.getElementById('share-list'), 'tick');
+  assert.ok(tick, 'the folder listing must carry Repos\'s checkbox');
+  tick.checked = true;
+  door.onShareListChange({ target: tick });
+
+  door.document.getElementById('share-save').fire('click');
+  await flush();
+
+  assert.deepEqual(door.puts.at(-1), {
+    shared_folders: [{
+      path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show',
+    }],
+  });
+  assert.equal(door.loadCalls, 0, 'the reload must not run before the PUT resolves');
+
+  resolvePut();
+  await flush();
+  await flush();
+
+  assert.equal(door.document.getElementById('folders').hidden, true);
+  assert.equal(door.screens.at(-1), 'list');
+  assert.equal(door.loadCalls, 1, 'the reload must run exactly once, after the PUT resolved');
+});
+
+test('F5 - CANCEL changes nothing: no write, state.shared untouched, the list is still reloaded', async () => {
+  // RED WHEN: a cancel path grows a write, or the picker leaves the app on a
+  // hidden screen with no <main> revealed.
+  const sharedBefore = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+  const door = loadDoor({});
+  door.state.shared = sharedBefore;
+
+  door.openPickerFromShared();
+  await flush();
+
+  door.document.getElementById('share-skip').fire('click');
+  await flush();
+  await flush();
+
+  assert.equal(door.puts.length, 0, 'CANCEL must never call putShared');
+  assert.equal(door.state.shared, sharedBefore, 'the same object, unmutated - the agent still decides');
+  assert.equal(door.document.getElementById('folders').hidden, true);
+  assert.equal(door.screens.at(-1), 'list');
+  assert.equal(door.loadCalls, 1);
+});
+
+test('F6 - Settings\' queued pop lands under the fresh picker: one redundant GET, nothing lost', async () => {
+  // RED WHEN: the pop eats a level, drives share.pushed negative, or clears
+  // the seeded ticks - after which a SAVE writes an empty set.
+  let drivesCalls = 0;
+  const getDrives = async () => {
+    drivesCalls += 1;
+    return { ok: true, status: 200, data: { drives: [] } };
+  };
+  const door = loadDoor({ getDrives });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openPickerFromShared();
+  await flush();
+  assert.equal(drivesCalls, 1);
+
+  door.history.state = null;
+  door.onFoldersPop();
+  await flush();
+
+  assert.equal(door.share.pushed, 0, 'must never go negative');
+  assert.deepEqual(door.share.ticks, [{
+    path: 'F:\\Dev\\Projects', name: 'Projects', newFolders: 'show', mode: 'container', excludes: [],
+  }]);
+  assert.equal(door.share.path, null);
+  assert.equal(drivesCalls, 2, 'exactly one redundant GET, nothing more');
+});
+
+test('F7 - a gone root re-entered: a rejected SAVE marks the row and keeps everything picked', async () => {
+  // RED WHEN: a rejected SAVE clears the tick set (losing everything he
+  // picked) or fails silently with no row marked.
+  const putShared = async () => ({
+    ok: false, status: 400, code: 'not_found', data: { index: 0 },
+  });
+  const door = loadDoor({ putShared });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openPickerFromShared();
+  await flush();
+
+  door.document.getElementById('share-save').fire('click');
+  await flush();
+  await flush();
+
+  assert.equal(door.document.getElementById('folders').hidden, false, 'the picker must stay open on a rejected SAVE');
+  assert.deepEqual(door.share.ticks, [{
+    path: 'F:\\Dev\\Projects', name: 'Projects', newFolders: 'show', mode: 'container', excludes: [],
+  }]);
+  assert.equal(door.share.errorIndex, 0);
+  const picked = door.document.getElementById('share-picked');
+  const badRow = picked.children.find((c) => c.className.includes('share-bad'));
+  assert.ok(badRow, 'the picked row must carry share-bad');
+  assert.match(door.document.getElementById('share-msg').textContent, /Projects/);
+});
+
+test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from Settings, list proves it', async () => {
+  // RED WHEN: he picks the wrong folder, and the only fix is someone editing
+  // config.json by hand. This test is the feature.
+  const getDrives = async () => ({ ok: true, status: 200, data: { drives: [{ letter: 'F:', label: 'Data', blocked: false }] } });
+  const getFolders = async (p) => {
+    if (p === 'F:\\') return { ok: true, status: 200, data: { path: 'F:\\', parent: null, folders: [{ name: 'Dev', readable: true }], total: 1 } };
+    if (p === 'F:\\Dev') return { ok: true, status: 200, data: { path: 'F:\\Dev', parent: 'F:\\', folders: [{ name: 'Projects', readable: true }], total: 1 } };
+    if (p === 'F:\\Dev\\Projects') return { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Repos', readable: true }], total: 1 } };
+    return { ok: true, status: 200, data: { path: p, parent: null, folders: [], total: 0 } };
+  };
+  const putShared = async () => ({ ok: true, status: 200, data: {} });
+  const reposChildren = [
+    { name: 'Vercel', path: 'F:\\Dev\\Projects\\Repos\\Vercel' },
+    { name: 'Sherlock', path: 'F:\\Dev\\Projects\\Repos\\Sherlock' },
+  ];
+  let projectsFromAgent = null;
+  const door = loadDoor({
+    getDrives,
+    getFolders,
+    putShared,
+    load: async () => { projectsFromAgent = reposChildren; },
+  });
+  door.state.shared = [{
+    path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
+  }];
+
+  door.openPickerFromShared(); // Settings row -> the picker, seeded with F:\Dev\Projects
+  await flush();
+
+  door.toggleTick('F:\\Dev\\Projects', false); // untick the wrong root
+
+  await door.openPath('F:\\', { push: true });
+  await door.openPath('F:\\Dev', { push: true });
+  await door.openPath('F:\\Dev\\Projects', { push: true });
+  door.toggleTick('F:\\Dev\\Projects\\Repos', true); // tick the right one
+
+  door.document.getElementById('share-save').fire('click');
+  await flush();
+  await flush();
+
+  assert.deepEqual(door.puts.at(-1), {
+    shared_folders: [{
+      path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show',
+    }],
+  }, 'the PUT body must name only Repos');
+  assert.equal(door.loadCalls, 1);
+  assert.ok(projectsFromAgent, 'load must have run and fetched the new root\'s children');
+
+  const rowsSeen = [];
+  const els = {
+    tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(),
+  };
+  const projDocument = {
+    getElementById: (id) => els[id],
+    // renderProjects builds the "nothing running" tile placeholder directly
+    // with document.createElement when no session is running - loadPicker's
+    // fakeDocument is not reused here since this is a different function's
+    // stub document, scoped to just what renderProjects touches.
+    createElement: () => {
+      const el = { className: '', textContent: '', children: [] };
+      el.append = (...kids) => { el.children.push(...kids); };
+      el.appendChild = (c) => { el.children.push(c); return c; };
+      return el;
+    },
+  };
+  const projState = {
+    projects: projectsFromAgent,
+    openFolder: null,
+    sessions: [],
+    launching: new Set(),
+    stopping: new Set(),
+    results: new Map(),
+    confirmName: null,
+    focusName: null,
+  };
+  const renderProjects = makeRenderProjectsIntegration({
+    document: projDocument,
+    state: projState,
+    buildTile: () => ({ tag: 'TILE' }),
+    buildRow: (p) => { rowsSeen.push(p.name); return { tag: 'ROW' }; },
+    renderBackBar: () => {},
+  });
+  renderProjects();
+
+  assert.deepEqual(rowsSeen.sort(), ['Sherlock', 'Vercel'], 'the reloaded list must show Repos\'s children, not the old root\'s');
+});
+
+test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {
+  const html = read('index.html');
+  const tag = html.match(/<button [^>]*id="accept-go"[^>]*>/);
+  assert.ok(tag, 'index.html must contain #accept-go');
+  assert.match(tag[0], /\sdisabled[\s>]/, '#accept-go must ship disabled - the button ships unusable before any script runs');
+
+  const js = read('app.js');
+  const showAccept = js.slice(js.indexOf('function showAccept()'), js.indexOf('function wireEvents()'));
+  assert.match(
+    showAccept,
+    /function onCheck\(\)\s*\{\s*el\.go\.disabled = !el\.check\.checked;\s*\}/,
+    'the checkbox change handler must be the whole enable rule',
+  );
+  // Every other write to go.disabled in this function must sit inside the
+  // click handler, guarding an in-flight request or restoring the retry -
+  // never an unconditional enable that bypasses the checkbox.
+  const otherWrites = [...showAccept.matchAll(/el\.go\.disabled = (true|false);/g)];
+  assert.equal(otherWrites.length, 2, 'expected exactly two writes in onClick: disabled=true up front, disabled=false on a failed retry');
+});
+
+test('errorCopy carries real copy for config_unreadable and write_failed, not the generic fallback', () => {
+  const js = read('app.js');
+  const table = js.match(/const ERROR_COPY = \{([\s\S]*?)\n\};/);
+  assert.ok(table, 'app.js must carry ERROR_COPY');
+  const fnMatch = js.match(/function errorCopy\(code, status\) \{\s*return ([^;]+);/);
+  assert.ok(fnMatch, 'app.js must carry errorCopy');
+  const errorCopy = new Function('ERROR_COPY', 'code', 'status', `return ${fnMatch[1]};`);
+  const ERROR_COPY = new Function(`return {${table[1]}\n};`)();
+  for (const code of ['config_unreadable', 'write_failed']) {
+    const msg = errorCopy(ERROR_COPY, code, 500);
+    assert.ok(msg && msg.length > 0, `${code} must have a non-empty message`);
+    assert.ok(!msg.includes('status 500'), `${code} must not fall through to the generic "status" fallback`);
+  }
+});
+
+test('index.html ships every accept-screen text node empty - the words live only in copy.js', () => {
+  const html = read('index.html');
+  const start = html.indexOf('<main id="accept"');
+  const end = html.indexOf('<main id="gate"');
+  const block = html.slice(start, end);
+  for (const heading of ['WHAT IT CAN SEE', 'WHAT IT CANNOT SEE', 'WHO CAN REACH IT', 'WHAT LEAVES THIS MACHINE']) {
+    assert.ok(!block.includes(heading), `index.html must not hardcode the heading "${heading}"`);
+  }
+  for (const lede of ['claude-remote starts Claude Code', 'Anything Claude Code can do on this machine']) {
+    assert.ok(!block.includes(lede), `index.html must not hardcode the lede text "${lede}"`);
+  }
+});
+
+// --- E: the accept screen's progressive disclosure (T103) ------------------
+
+// Runs showAccept()'s real wiring under a stub DOM, the same recipe
+// loadPicker() uses. renderSections is a thin wrapper around the real
+// copy.js export rather than a reimplementation, so E4 cannot drift from the
+// words it is checking - the real export reads the global `document` (node
+// has none), so the wrapper points it at the stub only for the call.
+//
+// #accept-check and #accept-go both ship `disabled` in index.html; the stub
+// DOM has no HTML parser to pick that up, so it is reproduced here once,
+// the same way a real page's initial attribute state is a precondition of
+// the wiring under test, not something the wiring itself sets.
+function loadAccept({ acknowledge: acknowledgeImpl } = {}) {
+  const js = read('app.js').replace(/\r/g, '');
+  const src = js.slice(js.indexOf('function showAccept()'), js.indexOf('function wireEvents()'));
+  const doc = fakeDocument();
+  doc.getElementById('accept-check').disabled = true;
+  doc.getElementById('accept-go').disabled = true;
+
+  function wrappedRenderSections(host) {
+    const prev = globalThis.document;
+    globalThis.document = doc;
+    try {
+      copy.renderSections(host);
+    } finally {
+      if (prev === undefined) delete globalThis.document;
+      else globalThis.document = prev;
+    }
+  }
+
+  const fn = new Function(
+    'document', 'TITLE', 'LEDE', 'CONSENT_LABEL', 'SETTINGS_NOTE', 'ACCEPT_BUTTON',
+    'SECTIONS_TOGGLE', 'renderSections', 'acknowledge', 'errorCopy', 'showScreen',
+    `${src}; return { showAccept };`,
+  );
+  const mod = fn(
+    doc, copy.TITLE, copy.LEDE, copy.CONSENT_LABEL, copy.SETTINGS_NOTE, copy.ACCEPT_BUTTON,
+    copy.SECTIONS_TOGGLE, wrappedRenderSections,
+    acknowledgeImpl || (async () => ({ ok: true })),
+    (code, status) => `${code} ${status}`,
+    () => {}, // showAccept's router call (T77) - this helper only exercises the accept screen's own wiring
+  );
+  mod.document = doc;
+  return mod;
+}
+
+test('E1 - index.html: #accept-sections sits inside <details id="accept-more"> with no open attribute, and #accept-check ships disabled', () => {
+  const html = read('index.html');
+  const detailsMatch = html.match(/<details[^>]*id="accept-more"[^>]*>[\s\S]*?<\/details>/);
+  assert.ok(detailsMatch, 'index.html must carry <details id="accept-more">');
+  assert.ok(detailsMatch[0].includes('id="accept-sections"'), '#accept-sections must sit inside the <details>');
+  const openTag = detailsMatch[0].match(/<details[^>]*>/)[0];
+  assert.ok(!/\sopen[\s>]/.test(openTag), 'the <details> must ship with no open attribute - collapsed is the shipped state');
+  const checkTag = html.match(/<input type="checkbox" id="accept-check"[^>]*>/);
+  assert.ok(checkTag, 'index.html must carry #accept-check');
+  assert.match(checkTag[0], /\sdisabled[\s>]/, '#accept-check must ship disabled - unusable before any script has drawn the words');
+});
+
+test('the summary keeps the platform disclosure triangle: no list-style:none, no display:flex/block on .accept-more > summary', () => {
+  const css = read('app.css');
+  const rule = css.match(/\.accept-more > summary\s*\{([\s\S]*?)\}/);
+  assert.ok(rule, 'app.css must declare .accept-more > summary');
+  const body = rule[1];
+  assert.ok(!/list-style\s*:\s*none/.test(body), 'list-style:none removes the only affordance the collapsed screen has that says "tappable"');
+  assert.ok(!/display\s*:\s*(flex|block)/.test(body), 'Chrome drops the disclosure marker the moment display is not list-item');
+  assert.ok(!/::-webkit-details-marker\s*\{\s*display\s*:\s*none/.test(css), 'the marker must not be hidden via the webkit pseudo-element either');
+});
+
+test('E2 - after showAccept(), #accept-more-sum.textContent is SECTIONS_TOGGLE', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  assert.equal(doc.getElementById('accept-more-sum').textContent, copy.SECTIONS_TOGGLE);
+});
+
+test('E3 - collapsed, #accept-sections still holds four .copy-section children', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const more = doc.getElementById('accept-more');
+  assert.ok(!more.open, 'the <details> must not be opened by showAccept() itself');
+  const sections = doc.getElementById('accept-sections');
+  const wraps = sections.children.filter((c) => c.className === 'copy-section');
+  assert.equal(wraps.length, 4, 'rendering only on open would lose the sections from find-in-page and a screen reader');
+});
+
+test('E4 - collapsed, all four headings and all eight item strings are reachable as text under #accept-sections, matching copy.SECTIONS itself', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const sections = doc.getElementById('accept-sections');
+  const texts = flatten(sections).map((n) => n.textContent).join(' ␟ ');
+  for (const section of copy.SECTIONS) {
+    assert.ok(texts.includes(section.heading), `heading "${section.heading}" must be reachable under #accept-sections`);
+    for (const item of section.items) {
+      assert.ok(texts.includes(item), `item "${item}" must be reachable under #accept-sections`);
+    }
+  }
+});
+
+test('E5 - #accept-go is still gated on the checkbox alone: disabled before a tick, enabled after', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const check = doc.getElementById('accept-check');
+  const go = doc.getElementById('accept-go');
+  assert.equal(go.disabled, true, 'note 1 is unchanged - the button starts disabled');
+  check.checked = true;
+  check.fire('change');
+  assert.equal(go.disabled, false, 'the disclosure work must not rewire the button');
+});
+
+test('E6 - the checkbox ships disabled and is enabled only once the sections have been opened', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const check = doc.getElementById('accept-check');
+  const more = doc.getElementById('accept-more');
+  assert.equal(check.disabled, true, 'consent must not be claimable about words never shown');
+  more.open = true;
+  more.fire('toggle');
+  assert.equal(check.disabled, false);
+});
+
+test('E7 - tapping the consent row while the box is disabled opens the sections; a second tap after the toggle does not re-set anything', () => {
+  const { showAccept, document: doc } = loadAccept();
+  showAccept();
+  const consent = doc.getElementById('accept-consent');
+  const more = doc.getElementById('accept-more');
+  const check = doc.getElementById('accept-check');
+
+  assert.equal(check.disabled, true);
+  consent.fire('click');
+  assert.equal(more.open, true, 'the first tap on the consent row must do the thing the label describes: show the words');
+  assert.equal(check.checked, false, 'the first tap must not tick the box');
+
+  // The stub DOM does not fire `toggle` when `.open` is set - fired by hand
+  // here, the way a real browser fires it asynchronously on the attribute
+  // change. The real-browser link is proven by the tester's headless run.
+  more.fire('toggle');
+  assert.equal(check.disabled, false);
+
+  consent.fire('click');
+  assert.equal(more.open, true, 'a second tap must not undo the open state');
+  assert.equal(check.checked, false, 'onConsentTap must do nothing once the box is live - the native label click is what ticks it');
+});
+
+test('E8 - a successful acknowledge() tears down the toggle and consent-tap listeners, like the existing two', async () => {
+  const { showAccept, document: doc } = loadAccept({ acknowledge: async () => ({ ok: true }) });
+  const p = showAccept();
+  const more = doc.getElementById('accept-more');
+  const consent = doc.getElementById('accept-consent');
+  const check = doc.getElementById('accept-check');
+  const go = doc.getElementById('accept-go');
+  assert.equal(more.listenerCount('toggle'), 1);
+  assert.equal(consent.listenerCount('click'), 1);
+
+  check.checked = true;
+  check.fire('change');
+  go.fire('click');
+  await p;
+
+  assert.equal(more.listenerCount('toggle'), 0, 're-entry after an auth loss must not stack a duplicate closure over the same node');
+  assert.equal(consent.listenerCount('click'), 0);
+});
+
+test('E9 - a disabled consent checkbox does not swallow the tap', () => {
+  // RED WHEN: `.accept-consent input:disabled { pointer-events: none; }` is
+  // removed from app.css.
+  // A disabled input dispatches NOTHING on click, so without this rule a thumb
+  // landing on the 18px box - the exact spot the eye aims for - reaches neither
+  // the input nor the label's handler, and the sections never open. Verified in
+  // Chrome and Edge over CDP, including with touch emulation at 390x844: the
+  // label handler fired 0 times on the box and 1 time on the text.
+  // This is the rule the locked checkbox rests on: "tapping the consent row
+  // opens the sections" has to be true for the whole row, or the gate is a dead
+  // control in its most tappable spot. A DOM stub cannot model hit-testing, so
+  // this pins the declaration in source.
+  const css = read('app.css').split(String.fromCharCode(13)).join('');
+  assert.match(
+    css,
+    /\.accept-consent\s+input:disabled\s*\{[^}]*pointer-events:\s*none/,
+    'the disabled consent checkbox must let the tap fall through to its label',
+  );
+});
+
+// The eye toggle is an app-wide rule, not a per-screen one: the artifact
+// draws it on the gate (Lane 1, Lane 2) and on Change passcode (Lane 7).
+test('every passcode field carries its own eye, found by the <input id>-eye convention', () => {
+  // RED WHEN: a field is added without an eye, or an eye is added with an id
+  // that setPinRevealed cannot derive - it looks the button up as
+  // `${inputId}-eye` and would throw on the tap.
+  const html = read('index.html');
+  const inputIds = [...html.matchAll(/<input class="pin" id="([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(inputIds.length >= 5, `expected the gate's two and Change passcode's three, got ${inputIds.length}`);
+  for (const id of inputIds) {
+    assert.match(
+      html,
+      new RegExp(`<button class="pin-eye" id="${id}-eye"[^>]*data-pin-name="`),
+      `#${id} must have a #${id}-eye button carrying data-pin-name`,
+    );
+  }
+});
+
+test('no passcode field group is a <label>, or tapping its eye types into the field', () => {
+  // RED WHEN: the old <label class="gate-field"> wrapper comes back. A click
+  // on a button inside a <label> is forwarded to the labelled control, so the
+  // reveal would also move the caret into the field.
+  const html = read('index.html');
+  assert.ok(
+    !/<label[^>]*class="gate-field"/.test(html),
+    'a field group holding a button must be a <div>, with the label associated by `for`',
+  );
+  const groups = [...html.matchAll(/<div class="gate-field"[^>]*>/g)];
+  assert.ok(groups.length >= 5, `expected five field groups, got ${groups.length}`);
+});
+
+test('every local module the app imports is in the shell lists, or the app cannot boot offline', () => {
+  // RED WHEN: a new ES module is added and nobody remembers these two lists.
+  // The existing sibling test only checks they match EACH OTHER, and they did
+  // - both omitting update-ui.js. The consequences are two, and neither shows
+  // up in a suite: app.js's static import of a file the worker never cached
+  // fails outright offline, so the PWA does not boot at all; and a file
+  // outside SHELL_FILES is not in the hash, so editing it alone does not move
+  // the cache key and the phone keeps yesterday's copy. Found by reading the
+  // lists after a commit, not by a failing test.
+  const modules = new Set();
+  const seen = new Set();
+  const walk = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const src = read(rel);
+    for (const m of src.matchAll(/(?:^|\n)\s*(?:import|export)[\s\S]*?from\s+'(\.\/[^']+)'/g)) {
+      const dep = m[1].replace(/^\.\//, '');
+      modules.add(dep);
+      walk(dep);
+    }
+  };
+  walk('app.js');
+  assert.ok(modules.size >= 5, `expected app.js to import several modules, found ${modules.size}`);
+
+  const shellSrc = fs.readFileSync(path.join(AGENT_DIR, 'static.js'), 'utf8');
+  const shell = new Set(
+    [...shellSrc.match(/const SHELL_FILES = \[([\s\S]*?)\];/)[1].matchAll(/'([^']+)'/g)].map((m) => m[1]),
+  );
+  for (const mod of modules) {
+    assert.ok(shell.has(mod), `${mod} is imported by the app but is not in static.js's SHELL_FILES`);
+  }
 });

@@ -4,12 +4,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, after } from 'node:test';
 
-import { deriveSessionName, resolveProjectPath, launchSession, endSession } from '../sessions.js';
+import {
+  deriveSessionName, resolveProjectPath, launchSession, endSession, rootSlug, sessionNameFor, remoteControlName,
+  MAX_PROJECT_SEGMENTS,
+} from '../sessions.js';
 import {
   STARTING_GRACE_MS, recordLaunch, REGISTRY_VERSION, listSessions, pidFileNameFor,
   deriveDeskSessionName,
 } from '../registry.js';
+// The heuristic itself, so the regression tests below can state their
+// precondition instead of asserting it by proxy.
+import { containerChildrenOf } from '../projects.js';
 import { seedPasscode, issueTestToken, authHeaders, fixtureServer, testSessionDirs } from './helper-auth.js';
+import { nameUnder } from './helper-names.js';
 
 const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-sessions-'));
 fs.mkdirSync(path.join(base, 'Pull Requests'));
@@ -25,6 +32,43 @@ fs.mkdirSync(path.join(base, 'Pull Requests', 'Vercel'), { recursive: true });
 fs.mkdirSync(path.join(base, 'Vercel'));                           // the collision partner
 fs.mkdirSync(path.join(base, 'email-lint', 'sub'));                // ordinary project WITH a subfolder
 fs.writeFileSync(path.join(base, 'email-lint', 'notes.md'), 'x');  // ...the file that keeps it a project
+// A FILE-FREE folder inside a container. listProjects does not classify a
+// container's children at all - it pushes them straight from
+// containerChildrenOf - so the PWA draws this as an ordinary launchable
+// project. containerChildrenOf(Nested) would nonetheless call it a container,
+// which is exactly the divergence the launch guard must not reintroduce.
+fs.mkdirSync(path.join(base, 'Pull Requests', 'Nested', 'inner'), { recursive: true });
+
+// Rooted session names, computed once - `base` is a random mkdtemp path, so
+// the root slug can never be a literal (see helper-names.js). Every child
+// segment IS a literal the test author writes.
+const PULL_REQUESTS = nameUnder(base, 'pull-requests');
+const VIDEO_EDITING = nameUnder(base, 'video-editing');
+const EMAIL_LINT = nameUnder(base, 'email-lint');
+const VERCEL = nameUnder(base, 'vercel');
+const PULL_REQUESTS_VERCEL = nameUnder(base, 'pull-requests', 'vercel');
+// The launcher '-SessionName' argument collapses EVERY '/' to '.' - every
+// rooted name now carries at least one '/' (the root prefix), so this
+// collapse is exercised even for a depth-1 project, unlike before T95.
+// What -SessionName carries: the Code-tab ROW name, which is the folder leaf.
+// It was the derived session name collapsed on '/' until 2026-09-04, when the
+// owner opened a session and found the row reading
+// `f-dev-projects-repos-02b052.email-lint` - a label the hand-off banner was
+// telling him to look for and which does not exist.
+const argForm = (sessionName) => sessionName.replace(/\//g, '.');
+
+// A SECOND root, for the T95 multi-root acceptance tests (AT-12/14/15/19).
+// Its 'Vercel' shares a name with `base`'s own top-level 'Vercel' (the
+// fixture behind the VERCEL constant above) deliberately - that is exactly
+// the B2 shape the legacy (unprefixed) form must refuse as ambiguous, and
+// the root-qualified form must still resolve.
+const base2 = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-sessions2-'));
+fs.mkdirSync(path.join(base2, 'Vercel'));
+const TWO_ROOTS = [
+  { path: base, mode: 'container', excludes: [], new_folders: 'show' },
+  { path: base2, mode: 'container', excludes: [], new_folders: 'show' },
+];
+const VERCEL2 = nameUnder(base2, 'vercel');
 
 // Every makeRegCtx() call creates a temp dir; without tracking them the
 // suite leaked one per test (92 across a full run, measured 2026-08-25).
@@ -32,6 +76,7 @@ const perTestDirs = [];
 
 after(() => {
   fs.rmSync(base, { recursive: true, force: true });
+  fs.rmSync(base2, { recursive: true, force: true });
   for (const d of perTestDirs) fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -74,6 +119,7 @@ function makeRegCtx(extra = {}) {
     now: () => Date.now(),
     passcodePath: path.join(dir, 'passcode.json'),
     attemptsPath: path.join(dir, 'passcode-attempts.json'),
+    configPath: path.join(dir, 'config.json'),
     tokens: new Map(),
     ...extra,
   };
@@ -135,7 +181,7 @@ function writeDeskSessionFile(regCtx, { pid, sessionId, cwd, startedAt = new Dat
 // seeds non-default states.
 function seedHandoffEntry(regCtx, project, handoffStartedAt = new Date().toISOString()) {
   const projectPath = path.resolve(base, project);
-  const sessionName = deriveSessionName(projectPath);
+  const sessionName = deriveSessionName(projectPath, base);
   const sessions = [{
     session_name: sessionName,
     project,
@@ -172,10 +218,10 @@ test('deriveSessionName - naming contract', () => {
 
 // --- T68: nested project naming and rejection -------------------------------
 
-test('deriveSessionName - nested name carries the parent', () => {
+test('deriveSessionName - nested name carries the root AND the parent', () => {
   assert.equal(
     deriveSessionName(path.join(base, 'Pull Requests', 'Vercel'), base),
-    'pull-requests/vercel',
+    PULL_REQUESTS_VERCEL,
   );
 });
 
@@ -183,18 +229,24 @@ test('deriveSessionName - nested and top-level of the same leaf differ', () => {
   const nested = deriveSessionName(path.join(base, 'Pull Requests', 'Vercel'), base);
   const topLevel = deriveSessionName(path.join(base, 'Vercel'), base);
   assert.notEqual(nested, topLevel);
-  assert.equal(topLevel, 'vercel');
+  assert.equal(topLevel, VERCEL);
 });
 
 test('deriveSessionName - the one-argument form is opt-in and unchanged', () => {
   assert.equal(deriveSessionName(path.join(base, 'Pull Requests', 'Vercel')), 'vercel');
 });
 
-test('deriveSessionName - depth 1 with baseDir is unchanged; depth 3 falls back to basename', () => {
-  assert.equal(deriveSessionName(path.join(base, 'email-lint'), base), 'email-lint');
+// Owner decision 1, 2026-08-29: the root prefix is ALWAYS present and every
+// segment between root and target is carried, at every depth - there is no
+// longer a depth where the two-argument form falls back to the basename.
+// This SUPERSEDES the pre-T95 "depth 3 falls back to basename" behaviour;
+// deriveDeskSessionName (registry.js) already joined every segment, so the
+// two now agree everywhere (see the invariant test below).
+test('deriveSessionName - depth 1 and depth 3+ both carry the root and every segment', () => {
+  assert.equal(deriveSessionName(path.join(base, 'email-lint'), base), EMAIL_LINT);
   assert.equal(
     deriveSessionName(path.join(base, 'Pull Requests', 'Vercel', 'deep'), base),
-    'deep',
+    nameUnder(base, 'pull-requests', 'vercel', 'deep'),
   );
 });
 
@@ -203,7 +255,7 @@ test('deriveSessionName - a path outside baseDir never produces a nested name', 
 });
 
 test('resolveProjectPath - accepts the two-segment identifier', () => {
-  const result = resolveProjectPath(base, 'Pull Requests/Vercel');
+  const result = resolveProjectPath([{ path: base, mode: 'container', excludes: [], new_folders: 'show' }], 'Pull Requests/Vercel');
   assert.equal(result.ok, true);
   assert.equal(result.path, path.join(base, 'Pull Requests', 'Vercel'));
 });
@@ -273,12 +325,15 @@ test('launchSession - nested identifier: exact args array, and the registry key 
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
     '-ProjectPath', path.join(base, 'Pull Requests', 'Vercel'),
-    '-SessionName', 'pull-requests.vercel',   // collapsed for the launcher
-    '-PidFile', path.join(regCtx.pidDir, 'pull-requests.vercel.pid'),
+    // The Code-tab row name. This fixture has BOTH 'Pull Requests/Vercel' and a
+    // top-level 'Vercel' - the collision partner two lines from the mkdir - so
+    // the leaf alone would put two identical rows in the Code tab.
+    '-SessionName', 'Vercel (Pull Requests)',
+    '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(PULL_REQUESTS_VERCEL)),
   ]);
   // The registry key must NOT change - this is the pin that a future
   // mutation of the launcher-argument collapse cannot also change the key.
-  assert.equal(r.session.session_name, 'pull-requests/vercel');
+  assert.equal(r.session.session_name, PULL_REQUESTS_VERCEL);
 });
 
 test('HTTP - POST /api/sessions with a nested identifier -> 202', async () => {
@@ -295,7 +350,7 @@ test('HTTP - POST /api/sessions with a nested identifier -> 202', async () => {
     });
     assert.equal(res.status, 202);
     const body = await res.json();
-    assert.equal(body.session_name, 'pull-requests/vercel');
+    assert.equal(body.session_name, PULL_REQUESTS_VERCEL);
     assert.equal(body.project, 'Pull Requests/Vercel');
     assert.equal(body.path, path.join(base, 'Pull Requests', 'Vercel'));
     assert.equal(body.status, 'starting');
@@ -319,7 +374,7 @@ test('HTTP - GET /api/sessions renders a nested running session exactly once', a
     assert.equal(body.sessions.length, 1);
     const s = body.sessions[0];
     assert.equal(s.session_name, sessionName);
-    assert.equal(s.session_name, 'pull-requests/vercel');
+    assert.equal(s.session_name, PULL_REQUESTS_VERCEL);
     assert.equal(s.project, 'Pull Requests/Vercel');
     assert.equal(s.path, projectPath);
     assert.equal(s.status, 'running');
@@ -338,8 +393,7 @@ test('HTTP - POST /api/sessions/end ends a nested LAUNCHED session by project', 
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'cmd.exe';
   makeRunningEntry(regCtx, 'Pull Requests/Vercel', 7802);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -350,15 +404,12 @@ test('HTTP - POST /api/sessions/end ends a nested LAUNCHED session by project', 
     });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      result: 'handoff_started', project: 'Pull Requests/Vercel', session_name: 'pull-requests/vercel',
+      result: 'ended', project: 'Pull Requests/Vercel', session_name: PULL_REQUESTS_VERCEL,
     });
     assert.deepEqual(killer.calls[0].args, ['/PID', '7802', '/T', '/F']);
     // Proves the clear path also routes through pidFileNameFor.
-    assert.equal(fs.existsSync(path.join(regCtx.pidDir, 'pull-requests.vercel.pid')), false);
-    const args = handoffCalls[0].args;
-    assert.equal(args[args.indexOf('-ProjectPath') + 1], path.join(base, 'Pull Requests', 'Vercel'));
+    assert.equal(fs.existsSync(path.join(regCtx.pidDir, pidFileNameFor(PULL_REQUESTS_VERCEL))), false);
   } finally {
-    handoffCalls[0]?.child.handlers.exit();
     server.close();
   }
 });
@@ -370,8 +421,7 @@ test('endSession - a nested DESK session can now be ended by project (newly reac
   regCtx.pidImageName = () => 'claude.exe';
   const projectPath = path.join(base, 'Pull Requests', 'Vercel');
   writeDeskSessionFile(regCtx, { pid: 7803, sessionId: 'nested-desk-1', cwd: projectPath });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
   const result = await endSession(ctx, 'Pull Requests/Vercel');
 
@@ -379,15 +429,13 @@ test('endSession - a nested DESK session can now be ended by project (newly reac
   // project branch forwards `target` verbatim to endResolvedSession. Assert
   // what the code does, do not "correct" it.
   assert.deepEqual(result.body, {
-    result: 'handoff_started', project: 'Pull Requests/Vercel', session_name: 'pull-requests/vercel',
+    result: 'ended', project: 'Pull Requests/Vercel', session_name: PULL_REQUESTS_VERCEL,
   });
   assert.deepEqual(killer.calls[0].args, ['/PID', '7803', '/T', '/F']);
-  const args = handoffCalls[0].args;
-  assert.equal(args[args.indexOf('-SessionId') + 1], 'nested-desk-1');
-  assert.equal(args[args.indexOf('-ProjectPath') + 1], projectPath);
-
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
+  // -SessionId and -ProjectPath were the handoff runner's arguments, and the
+  // whole reason the conversation id was resolved before the kill. With the
+  // handoff gone there is no second process: the kill above and the resolved
+  // session_name in the body are the entire contract.
 });
 
 test('HTTP - POST /api/sessions/dismiss drops a NESTED ended record', async () => {
@@ -395,7 +443,7 @@ test('HTTP - POST /api/sessions/dismiss drops a NESTED ended record', async () =
   fs.mkdirSync(path.dirname(regCtx.registryPath), { recursive: true });
   const now = Date.now();
   const ended = {
-    session_name: 'pull-requests/vercel',
+    session_name: PULL_REQUESTS_VERCEL,
     project: 'Pull Requests/Vercel',
     original_path: path.join(base, 'Pull Requests', 'Vercel'),
     started_at: new Date(now - 60_000).toISOString(),
@@ -411,10 +459,10 @@ test('HTTP - POST /api/sessions/dismiss drops a NESTED ended record', async () =
   try {
     // The nested ended record must survive the prune and be listed.
     const before = (await (await authedFetch(regCtx, `${origin}/api/sessions`)).json()).sessions;
-    assert.deepEqual(before.map((s) => [s.session_name, s.status]), [['pull-requests/vercel', 'ended']]);
+    assert.deepEqual(before.map((s) => [s.session_name, s.status]), [[PULL_REQUESTS_VERCEL, 'ended']]);
 
     const res = await authedFetch(regCtx, `${origin}/api/sessions/dismiss`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: 'pull-requests/vercel' }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: PULL_REQUESTS_VERCEL }),
     });
     assert.equal(res.status, 204);
 
@@ -501,66 +549,157 @@ test('pidFileNameFor - a nested session name stays a direct child of pidDir', ()
 
 test('launchSession - one call spawns exactly one process', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(calls.length, 1);
 });
 
 test('launchSession - spawns powershell.exe', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(calls[0].file, 'powershell.exe');
 });
 
 test('launchSession - exact args array', () => {
   const { spawner, calls } = makeFakeSpawner();
   const regCtx = makeRegCtx();
-  launchSession({ baseDir: base, spawner, ...regCtx }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...regCtx }, 'Video Editing');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
     '-NoProfile',
     '-NonInteractive',
     '-ExecutionPolicy', 'Bypass',
     '-File', LAUNCH_SCRIPT,
-    '-ProjectPath', path.join(base, 'Pull Requests'),
-    '-SessionName', 'pull-requests',
-    '-PidFile', path.join(regCtx.pidDir, 'pull-requests.pid'),
+    '-ProjectPath', path.join(base, 'Video Editing'),
+    '-SessionName', 'Video Editing',   // leaf, spaces and all - the same form --name has always used
+    '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(VIDEO_EDITING)),
   ]);
+});
+
+test('remoteControlName - a unique leaf is the whole name', () => {
+  // The daily case: `email-lint`, not `f-dev-projects-repos-02b052.email-lint`.
+  const paths = [path.join(base, 'email-lint'), path.join(base, 'Video Editing')];
+  assert.equal(remoteControlName(path.join(base, 'email-lint'), paths), 'email-lint');
+  assert.equal(remoteControlName(path.join(base, 'Video Editing'), paths), 'Video Editing',
+    'spaces survive - --name has always passed the raw leaf quoted');
+});
+
+test('remoteControlName - a collision qualifies BOTH sides, not just the second', () => {
+  // Qualifying only the newcomer would make a row's name depend on which was
+  // launched first, which is the kind of thing that is impossible to debug
+  // months later. Format is the owner's, 2026-09-04: `email-lint (Work)`.
+  const a = path.join(base, 'Work', 'email-lint');
+  const b = path.join(base, 'Repos', 'email-lint');
+  assert.equal(remoteControlName(a, [a, b]), 'email-lint (Work)');
+  assert.equal(remoteControlName(b, [a, b]), 'email-lint (Repos)');
+});
+
+test('remoteControlName - the comparison is case-insensitive, because Windows is', () => {
+  const a = path.join(base, 'Work', 'Email-Lint');
+  const b = path.join(base, 'Repos', 'email-lint');
+  assert.equal(remoteControlName(a, [a, b]), 'Email-Lint (Work)', 'a case-only difference is still a collision');
 });
 
 test('launchSession - exact options (detachment contract)', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.deepEqual(calls[0].options, {
     stdio: 'ignore',
     windowsHide: true,
-    cwd: path.join(base, 'Pull Requests'),
+    cwd: path.join(base, 'Video Editing'),
   });
 });
 
 test('launchSession - child.unref() called exactly once', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(calls[0].child.unrefCount, 1);
 });
 
 test('launchSession - error handler wired', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.equal(typeof calls[0].child.handlers.error, 'function');
 });
 
 test('launchSession - no shell string-building leaked into args', () => {
   const { spawner, calls } = makeFakeSpawner();
-  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
   assert.ok(!calls[0].args.includes('-Command'));
   assert.ok(!calls[0].args.some((a) => a.includes('&')));
   assert.ok(!calls[0].args.some((a) => a.includes(';')));
 });
 
+test('launchSession - REFUSES a container folder, and spawns NOTHING', () => {
+  // `Pull Requests` holds only directories and no file of its own, which is
+  // exactly containerChildrenOf's definition of a container: a folder OF
+  // projects, not a project. listProjects already marks it container:true and
+  // the PWA draws it as a drill-in row, so a TAP can never reach here. This
+  // covers everything that is not a tap - a stale saved name, a client bug, a
+  // direct API call - on the one route that starts a process with the owner's
+  // full account access.
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests');
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 400);
+  assert.equal(res.error, 'project_is_container');
+  assert.equal(calls.length, 0, 'nothing may be spawned for a container - that IS the rule');
+});
+
+test('launchSession - an ordinary project still launches (the guard is not a blanket refusal)', () => {
+  // Control for the test above. Without it a guard that refused EVERYTHING
+  // would pass, and so would a typo that broke launching outright.
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Video Editing');
+  assert.equal(res.ok, true);
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - a project INSIDE a container still launches', () => {
+  // The second control, and the one that matters most: a container exists to
+  // hold projects, so refusing the container must not refuse what is in it.
+  // `Pull Requests/Vercel` is the drill-in case the PWA actually offers.
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests/Vercel');
+  assert.equal(res.ok, true, 'blocking a container must never block what is inside it');
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - a FILE-FREE folder inside a container still launches', () => {
+  // REGRESSION (code-review, 2026-09-05). The guard first asked
+  // containerChildrenOf directly, which applies the heuristic at EVERY depth.
+  // listProjects applies it at exactly one: top-level children of a container
+  // root. So a file-free folder inside a container - which the PWA lists as a
+  // perfectly ordinary project - was refused with 400 project_is_container.
+  // The guard now reads listProjects, so the two cannot disagree.
+  assert.ok(containerChildrenOf(path.join(base, 'Pull Requests', 'Nested')),
+    'precondition: the heuristic alone DOES call this a container');
+  const { spawner, calls } = makeFakeSpawner();
+  const res = launchSession({ baseDir: base, spawner, ...makeRegCtx() }, 'Pull Requests/Nested');
+  assert.equal(res.ok, true, 'the list offers it, so the launch must accept it');
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - a file-free SINGLE-mode root still launches', () => {
+  // The other half of the same finding: a `single` root is listed as one
+  // project with no classification at all, so "this folder only" on a folder
+  // whose top level holds no loose file must still launch. Same folder as the
+  // container test above - which is the point: what it IS depends on how it
+  // was shared, and only listProjects knows that.
+  const { spawner, calls } = makeFakeSpawner();
+  const ctx = {
+    sharedFolders: [{ path: path.join(base, 'Pull Requests'), mode: 'single', excludes: [], new_folders: 'show' }],
+    spawner,
+    ...makeRegCtx(),
+  };
+  const res = launchSession(ctx, 'Pull Requests');
+  assert.equal(res.ok, true, 'shared as "this folder only", it is a project, not a container');
+  assert.equal(calls.length, 1);
+});
+
 test('launchSession - clearPidFile genuinely fires BEFORE the spawn call, not merely before return', () => {
   const regCtx = makeRegCtx();
   fs.mkdirSync(regCtx.pidDir, { recursive: true });
-  const pidFilePath = path.join(regCtx.pidDir, 'email-lint.pid');
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(EMAIL_LINT));
   fs.writeFileSync(pidFilePath, '77777', 'ascii');
 
   // Instrumented spawner: records whether the stale pid file still exists
@@ -684,14 +823,14 @@ test('HTTP - POST /api/sessions launches and returns the flat SessionView body',
     const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
+      body: JSON.stringify({ project: 'Video Editing' }),
     });
     assert.equal(res.status, 202);
     const body = await res.json();
     assert.deepEqual(body, {
-      session_name: 'pull-requests',
-      project: 'Pull Requests',
-      path: path.join(base, 'Pull Requests'),
+      session_name: VIDEO_EDITING,
+      project: 'Video Editing',
+      path: path.join(base, 'Video Editing'),
       status: 'starting',
       started_at: new Date(fixedNow).toISOString(),
       pid: null,
@@ -852,7 +991,7 @@ test('HTTP - GET /api/sessions after a launch -> one entry, exactly the SessionV
     await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
+      body: JSON.stringify({ project: 'Video Editing' }),
     });
     const res = await authedFetch(regCtx, `${origin}/api/sessions`);
     assert.equal(res.status, 200);
@@ -1013,7 +1152,7 @@ test('HTTP - two POSTs past STARTING_GRACE_MS, launcher already exited -> spawns
     // recordLaunch replacing same-name entries: if either broke, this would
     // hold two entries for 'email-lint' instead of one.
     const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-    const matching = onDisk.sessions.filter((s) => s.session_name === 'email-lint');
+    const matching = onDisk.sessions.filter((s) => s.session_name === EMAIL_LINT);
     assert.equal(matching.length, 1);
   } finally {
     server.close();
@@ -1045,7 +1184,7 @@ test('HTTP - second POST past STARTING_GRACE_MS while the launcher still runs ->
     currentTime += STARTING_GRACE_MS + 1000;
     // The status the phone would have been shown at this point - the lie the
     // owner acted on.
-    const aged = listSessions({ baseDir: base, ...regCtx }).find((s) => s.session_name === 'email-lint');
+    const aged = listSessions({ baseDir: base, ...regCtx }).find((s) => s.session_name === EMAIL_LINT);
     assert.equal(aged.status, 'failed');
 
     const res2 = await req();
@@ -1057,7 +1196,7 @@ test('HTTP - second POST past STARTING_GRACE_MS while the launcher still runs ->
     assert.equal(calls.length, 1, 'exactly one process for one project');
 
     const body = await res2.json();
-    assert.equal(body.session_name, 'email-lint');
+    assert.equal(body.session_name, EMAIL_LINT);
 
     // Once the launcher exits without a pid file, the project is launchable
     // again - the guard must not outlive the process it is guarding.
@@ -1137,7 +1276,7 @@ test('HTTP - pid file written between two POSTs, pid alive -> reuse, running, pi
     assert.equal(res1.status, 202);
 
     fs.mkdirSync(regCtx.pidDir, { recursive: true });
-    fs.writeFileSync(path.join(regCtx.pidDir, 'email-lint.pid'), '555', 'ascii');
+    fs.writeFileSync(path.join(regCtx.pidDir, pidFileNameFor(EMAIL_LINT)), '555', 'ascii');
 
     const res2 = await req();
     assert.equal(res2.status, 200);
@@ -1171,7 +1310,7 @@ test('HTTP - pid file written between two POSTs, pid dead -> spawns again', asyn
     // releases the in-flight guard. Modelling only the file would test a
     // state the machine never reaches.
     fs.mkdirSync(regCtx.pidDir, { recursive: true });
-    fs.writeFileSync(path.join(regCtx.pidDir, 'email-lint.pid'), '999', 'ascii');
+    fs.writeFileSync(path.join(regCtx.pidDir, pidFileNameFor(EMAIL_LINT)), '999', 'ascii');
     calls[0].child.handlers.exit();
 
     const res2 = await req();
@@ -1186,7 +1325,7 @@ test('HTTP - a stale pid file is deleted before the spawn, not inherited', async
   const { spawner, calls } = makeFakeSpawner();
   const regCtx = makeRegCtx();
   fs.mkdirSync(regCtx.pidDir, { recursive: true });
-  const pidFilePath = path.join(regCtx.pidDir, 'email-lint.pid');
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(EMAIL_LINT));
   fs.writeFileSync(pidFilePath, '77777', 'ascii');
 
   const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
@@ -1223,7 +1362,7 @@ test('HTTP - a corrupt sessions.json does not break the endpoints', async () => 
     const postRes = await authedFetch(regCtx, `${origin}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
+      body: JSON.stringify({ project: 'Video Editing' }),
     });
     assert.equal(postRes.status, 202);
     assert.equal(calls.length, 1);
@@ -1241,18 +1380,52 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   );
   assert.ok(script.includes('CLAUDE_CONFIG_DIR'));
   assert.ok(script.includes('.claude-max'));
-  // The plugin is `whatsapp-channel`; the MARKETPLACE is
-  // `whatsapp-claude-plugin`. An earlier release was `whatsapp-claude-channel`
-  // and that name silently resolves to "plugin not installed" - the channel is
-  // allowlisted, then fails to load, so outbound tools keep working while
-  // inbound messages never arrive. Asserting the whole `--channels=<value>`
-  // token, not just the flag, is what stops the stale name coming back.
-  assert.ok(script.includes('--channels=plugin:whatsapp-channel@whatsapp-claude-plugin'));
+  // --channels must NOT be passed by the PWA launcher. Measured 2026-09-05:
+  // with it, a launched session renders fine and then sits on
+  // `/rc connecting...` forever and never reaches the Code tab; without it,
+  // and with nothing else changed, RC connects quickly. Owner confirmed both
+  // arms. A phone-launched session exists to BECOME a Code-tab row, so the
+  // flag that prevents that cannot be here - the desk aliases keep it, which
+  // is where WhatsApp inbound is actually used.
+  // Comments STRIPPED first. The comment above the ArgumentList explains this
+  // rule and necessarily names the flag to do so; a raw source scan then trips
+  // on the explanation and fails the rule it is explaining. Full-line `#`
+  // comments only, which is every comment in this script.
+  const psCode = script.replace(/^\s*#.*$/gm, '');
   assert.ok(
-    !script.includes('whatsapp-claude-channel'),
-    'the pre-rename plugin name must not return',
+    !/--channels/.test(psCode),
+    'passing --channels here stops Remote Control connecting, so the session never appears in the Code tab',
   );
-  assert.ok(script.includes('--remote-control'));
+  // THE WHOLE TOKEN, quoting included - not the bare flag. This assertion used
+  // to read `script.includes('--remote-control')`, which every form satisfies:
+  // `=`, space-separated, quoted, unquoted, even an empty value. On 2026-09-04
+  // this line was changed from the two-argument form to the `=` form and 992
+  // tests stayed green, because nothing here looked at the VALUE or its
+  // PAIRING. That is the exact hole, and this closes it.
+  //
+  // Why the `=` form is the correct one: Start-Process joins ArgumentList with
+  // spaces and quotes nothing itself, so `'--remote-control', $SessionName`
+  // splits any name containing a space - `Video Editing` arrives as
+  // `--remote-control Video` plus a stray `Editing` that claude reads as an
+  // initial prompt and types into the session. Real folders hit this: Video
+  // Editing, Backend Engineering, Whatsapp Plugin, Y Combinator-qm.
+  //
+  // HONEST LIMIT: this is a SOURCE assertion. It proves the recipe still says
+  // what it should; it cannot prove claude ACTS on it. Only a live launch does
+  // that, and on 2026-09-04 the owner confirmed one (Video Editing, correct
+  // row name, no stray word typed).
+  assert.ok(
+    script.includes('"--remote-control=`"$SessionName`""'),
+    'the Code-tab row name must be ONE argument with its value quoted, or a name with a space splits',
+  );
+  // Regex, not includes(): the ArgumentList is one entry per line with comments
+  // interleaved, so a reintroduction would be written across TWO lines and the
+  // single-line string this used to test for would never have matched it. A
+  // guard that cannot fail is worse than no guard - it reads as protection.
+  assert.ok(
+    !/'--remote-control'\s*,/.test(script),
+    'the two-argument form must not come back - it splits every name containing a space',
+  );
   // --remote-control names the Code-tab row, NOT the terminal title: a
   // PWA-launched tab read "Claude Code" until --name was added (owner's
   // screenshot, 2026-08-27). The folder leaf, not $SessionName - the owner
@@ -1486,7 +1659,7 @@ test('HTTP - POST /api/sessions/end with no live session -> 200 already_ended, n
     assert.deepEqual(await res.json(), {
       result: 'already_ended',
       project: 'Pull Requests',
-      session_name: 'pull-requests',
+      session_name: PULL_REQUESTS,
     });
     assert.equal(fs.existsSync(regCtx.registryPath), false);
   } finally {
@@ -1502,8 +1675,7 @@ test('HTTP - POST /api/sessions/end on a running session: exact taskkill argv an
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'cmd.exe';
   makeRunningEntry(regCtx, 'Pull Requests', 7777);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -1522,20 +1694,18 @@ test('HTTP - POST /api/sessions/end on a running session: exact taskkill argv an
     // server.js never awaits endSession's handoff promise, so its internal
     // timer is still armed; settle it the same way the runner exiting would,
     // or this test leaves a real 10-minute timer running.
-    handoffCalls[0].child.handlers.exit();
     server.close();
   }
 });
 
-test('HTTP - POST /api/sessions/end with ONLY session_name for a subfolder desk session -> 200 handoff_started, kill spawner called with its pid (review round 1, issue 3 - a mutation dropping session_name routing must fail this)', async () => {
+test('HTTP - POST /api/sessions/end with ONLY session_name for a subfolder desk session -> 200 ended, kill spawner called with its pid (review round 1, issue 3 - a mutation dropping session_name routing must fail this)', async () => {
   const regCtx = makeRegCtx();
   const killer = makeKillingSpawner(7791);
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'claude.exe';
   const subCwd = path.join(base, 'Pull Requests', 'Whatsapp Plugin');
   writeDeskSessionFile(regCtx, { pid: 7791, sessionId: 'sub-conv-2', cwd: subCwd });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -1545,32 +1715,27 @@ test('HTTP - POST /api/sessions/end with ONLY session_name for a subfolder desk 
     const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_name: 'pull-requests/whatsapp-plugin' }),
+      body: JSON.stringify({ session_name: nameUnder(base, 'pull-requests', 'whatsapp-plugin') }),
     });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      result: 'handoff_started', project: 'Whatsapp Plugin', session_name: 'pull-requests/whatsapp-plugin',
+      result: 'ended', project: 'Whatsapp Plugin', session_name: nameUnder(base, 'pull-requests', 'whatsapp-plugin'),
     });
     assert.equal(killer.calls.length, 1, 'the kill spawner must have been called exactly once');
     assert.deepEqual(killer.calls[0].args, ['/PID', '7791', '/T', '/F']);
   } finally {
-    // Guarded: if the assertions above failed before a handoff spawned,
-    // handoffCalls is empty and an unguarded call here would mask the real
-    // assertion with a TypeError and skip server.close().
-    handoffCalls[0]?.child.handlers.exit();
     server.close();
   }
 });
 
-test('HTTP - POST /api/sessions/end on a running session: response, pid file, registry state, handoff spawn count', async () => {
+test('HTTP - POST /api/sessions/end on a running session: response, pid file, registry state', async () => {
   const regCtx = makeRegCtx();
   const killer = makeKillingSpawner(7778);
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'cmd.exe';
   const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 7778);
-  const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
+  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -1581,7 +1746,7 @@ test('HTTP - POST /api/sessions/end on a running session: response, pid file, re
     });
     assert.equal(res.status, 200);
     assert.deepEqual(await res.json(), {
-      result: 'handoff_started',
+      result: 'ended',
       project: 'Pull Requests',
       session_name: sessionName,
     });
@@ -1591,63 +1756,24 @@ test('HTTP - POST /api/sessions/end on a running session: response, pid file, re
     const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
     const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
     assert.ok(entry, 'the entry must still exist after the kill, not be pruned');
-    assert.equal(entry.status, 'handoff');
-    assert.ok(Number.isFinite(Date.parse(entry.handoff_started_at)));
+    // `ended` immediately now. It used to sit at `handoff` while a runner
+    // wrote HANDOFF.md and only then become `ended`; there is no runner, so
+    // there is no in-between state to observe.
+    assert.equal(entry.status, 'ended');
+    assert.ok(Number.isFinite(Date.parse(entry.ended_at)));
 
-    assert.equal(handoffCalls.length, 1);
   } finally {
-    handoffCalls[0].child.handlers.exit();
     server.close();
   }
 });
 
-// This regCtx's sessionDirs (see makeRegCtx) points at an empty,
-// never-created directory, so resolveDeskSessionId finds nothing and the
-// argv below stays byte-identical to the shape with no desk session found - no -SessionId, no
-// empty string. This is the --continue fallback proof; no separate test
-// duplicates this setup.
-test('HTTP - handoff seam receives the exact recipe argv, cwd and options', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(7779);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  makeRunningEntry(regCtx, 'Pull Requests', 7779);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${server.address().port}`;
-  try {
-    await authedFetch(regCtx, `${origin}/api/sessions/end`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
-    });
-    assert.equal(handoffCalls.length, 1);
-    const call = handoffCalls[0];
-    const HANDOFF_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'handoff-session.ps1');
-    const projectPath = path.join(base, 'Pull Requests');
-    assert.equal(call.file, 'powershell.exe');
-    assert.deepEqual(call.args, [
-      '-NoProfile',
-      '-NonInteractive',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', HANDOFF_SCRIPT,
-      '-ProjectPath', projectPath,
-    ]);
-    assert.deepEqual(call.options, { stdio: 'ignore', windowsHide: true, cwd: projectPath });
-  } finally {
-    handoffCalls[0].child.handlers.exit();
-    server.close();
-  }
-});
 
 test('HTTP - POST /api/sessions/end when the pid survives the kill -> kill_failed, no handoff, session still running', async () => {
   const regCtx = makeRegCtx({ isPidAlive: () => true, killPollIntervalMs: 1, pidImageName: () => 'cmd.exe' });
   const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 8888);
-  const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner, handoffSpawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, killSpawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -1663,7 +1789,6 @@ test('HTTP - POST /api/sessions/end when the pid survives the kill -> kill_faile
       session_name: sessionName,
     });
     assert.equal(killCalls.length, 1);
-    assert.equal(handoffCalls.length, 0);
     assert.equal(fs.existsSync(pidFilePath), true);
 
     const listRes = await authedFetch(regCtx, `${origin}/api/sessions`);
@@ -1680,8 +1805,7 @@ test('HTTP - POST /api/sessions/end while already in handoff -> 409, kill not ca
   const regCtx = makeRegCtx();
   seedHandoffEntry(regCtx, 'Pull Requests');
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const { spawner: handoffSpawner } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner, handoffSpawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, killSpawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -1701,11 +1825,10 @@ test('HTTP - POST /api/sessions/end while already in handoff -> 409, kill not ca
 test('HTTP - POST /api/sessions/end on a starting session (no pid file) -> 409, no seam call', async () => {
   const regCtx = makeRegCtx();
   const projectPath = path.resolve(base, 'Pull Requests');
-  const sessionName = deriveSessionName(projectPath);
+  const sessionName = deriveSessionName(projectPath, base);
   recordLaunch(regCtx, { sessionName, project: 'Pull Requests', projectPath });
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const { spawner: handoffSpawner } = makeFakeSpawner();
-  const server = fixtureServer({ baseDir: base, killSpawner, handoffSpawner, ...regCtx });
+  const server = fixtureServer({ baseDir: base, killSpawner, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -1728,7 +1851,7 @@ test('endSession - pid equals the agent\'s own process.pid -> already_ended, no 
   const regCtx = makeRegCtx({ isPidAlive: (pid) => pid === process.pid });
   const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', process.pid);
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner, handoffSpawner: makeFakeSpawner().spawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner, ...regCtx };
 
   const result = await endSession(ctx, 'Pull Requests');
 
@@ -1745,9 +1868,9 @@ test('endSession - pid equals the agent\'s own process.pid -> already_ended, no 
 test('endSession - pid image is not cmd.exe (reused pid) -> already_ended, no taskkill, entry dropped entirely', async () => {
   const regCtx = makeRegCtx({ isPidAlive: () => true, pidImageName: () => 'notepad.exe' });
   const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 9991);
-  const pidFilePath = path.join(regCtx.pidDir, `${sessionName}.pid`);
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner, handoffSpawner: makeFakeSpawner().spawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner, ...regCtx };
 
   const result = await endSession(ctx, 'Pull Requests');
 
@@ -1791,24 +1914,20 @@ test('endSession - two concurrent calls for the same project: exactly one runner
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'cmd.exe';
   makeRunningEntry(regCtx, 'Pull Requests', 9992);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
   const [r1, r2] = await Promise.all([
     endSession(ctx, 'Pull Requests'),
     endSession(ctx, 'Pull Requests'),
   ]);
 
-  const started = [r1, r2].filter((r) => r.ok && r.body && r.body.result === 'handoff_started');
+  const started = [r1, r2].filter((r) => r.ok && r.body && r.body.result === 'ended');
   const rejected = [r1, r2].filter((r) => !r.ok && r.status === 409);
   assert.equal(started.length, 1, 'exactly one call must win the claim and spawn the runner');
   assert.equal(rejected.length, 1, 'the loser must get 409 session_not_running');
   assert.deepEqual(rejected[0], { ok: false, status: 409, error: 'session_not_running' });
   assert.equal(killer.calls.length, 1, 'taskkill must run exactly once');
-  assert.equal(handoffCalls.length, 1, 'exactly one handoff runner must be spawned');
 
-  handoffCalls[0].child.handlers.exit();
-  await started[0].handoff;
 });
 
 test('endSession - a launch landing during the kill poll returns reused with the handoff entry', async () => {
@@ -1816,208 +1935,31 @@ test('endSession - a launch landing during the kill poll returns reused with the
   const killer = makeKillingSpawner(9993);
   regCtx.isPidAlive = killer.isPidAlive;
   regCtx.pidImageName = () => 'cmd.exe';
-  makeRunningEntry(regCtx, 'Pull Requests', 9993);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  makeRunningEntry(regCtx, 'Video Editing', 9993);
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
-  const endPromise = endSession(ctx, 'Pull Requests');
+  const endPromise = endSession(ctx, 'Video Editing');
 
   // The claim (status: 'handoff') is written synchronously before endSession
   // ever awaits, so a launch landing in this window - the exact race the
   // comments in sessions.js worry about - sees it immediately.
-  const launchResult = launchSession(ctx, 'Pull Requests');
+  const launchResult = launchSession(ctx, 'Video Editing');
   assert.equal(launchResult.ok, true);
   assert.equal(launchResult.reused, true);
   assert.equal(launchResult.session.status, 'handoff');
 
   const result = await endPromise;
-  assert.equal(result.body.result, 'handoff_started');
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
+  assert.equal(result.body.result, 'ended');
 });
 
-test('recipe-integrity - handoff-session.ps1 carries the proven handoff recipe', () => {
-  const script = fs.readFileSync(
-    path.join(path.resolve(import.meta.dirname, '..'), 'handoff-session.ps1'),
-    'utf8',
-  );
-  for (const token of [
-    'claude.cmd', '-p', '--continue', '/handoff', '--allowedTools', 'Write', 'Edit',
-    'CLAUDE_CONFIG_DIR', '.claude-max',
-  ]) {
-    assert.ok(script.includes(token), `handoff-session.ps1 must include ${token}`);
-  }
-  assert.ok(!script.includes('--remote-control'));
-  assert.ok(!script.includes('--dangerously-skip-permissions'));
-  assert.ok(!script.includes('Start-Process'));
-
-  // A real -SessionId parameter, used with --resume when set, falling
-  // back to --continue otherwise - not a stray literal string anywhere.
-  assert.ok(script.includes('[string]$SessionId'), 'handoff-session.ps1 must declare a $SessionId string parameter');
-  assert.ok(script.includes('--resume'), 'handoff-session.ps1 must use --resume when a SessionId is given');
-  assert.ok(script.includes('--continue'), 'handoff-session.ps1 must still fall back to --continue');
-
-  // A real -ConfigDir parameter drives
-  // CLAUDE_CONFIG_DIR, defaulting to .claude-max only when absent.
-  assert.ok(script.includes('[string]$ConfigDir'), 'handoff-session.ps1 must declare a $ConfigDir string parameter');
-  assert.ok(script.includes('CLAUDE_CONFIG_DIR'), 'handoff-session.ps1 must still set CLAUDE_CONFIG_DIR');
-  assert.ok(script.includes('.claude-max'), 'handoff-session.ps1 must still default to .claude-max');
-});
 
 // --- endSession - the background handoff verdict (unit level) --------------
 
-test('endSession - handoff exit with HANDOFF.md mtime moved -> ended record written/true', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(1111);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Pull Requests', 1111);
-  const handoffPath = path.join(projectPath, 'HANDOFF.md');
-  fs.writeFileSync(handoffPath, 'old');
-  const oldTime = new Date(Date.now() - 60_000);
-  fs.utimesSync(handoffPath, oldTime, oldTime);
 
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
 
-  const result = await endSession(ctx, 'Pull Requests');
-  assert.equal(result.body.result, 'handoff_started');
 
-  fs.writeFileSync(handoffPath, 'new');
-  const newTime = new Date();
-  fs.utimesSync(handoffPath, newTime, newTime);
-  handoffCalls[0].child.handlers.exit();
 
-  const verdict = await result.handoff;
-  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
 
-  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.equal(entry.status, 'ended');
-  assert.equal(entry.handoff_ok, true);
-  assert.equal(entry.handoff_result, 'written');
-  assert.ok(Number.isFinite(Date.parse(entry.ended_at)));
-});
-
-test('endSession - handoff exits 0 with mtime unchanged -> ended record not_written/false (exit code not consulted)', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(1112);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  // A project folder of its own, not 'Pull Requests' - other tests in this
-  // file write a HANDOFF.md into that shared fixture folder, and this test
-  // needs to control the file's presence itself.
-  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Video Editing', 1112);
-  const handoffPath = path.join(projectPath, 'HANDOFF.md');
-  fs.writeFileSync(handoffPath, 'unchanged');
-  const fixedTime = new Date(Date.now() - 60_000);
-  fs.utimesSync(handoffPath, fixedTime, fixedTime);
-
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
-
-  const result = await endSession(ctx, 'Video Editing');
-  // Fire with an explicit exit code argument - the implementation must not
-  // read it at all.
-  handoffCalls[0].child.handlers.exit(0);
-
-  const verdict = await result.handoff;
-  assert.deepEqual(verdict, { handoff_ok: false, handoff_result: 'not_written' });
-
-  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.equal(entry.handoff_ok, false);
-  assert.equal(entry.handoff_result, 'not_written');
-});
-
-test('endSession - HANDOFF.md absent before, present after -> written/true', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(1113);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  // A third project folder of its own, same reason as the test above.
-  const { projectPath } = makeRunningEntry(regCtx, 'email-lint', 1113);
-  const handoffPath = path.join(projectPath, 'HANDOFF.md');
-  assert.equal(fs.existsSync(handoffPath), false);
-
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
-
-  const result = await endSession(ctx, 'email-lint');
-  fs.writeFileSync(handoffPath, 'brand new');
-  handoffCalls[0].child.handlers.exit();
-
-  const verdict = await result.handoff;
-  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
-});
-
-test('endSession - handoff timeout kills the runner via the same kill seam and records timeout', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(2222);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 2222);
-  const { spawner: handoffSpawner } = makeFakeSpawner(); // never fires exit/error
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, handoffTimeoutMs: 10, ...regCtx };
-
-  const result = await endSession(ctx, 'Pull Requests');
-  const verdict = await result.handoff;
-
-  assert.deepEqual(verdict, { handoff_ok: false, handoff_result: 'timeout' });
-  assert.equal(killer.calls.length, 2);
-  assert.equal(killer.calls[1].file, 'taskkill');
-  assert.deepEqual(killer.calls[1].args, ['/PID', '4242', '/T', '/F']);
-
-  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.equal(entry.status, 'ended');
-  assert.equal(entry.handoff_result, 'timeout');
-  assert.equal(entry.handoff_ok, false);
-});
-
-test('endSession - handoff spawn error -> ended record spawn_failed/false', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(3333);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 3333);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
-
-  const result = await endSession(ctx, 'Pull Requests');
-  handoffCalls[0].child.handlers.error(new Error('boom'));
-  const verdict = await result.handoff;
-
-  assert.deepEqual(verdict, { handoff_ok: false, handoff_result: 'spawn_failed' });
-  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.equal(entry.handoff_result, 'spawn_failed');
-});
-
-test('endSession - a relaunch during the in-flight handoff is not overwritten when the run finishes', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(4444);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  const { sessionName, projectPath } = makeRunningEntry(regCtx, 'Pull Requests', 4444);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
-
-  const result = await endSession(ctx, 'Pull Requests');
-  assert.equal(result.body.result, 'handoff_started');
-
-  // The owner relaunches the same project from the phone while the handoff
-  // is still running - recordLaunch replaces the entry with a fresh one.
-  recordLaunch(regCtx, { sessionName, project: 'Pull Requests', projectPath });
-
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
-
-  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-  const entry = onDisk.sessions.find((s) => s.session_name === sessionName);
-  assert.notEqual(entry.status, 'ended');
-  assert.equal(entry.status, undefined);
-});
 
 // --- helper-auth.js's refusal property, exercised through the real route ---
 
@@ -2040,27 +1982,6 @@ test('HTTP - POST /api/sessions/end with no killSpawner in the fixture ctx -> 50
   }
 });
 
-test('HTTP - POST /api/sessions/end with no handoffSpawner in the fixture ctx -> 500 after a real-shaped kill', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(6667);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'cmd.exe';
-  makeRunningEntry(regCtx, 'Pull Requests', 6667);
-  const server = fixtureServer({ baseDir: base, killSpawner: killer.spawner, ...regCtx });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${server.address().port}`;
-  try {
-    const res = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ project: 'Pull Requests' }),
-    });
-    assert.equal(res.status, 500);
-    assert.deepEqual(await res.json(), { error: 'internal_error' });
-  } finally {
-    server.close();
-  }
-});
 
 // --- POST /api/sessions/dismiss - the phone drops an announced ended record --
 
@@ -2078,7 +1999,7 @@ test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', a
     handoff_ok: true,
     handoff_result: 'written',
   };
-  const handoff = { ...ended, session_name: 'email-lint', project: 'email-lint', original_path: path.join(base, 'email-lint'), status: 'handoff', handoff_started_at: ended.ended_at };
+  const handoff = { ...ended, session_name: EMAIL_LINT, project: 'email-lint', original_path: path.join(base, 'email-lint'), status: 'handoff', handoff_started_at: ended.ended_at };
   fs.writeFileSync(regCtx.registryPath, JSON.stringify({ version: REGISTRY_VERSION, sessions: [ended, handoff] }));
   const server = fixtureServer({ baseDir: base, ...regCtx });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -2091,7 +2012,7 @@ test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', a
 
     // A dismiss never touches a session that is still writing its handoff.
     const notEnded = await authedFetch(regCtx, `${origin}/api/sessions/dismiss`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: 'email-lint' }),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session_name: EMAIL_LINT }),
     });
     assert.equal(notEnded.status, 204);
 
@@ -2101,7 +2022,7 @@ test('HTTP - POST /api/sessions/dismiss drops an ended record, leaves others', a
     assert.equal(res.status, 204);
 
     const left = (await (await authedFetch(regCtx, `${origin}/api/sessions`)).json()).sessions;
-    assert.deepEqual(left.map((s) => [s.session_name, s.status]), [['email-lint', 'handoff']]);
+    assert.deepEqual(left.map((s) => [s.session_name, s.status]), [[EMAIL_LINT, 'handoff']]);
   } finally {
     server.close();
   }
@@ -2120,53 +2041,37 @@ test('endSession - desk session: claim/kill/handoff argv gets -SessionId, discov
   fs.writeFileSync(handoffPath, 'old');
   const oldTime = new Date(Date.now() - 60_000);
   fs.utimesSync(handoffPath, oldTime, oldTime);
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
   const result = await endSession(ctx, 'Pull Requests');
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.body, { result: 'handoff_started', project: 'Pull Requests', session_name: 'pull-requests' });
+  assert.deepEqual(result.body, { result: 'ended', project: 'Pull Requests', session_name: PULL_REQUESTS });
   assert.equal(killer.calls.length, 1);
   assert.equal(killer.calls[0].file, 'taskkill');
   assert.deepEqual(killer.calls[0].args, ['/PID', '7777', '/T', '/F']);
 
   const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
   assert.equal(onDisk.sessions.length, 1);
-  assert.equal(onDisk.sessions[0].session_name, 'pull-requests');
-  assert.equal(onDisk.sessions[0].status, 'handoff');
-  assert.ok(Number.isFinite(Date.parse(onDisk.sessions[0].handoff_started_at)));
+  assert.equal(onDisk.sessions[0].session_name, PULL_REQUESTS);
+  // Straight to `ended` - the claim used to sit at `handoff` until a runner
+  // finished. The claim itself still matters, and the two assertions below
+  // are what it exists for: discovery must stop reporting the desk session
+  // the moment it is claimed, or it is counted twice.
+  assert.equal(onDisk.sessions[0].status, 'ended');
+  assert.ok(Number.isFinite(Date.parse(onDisk.sessions[0].ended_at)));
 
   const listed = listSessions(ctx);
   assert.equal(listed.length, 1, 'reported once, not twice');
-  assert.equal(listed[0].status, 'handoff');
   assert.notEqual(listed[0].source, 'desk', 'discovery must have stopped seeing it once claimed');
 
-  assert.equal(handoffCalls.length, 1);
-  const HANDOFF_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'handoff-session.ps1');
-  assert.deepEqual(handoffCalls[0].args, [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', HANDOFF_SCRIPT,
-    '-ProjectPath', projectPath,
-    '-SessionId', 'abc-123',
-    '-ConfigDir', path.dirname(regCtx.sessionDirs[0]),
-  ]);
-  assert.deepEqual(handoffCalls[0].options, { stdio: 'ignore', windowsHide: true, cwd: projectPath });
 
-  fs.writeFileSync(handoffPath, 'new');
-  const newTime = new Date();
-  fs.utimesSync(handoffPath, newTime, newTime);
-  handoffCalls[0].child.handlers.exit();
-
-  const verdict = await result.handoff;
-  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
-
+  // The ended record is what reportEnded() announces, so it has to be on disk
+  // - it just carries no handoff verdict any more, because nothing wrote one.
   const after = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
-  const afterEntry = after.sessions.find((s) => s.session_name === 'pull-requests');
+  const afterEntry = after.sessions.find((s) => s.session_name === PULL_REQUESTS);
   assert.equal(afterEntry.status, 'ended');
-  assert.equal(afterEntry.handoff_ok, true);
+  assert.equal(afterEntry.handoff_ok, undefined, 'no verdict, because there is no handoff');
 });
 
 test('endSession - desk session: the handoff registry entry is on disk BEFORE the kill spawner is ever called', async () => {
@@ -2185,18 +2090,15 @@ test('endSession - desk session: the handoff registry entry is on disk BEFORE th
     const child = { pid: 5557, handlers: {}, on(event, fn) { this.handlers[event] = fn; return this; } };
     return child;
   };
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner, ...regCtx };
 
   const result = await endSession(ctx, 'Pull Requests');
 
   assert.ok(registryAtKillTime, 'the kill spawner must have been called');
   assert.equal(registryAtKillTime.sessions.length, 1, 'the handoff entry must already be on disk when the kill spawner fires');
-  assert.equal(registryAtKillTime.sessions[0].session_name, 'pull-requests');
+  assert.equal(registryAtKillTime.sessions[0].session_name, PULL_REQUESTS);
   assert.equal(registryAtKillTime.sessions[0].status, 'handoff');
 
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
 });
 
 test('endSession - desk session whose pid image is cmd.exe (not claude.exe) -> already_ended, no taskkill, no registry entry left', async () => {
@@ -2204,7 +2106,7 @@ test('endSession - desk session whose pid image is cmd.exe (not claude.exe) -> a
   const projectPath = path.join(base, 'Video Editing');
   writeDeskSessionFile(regCtx, { pid: 7780, sessionId: 'abc-123', cwd: projectPath });
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner, handoffSpawner: makeFakeSpawner().spawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner, ...regCtx };
 
   const result = await endSession(ctx, 'Video Editing');
 
@@ -2221,15 +2123,13 @@ test('endSession - desk session where the kill does not take -> kill_failed, reg
   const projectPath = path.join(base, 'Video Editing');
   writeDeskSessionFile(regCtx, { pid: 7781, sessionId: 'abc-123', cwd: projectPath });
   const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner, ...regCtx };
 
   const result = await endSession(ctx, 'Video Editing');
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.body, { result: 'kill_failed', project: 'Video Editing', session_name: 'video-editing' });
+  assert.deepEqual(result.body, { result: 'kill_failed', project: 'Video Editing', session_name: VIDEO_EDITING });
   assert.equal(killCalls.length, 1);
-  assert.equal(handoffCalls.length, 0);
 
   const listed = listSessions(ctx);
   assert.equal(listed.length, 1);
@@ -2244,103 +2144,24 @@ test('endSession - two concurrent desk STOPs for the same project -> one 200, on
   regCtx.pidImageName = () => 'claude.exe';
   const projectPath = path.join(base, 'Video Editing');
   writeDeskSessionFile(regCtx, { pid: 7782, sessionId: 'abc-123', cwd: projectPath });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
   const [r1, r2] = await Promise.all([
     endSession(ctx, 'Video Editing'),
     endSession(ctx, 'Video Editing'),
   ]);
 
-  const started = [r1, r2].filter((r) => r.ok && r.body && r.body.result === 'handoff_started');
+  const started = [r1, r2].filter((r) => r.ok && r.body && r.body.result === 'ended');
   const rejected = [r1, r2].filter((r) => !r.ok && r.status === 409);
   assert.equal(started.length, 1);
   assert.equal(rejected.length, 1);
   assert.deepEqual(rejected[0], { ok: false, status: 409, error: 'session_not_running' });
   assert.equal(killer.calls.length, 1);
-  assert.equal(handoffCalls.length, 1);
 
-  handoffCalls[0].child.handlers.exit();
-  await started[0].handoff;
 });
 
-test('endSession - launched session STOP resolves the desk sessions file id (registry pid is the cmd.exe wrapper, not matched by pid)', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(6001);
-  regCtx.isPidAlive = (pid) => killer.isPidAlive(pid) || pid === 9999;
-  regCtx.pidImageName = () => 'cmd.exe';
-  const { projectPath } = makeRunningEntry(regCtx, 'Pull Requests', 6001);
-  writeDeskSessionFile(regCtx, { pid: 9999, sessionId: 'desk-conv-1', cwd: projectPath });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
 
-  const result = await endSession(ctx, 'Pull Requests');
 
-  assert.equal(handoffCalls.length, 1);
-  const { args } = handoffCalls[0];
-  assert.equal(args[args.indexOf('-SessionId') + 1], 'desk-conv-1');
-  assert.equal(args[args.indexOf('-ConfigDir') + 1], path.dirname(regCtx.sessionDirs[0]));
-
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
-});
-
-test('endSession - a desk file under a SECOND fixture profile dir -> handoff argv carries -ConfigDir for that profile, not the first', async () => {
-  const regCtx = makeRegCtx();
-  // A genuinely separate profile ROOT (its own temp dir), not a sibling
-  // folder under the max-profile's dir - two sessionDirs sharing one parent
-  // would give both the same configDir and prove nothing.
-  const proRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-pro-profile-'));
-  perTestDirs.push(proRoot);
-  const proProfileDir = path.join(proRoot, 'sessions');
-  regCtx.sessionDirs = [regCtx.sessionDirs[0], proProfileDir];
-  const killer = makeKillingSpawner(7786);
-  regCtx.isPidAlive = killer.isPidAlive;
-  regCtx.pidImageName = () => 'claude.exe';
-  const projectPath = path.join(base, 'Video Editing');
-  fs.mkdirSync(proProfileDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(proProfileDir, '7786.json'),
-    JSON.stringify({
-      pid: 7786, cwd: projectPath, sessionId: 'pro-conv-1', startedAt: new Date().toISOString(),
-      kind: 'interactive', entrypoint: 'cli', status: 'idle', updatedAt: new Date().toISOString(),
-    }),
-    'utf8',
-  );
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
-
-  const result = await endSession(ctx, 'Video Editing');
-
-  assert.equal(handoffCalls.length, 1);
-  const { args } = handoffCalls[0];
-  assert.equal(args[args.indexOf('-SessionId') + 1], 'pro-conv-1');
-  assert.equal(args[args.indexOf('-ConfigDir') + 1], proRoot);
-  assert.notEqual(args[args.indexOf('-ConfigDir') + 1], path.dirname(regCtx.sessionDirs[0]));
-
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
-});
-
-test('endSession - launched session STOP where the only matching desk record is dead -> no -SessionId, no -ConfigDir (stale conversation not resumed)', async () => {
-  const regCtx = makeRegCtx();
-  const killer = makeKillingSpawner(6002);
-  regCtx.isPidAlive = killer.isPidAlive; // 9998 (the desk record) is never in this set -> dead
-  regCtx.pidImageName = () => 'cmd.exe';
-  const { projectPath } = makeRunningEntry(regCtx, 'Pull Requests', 6002);
-  writeDeskSessionFile(regCtx, { pid: 9998, sessionId: 'stale-conv', cwd: projectPath });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
-
-  const result = await endSession(ctx, 'Pull Requests');
-
-  assert.equal(handoffCalls.length, 1);
-  assert.ok(!handoffCalls[0].args.includes('-SessionId'));
-  assert.ok(!handoffCalls[0].args.includes('-ConfigDir'), 'a dead desk record must not carry its profile through either');
-
-  handoffCalls[0].child.handlers.exit();
-  await result.handoff;
-});
 
 test('HTTP - POST /api/sessions for a project with a live desk session -> 200 reused, spawns nothing', async () => {
   const regCtx = makeRegCtx();
@@ -2375,8 +2196,7 @@ test('endSession - desk session: pidImageName is never called before a successfu
   regCtx.pidImageName = () => { pidImageCalls += 1; return 'claude.exe'; };
   const projectPath = path.join(base, 'Video Editing');
   writeDeskSessionFile(regCtx, { pid: 7785, sessionId: 'abc-123', cwd: projectPath });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
   const [r1, r2] = await Promise.all([
     endSession(ctx, 'Video Editing'),
@@ -2387,8 +2207,7 @@ test('endSession - desk session: pidImageName is never called before a successfu
   assert.equal(rejected.length, 1, 'the loser must be rejected before ever reaching pidImageName');
   assert.equal(pidImageCalls, 1, 'pidImageName must be called exactly once - claiming impossible for the loser stops it earlier');
 
-  const started = [r1, r2].find((r) => r.ok && r.body && r.body.result === 'handoff_started');
-  handoffCalls[0].child.handlers.exit();
+  const started = [r1, r2].find((r) => r.ok && r.body && r.body.result === 'ended');
   await started.handoff;
 });
 
@@ -2401,26 +2220,19 @@ test('endSession - end by session_name for a subfolder desk session: registry cl
   regCtx.pidImageName = () => 'claude.exe';
   const subCwd = path.join(base, 'Pull Requests', 'Whatsapp Plugin');
   writeDeskSessionFile(regCtx, { pid: 7790, sessionId: 'sub-conv-1', cwd: subCwd });
-  const { spawner: handoffSpawner, calls: handoffCalls } = makeFakeSpawner();
-  const ctx = { baseDir: base, killSpawner: killer.spawner, handoffSpawner, ...regCtx };
+  const ctx = { baseDir: base, killSpawner: killer.spawner, ...regCtx };
 
   // Relative-to-baseDir, not the subfolder's bare basename (review round 1,
   // issue 2) - 'whatsapp-plugin' alone could collide with a real top-level
   // project of that name.
-  const sessionName = 'pull-requests/whatsapp-plugin';
+  const sessionName = nameUnder(base, 'pull-requests', 'whatsapp-plugin');
   const result = await endSession(ctx, { session_name: sessionName });
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.body, { result: 'handoff_started', project: 'Whatsapp Plugin', session_name: sessionName });
+  assert.deepEqual(result.body, { result: 'ended', project: 'Whatsapp Plugin', session_name: sessionName });
   assert.equal(killer.calls.length, 1);
   assert.deepEqual(killer.calls[0].args, ['/PID', '7790', '/T', '/F']);
 
-  assert.equal(handoffCalls.length, 1);
-  const { args, options } = handoffCalls[0];
-  assert.equal(args[args.indexOf('-ProjectPath') + 1], subCwd);
-  assert.equal(args[args.indexOf('-SessionId') + 1], 'sub-conv-1');
-  assert.equal(args[args.indexOf('-ConfigDir') + 1], path.dirname(regCtx.sessionDirs[0]));
-  assert.equal(options.cwd, subCwd);
 
   // What runStop actually does next: poll listSessions() right after the
   // END response, before the handoff runner has exited. Pre-fix, the prune
@@ -2428,22 +2240,15 @@ test('endSession - end by session_name for a subfolder desk session: registry cl
   // 404, not a direct child of baseDir - and silently dropped the claim, so
   // this poll returned [] and the tile never showed "writing handoff...".
   const duringHandoff = listSessions(ctx);
+  // THE claim of this test, unchanged: the prune must not drop a claimed
+  // subfolder entry. It used to be observed mid-handoff; the entry now
+  // settles to `ended` in the same call, and the poll still has to find it
+  // with the SUBFOLDER path or reportEnded() never fires.
   assert.equal(duringHandoff.length, 1, 'the claim must survive the very next poll, not be pruned');
   assert.equal(duringHandoff[0].session_name, sessionName);
-  assert.equal(duringHandoff[0].status, 'handoff');
+  assert.equal(duringHandoff[0].status, 'ended');
   assert.equal(duringHandoff[0].path, subCwd);
-
-  fs.mkdirSync(subCwd, { recursive: true });
-  fs.writeFileSync(path.join(subCwd, 'HANDOFF.md'), 'written');
-  handoffCalls[0].child.handlers.exit();
-  const verdict = await result.handoff;
-  assert.deepEqual(verdict, { handoff_ok: true, handoff_result: 'written' });
-
-  const afterHandoff = listSessions(ctx);
-  assert.equal(afterHandoff.length, 1, 'the ended record must survive too, or reportEnded() never fires');
-  assert.equal(afterHandoff[0].status, 'ended');
-  assert.equal(afterHandoff[0].handoff_ok, true);
-  assert.equal(afterHandoff[0].path, subCwd);
+  assert.equal(duringHandoff[0].handoff_ok, undefined, 'no verdict, because there is no handoff');
 });
 
 test('endSession - unknown session_name -> 404 session_not_found, never treated as already_ended', async () => {
@@ -2485,10 +2290,11 @@ test('deriveSessionName - the canonical injection payload is defanged', () => {
   assert.equal(deriveSessionName('a$(id)b'), 'a-id-b');
 });
 
-test('deriveSessionName - the nested form slugs each segment, so the only / is the separator', () => {
+test('deriveSessionName - the nested form slugs each segment, so every / is a real separator', () => {
   const nested = deriveSessionName(path.join(base, 'Pull&Requests', 'Ver|cel'), base);
-  assert.equal(nested, 'pull-requests/ver-cel');
-  assert.equal(nested.split('/').length, 2, 'a metacharacter must not add a segment');
+  assert.equal(nested, nameUnder(base, 'pull-requests', 'ver-cel'));
+  // root slug + 2 child segments = 3 parts; a metacharacter must not add one.
+  assert.equal(nested.split('/').length, 3, 'a metacharacter must not add a segment');
 });
 
 // The zero-blast-radius claim, pinned rather than asserted: every real folder
@@ -2511,17 +2317,22 @@ test('deriveSessionName - every real project name is unchanged by the allowlist'
   }
 });
 
-// The invariant that would actually break if registry.js kept a second copy
-// of the slug: deriveDeskSessionName and deriveSessionName must return the
-// same string for the same path. Since T72 that string is the identity a
-// nested session's STOP resolves on, so a divergence ends the WRONG session.
-// Behavioural, not a source scan - the first version of this test WAS a
-// source scan, and its regex was subtly wrong, so it passed while a
-// re-introduced duplicate slug sat in registry.js. Depth 1 and 2 only: at
-// depth 3+ the two disagree BY DESIGN, since deriveSessionName falls back to
-// the basename while deriveDeskSessionName joins every segment.
+// AT-16 - THE INVARIANT that would actually break if registry.js kept a
+// second copy of the slug: deriveDeskSessionName and deriveSessionName must
+// return the same string for the same path under the same root. Since T72
+// that string is the identity a nested session's STOP resolves on, so a
+// divergence ends the WRONG session. Behavioural, not a source scan - the
+// first version of this test WAS a source scan, and its regex was subtly
+// wrong, so it passed while a re-introduced duplicate slug sat in
+// registry.js. SUPERSEDES the pre-T95 "depth 3+ disagree BY DESIGN" note:
+// both now delegate to sessionNameFor (sessions.js), THE ONE
+// IMPLEMENTATION, so they agree at every depth including 0 (the root
+// itself) and 3 - there is no longer a depth where they may diverge.
+// Two different roots, so a second copy of the rule keyed on "which root"
+// cannot hide behind only ever exercising one.
 test('deriveDeskSessionName and deriveSessionName cannot diverge', () => {
   const cases = [
+    [],                        // depth 0 - the root itself
     ['email-lint'],
     ['Pull Requests'],
     ['Pull Requests', 'Vercel'],
@@ -2530,14 +2341,17 @@ test('deriveDeskSessionName and deriveSessionName cannot diverge', () => {
     ['Pull&Requests', 'Ver|cel'],
     ['a`whoami`b', 'c$(id)d'],
     ['My.Project', 'A  B'],
+    ['Pull Requests', 'Vercel', 'deep'],   // depth 3
   ];
-  for (const segs of cases) {
-    const full = path.join(base, ...segs);
-    assert.equal(
-      deriveDeskSessionName(base, full),
-      deriveSessionName(full, base),
-      `diverged for ${segs.join('/')}`,
-    );
+  for (const root of [base, base2]) {
+    for (const segs of cases) {
+      const full = path.join(root, ...segs);
+      assert.equal(
+        deriveDeskSessionName(root, full),
+        deriveSessionName(full, root),
+        `diverged for root ${root}, segs ${segs.join('/')}`,
+      );
+    }
   }
 });
 
@@ -2547,5 +2361,268 @@ test('slugSegment - a name of only metacharacters cannot pass the launchability 
   for (const name of ['&&&', '!!', '$$$', '---']) {
     const slugged = deriveSessionName(name);
     assert.ok(slugged === '' || slugged.startsWith('-'), `'${name}' -> '${slugged}' would be accepted`);
+  }
+});
+
+// --- T95 acceptance tests, continued (multi-root, HTTP-level) --------------
+
+// R-1 - THE COLLISION TEST, the whole point of SB3. Two SIBLING roots whose
+// only difference is a path separator vs a literal hyphen used to slug to
+// the SAME rootSlug and therefore the SAME session name, before the digest
+// existed: STOP would end the wrong root's session and the handoff would
+// write into the wrong project's folder. Pure string functions, no temp dir:
+// neither path needs to exist on disk. RED WHEN the digest is removed, moved
+// off the root prefix, or made a function of anything other than the full
+// path.
+test('R-1 - two sibling roots differing only by separator-vs-hyphen get different identities', () => {
+  const A = 'F:\\Dev\\Projects\\Repos';
+  const B = 'F:\\Dev\\Projects-Repos';
+  assert.notEqual(rootSlug(A), rootSlug(B));
+  assert.notEqual(sessionNameFor(A, `${A}\\Vercel`), sessionNameFor(B, `${B}\\Vercel`));
+  // The readable half is proven not to have been thrown away.
+  assert.ok(rootSlug(A).startsWith('f-dev-projects-repos'));
+  assert.ok(rootSlug(B).startsWith('f-dev-projects-repos'));
+});
+
+// R-2 - the rootSlug anchor: fixed literals, no helper, no temp dir - what
+// stops the AT-16 invariant (which compares two production functions against
+// each other) from being circular. Replaces AT-17: the literals below now
+// include the hash digest, computed once with node and pasted as fixed
+// strings. RED WHEN the root-slug rule changes at all (drive-letter
+// handling, separator collapse, case-folding, digest input, digest length,
+// a leading or trailing dash).
+test('R-2 - rootSlug anchor: fixed literals including the digest, no helper', () => {
+  assert.equal(rootSlug('F:\\Dev\\Projects\\Repos'), 'f-dev-projects-repos-02b052');
+  assert.equal(rootSlug('D:/Work'), 'd-work-d4b870');
+});
+
+// R-3 - normalisation is part of the identity: different case, different
+// separators, a trailing separator all still hash to the same digest. THE
+// "stable across a config rewrite" property - without it, re-saving
+// config.json with different casing renames every live session and the
+// prune deletes them all on the next poll.
+test('R-3 - rootSlug is stable across case, separator and trailing-separator differences', () => {
+  assert.equal(rootSlug('F:\\Dev\\Projects\\Repos'), rootSlug('f:/dev/projects/repos/'));
+});
+
+// R-5 - the 518 raw cap. A fabricated 254-character root's slug plus a
+// 255-character remainder segment is a LEGAL identifier shape (form 1
+// matches on the slug, then the lstat on the fabricated path fails) - it
+// must clear the raw cap and fail on disk, not on length. One byte over the
+// cap must still be invalid_request.
+test('R-5 - the 518 raw cap accepts a maximal legal identifier and rejects one byte more', () => {
+  const longRoot = path.join(base, 'z'.repeat(254 - (base.length + 1)));
+  const roots = [{ path: longRoot, mode: 'container', excludes: [], new_folders: 'show' }];
+  const longSlug = rootSlug(longRoot);
+  const identifier = `${longSlug}/${'b'.repeat(255)}`;
+  const withinCap = resolveProjectPath(roots, identifier);
+  assert.equal(withinCap.ok, false);
+  assert.equal(withinCap.error, 'project_not_found', 'a legal-shaped identifier must fail on disk, not on length');
+
+  const overCap = resolveProjectPath(roots, 'x'.repeat(519));
+  assert.equal(overCap.ok, false);
+  assert.equal(overCap.error, 'invalid_request');
+});
+
+// Replaces the old 'MAX_PROJECT_SEGMENTS is exported as 3' test, which
+// asserted a constant against its own literal and pinned no behaviour. This
+// pins the cap behaviourally instead: a form-1 identifier with one segment
+// too many is rejected, root slug and all.
+test('resolveProjectPath - a four-segment root-qualified identifier -> 400 invalid_project', () => {
+  assert.equal(MAX_PROJECT_SEGMENTS, 3);
+  const roots = [{ path: base, mode: 'container', excludes: [], new_folders: 'show' }];
+  const identifier = [rootSlug(base), 'a', 'b', 'c'].join('/');
+  const result = resolveProjectPath(roots, identifier);
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'invalid_project');
+});
+
+// AT-12 - launch + END round-trip in the SECOND root, via HTTP, using the
+// form-1 ROOT-QUALIFIED identifier - so the new branch is what is exercised.
+// RED WHEN: any single-root assumption in launch, END, the pid path, or the
+// handoff cwd - this is the test that catches "STOP kills the other one".
+test('AT-12 - launch + END round-trip in the second root, via the root-qualified form', async () => {
+  const identifier = VERCEL2;   // form-1: '<rootB-slug>/vercel'
+  // Windows is case-insensitive: resolveProjectPath resolves against the
+  // CLIENT's casing ('vercel', the literal segment nameUnder was given), not
+  // the disk's real 'Vercel' - same posture as every other flat-child match.
+  const projectPath2 = path.join(base2, 'vercel');
+  const { spawner: launchSpawner } = makeFakeSpawner();
+  const killer = makeKillingSpawner(7901);
+  const regCtx = makeRegCtx({ isPidAlive: killer.isPidAlive, pidImageName: () => 'cmd.exe' });
+  const ctx = {
+    sharedFolders: TWO_ROOTS, spawner: launchSpawner, killSpawner: killer.spawner, ...regCtx,
+  };
+  const server = fixtureServer(ctx);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: identifier }),
+    });
+    assert.equal(res.status, 202);
+    const body = await res.json();
+    assert.equal(body.session_name, VERCEL2);
+
+    // Simulate launch-session.ps1's last act - the real launcher never runs
+    // in this suite (standing repo rule).
+    fs.mkdirSync(regCtx.pidDir, { recursive: true });
+    fs.writeFileSync(path.join(regCtx.pidDir, pidFileNameFor(VERCEL2)), '7901', 'ascii');
+
+    const endRes = await authedFetch(regCtx, `${origin}/api/sessions/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: identifier }),
+    });
+    assert.equal(endRes.status, 200);
+    assert.deepEqual(await endRes.json(), {
+      result: 'ended', project: 'vercel', session_name: VERCEL2,
+    });
+    assert.deepEqual(killer.calls[0].args, ['/PID', '7901', '/T', '/F']);
+  } finally {
+    server.close();
+  }
+});
+
+// AT-14 - the legacy identifier across two roots sharing a folder name ->
+// 400 ambiguous_project, and NOTHING is launched. RED WHEN: first-match-wins
+// silently launching the wrong root's project.
+test('AT-14 - a legacy identifier ambiguous across two roots -> 400 ambiguous_project, nothing launched', async () => {
+  const { spawner, calls } = makeFakeSpawner();
+  const regCtx = makeRegCtx();
+  const ctx = { sharedFolders: TWO_ROOTS, spawner, ...regCtx };
+  const server = fixtureServer(ctx);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project: 'Vercel' }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: 'ambiguous_project' });
+    assert.equal(calls.length, 0, 'nothing may be spawned for an ambiguous identifier');
+  } finally {
+    server.close();
+  }
+});
+
+// AT-15 - a desk session whose cwd is inside a project in the SECOND root is
+// discovered, named under that root, and listSessions KEEPS it across a
+// second poll (the prune agrees with discovery). RED WHEN: discoverDeskSessions
+// naming from one root while the prune re-derives from another.
+test('AT-15 - a desk session in the second root is discovered and survives a second poll', () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => true });
+  const cwd = path.join(base2, 'Vercel');
+  writeDeskSessionFile(regCtx, { pid: 9101, sessionId: 'root-b-desk', cwd });
+  const ctx = { sharedFolders: TWO_ROOTS, ...regCtx };
+
+  const first = listSessions(ctx);
+  assert.equal(first.length, 1);
+  assert.equal(first[0].session_name, VERCEL2);
+  assert.equal(first[0].source, 'desk');
+
+  const second = listSessions(ctx);
+  assert.equal(second.length, 1, 'the prune must agree with discovery, not drop it a poll later');
+  assert.equal(second[0].session_name, VERCEL2);
+});
+
+// AT-18 - POST /api/projects with no container root shared -> 400
+// base_unavailable, and nothing is created. RED WHEN: the route falls
+// through to createProject(undefined, name).
+test('AT-18 - POST /api/projects with no container root shared -> 400 base_unavailable', async () => {
+  const single = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-at18-'));
+  perTestDirs.push(single);
+  const regCtx = makeRegCtx();
+  const ctx = {
+    sharedFolders: [{ path: single, mode: 'single', excludes: [], new_folders: 'show' }],
+    ...regCtx,
+  };
+  const before = fs.readdirSync(single);
+  const server = fixtureServer(ctx);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const res = await authedFetch(regCtx, `${origin}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'New Project' }),
+    });
+    assert.equal(res.status, 400);
+    assert.deepEqual(await res.json(), { error: 'base_unavailable' });
+    assert.deepEqual(fs.readdirSync(single), before, 'nothing may be created');
+  } finally {
+    server.close();
+  }
+});
+
+// AT-19 - the prune does NOT use the ambiguous scan: two roots sharing a
+// folder name, one with a LIVE, running launched entry -> listSessions still
+// reports it as running across two consecutive calls. RED WHEN: the prune
+// calling resolveProjectPath(roots, project) instead of [owningRoot] - the
+// "silently kills a running session on the poll" bug.
+test('AT-19 - the prune resolves the owning root directly, never the ambiguous multi-root scan', () => {
+  const livePids = new Set([9102]);
+  const regCtx = makeRegCtx({ isPidAlive: (pid) => livePids.has(pid) });
+  const projectPath2 = path.join(base2, 'Vercel');
+  const sessionName = deriveSessionName(projectPath2, base2);
+  recordLaunch(regCtx, { sessionName, project: 'Vercel', projectPath: projectPath2 });
+  fs.mkdirSync(regCtx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(regCtx.pidDir, pidFileNameFor(sessionName)), '9102', 'ascii');
+  const ctx = { sharedFolders: TWO_ROOTS, ...regCtx };
+
+  for (let i = 0; i < 2; i += 1) {
+    const views = listSessions(ctx);
+    const view = views.find((v) => v.session_name === sessionName);
+    assert.ok(view, `poll ${i}: the running entry must not be dropped by the ambiguous legacy scan`);
+    assert.equal(view.status, 'running', `poll ${i}`);
+  }
+  const onDisk = JSON.parse(fs.readFileSync(regCtx.registryPath, 'utf8'));
+  assert.equal(onDisk.sessions.length, 1);
+});
+
+// R-7 - SB1: a `single`-mode root launched by its own bare root slug used to
+// record project: '' - listSessions' entry validator drops any entry whose
+// project is '', and drop() unlinks the pid file, so the very next poll
+// deleted a RUNNING session and its only handle, orphaning a live claude.cmd
+// with no way to stop it from the app. No prior test launched a `single`
+// root, which is why the suite stayed green with the bug in place. RED WHEN
+// displayProject returns '' for the bare root slug.
+test('R-7 - a single-mode root launched by its bare root slug survives two polls, project is never empty', () => {
+  const singleRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-r7-'));
+  try {
+    const rootS = rootSlug(singleRoot);
+    const { spawner } = makeFakeSpawner();
+    const regCtx = makeRegCtx({ isPidAlive: (pid) => pid === 4242 });
+    const ctx = {
+      sharedFolders: [{ path: singleRoot, mode: 'single', excludes: [], new_folders: 'show' }],
+      spawner,
+      ...regCtx,
+    };
+
+    const result = launchSession(ctx, rootS);
+    assert.equal(result.ok, true);
+    assert.equal(result.session.session_name, rootS);
+    assert.equal(result.session.project, path.basename(singleRoot));
+    assert.notEqual(result.session.project, '');
+
+    // Simulate launch-session.ps1's last act, same fake pid-file pattern
+    // used throughout this file.
+    fs.mkdirSync(regCtx.pidDir, { recursive: true });
+    const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(rootS));
+    fs.writeFileSync(pidFilePath, '4242', 'ascii');
+
+    for (let i = 0; i < 2; i += 1) {
+      const views = listSessions(ctx);
+      const view = views.find((v) => v.session_name === rootS);
+      assert.ok(view, `poll ${i}: a running single-root entry must not be dropped`);
+      assert.equal(view.status, 'running', `poll ${i}`);
+      assert.ok(fs.existsSync(pidFilePath), `poll ${i}: the pid file must survive`);
+    }
+  } finally {
+    fs.rmSync(singleRoot, { recursive: true, force: true });
   }
 });

@@ -26,7 +26,11 @@ function formatWait(ms) {
   return `${mins}m ${secs}s`;
 }
 
-function messageFor(code, status, data) {
+// Exported for the Change passcode screen (app.js): it refuses the same
+// credential for the same reasons, so it must say the same words. One map,
+// two screens - a second copy is how "Wrong passcode" and "Incorrect
+// passcode" end up in the same app.
+export function messageFor(code, status, data) {
   const fn = MESSAGES[code];
   if (fn) return fn(data || {});
   return `! The agent refused that (status ${status}).`;
@@ -45,11 +49,38 @@ function els() {
     pin: document.getElementById('pin'),
     confirmField: document.getElementById('field-confirm'),
     confirmPin: document.getElementById('pin-confirm'),
+    pinEye: document.getElementById('pin-eye'),
+    confirmEye: document.getElementById('pin-confirm-eye'),
   };
 }
 
+// The two fields on this screen. Both eyes are wired from this list, and both
+// are re-masked from it, so a field added here cannot be half-wired.
+const GATE_PINS = ['pin', 'pin-confirm'];
+
 function isSixDigits(v) {
   return /^[0-9]{6}$/.test(v);
+}
+
+/**
+ * The eye toggle, shared by every passcode field in the app - the two on this
+ * gate and the three on Settings' Change passcode screen (app.js imports it).
+ * It lives HERE rather than in app.js because the gate runs before
+ * wireEvents() does, so app.js cannot own a control the lock screen needs.
+ *
+ * The button is found by convention: `<inputId>-eye`. A lookup by id rather
+ * than a selector keeps this module's whole DOM surface to getElementById,
+ * which is what makes it testable against a small stub.
+ *
+ * The glyph, the pressed state and the label all move together - swapping
+ * only the icon would tell a screen reader nothing had changed.
+ */
+export function setPinRevealed(inputId, revealed) {
+  document.getElementById(inputId).type = revealed ? 'text' : 'password';
+  const btn = document.getElementById(`${inputId}-eye`);
+  btn.setAttribute('aria-pressed', String(revealed));
+  btn.setAttribute('aria-label', `${revealed ? 'Hide' : 'Show'} ${btn.dataset.pinName}`);
+  btn.querySelector('use').setAttribute('href', revealed ? '#i-eye' : '#i-eyeoff');
 }
 
 // The same retry ladder app.js uses, and it has to live here as well as
@@ -120,15 +151,28 @@ async function runGate() {
     e.go.disabled = !(pinOk && confirmOk);
   }
 
+  // Emptied AND re-masked. A wrong passcode clears the field; leaving it
+  // revealed would mean the next person to pick the phone up gets a passcode
+  // box already set to show its digits.
   function clearInputs() {
     e.pin.value = '';
     e.confirmPin.value = '';
+    for (const id of GATE_PINS) setPinRevealed(id, false);
     updateGoEnabled();
   }
 
   return new Promise((resolve) => {
     let waitTries = 0;
     let waiting = false;
+
+    // One toggle per FIELD, as the artifact specifies - never one switch for
+    // the form. Held as a list so the same list can unwire them on the way
+    // out: showGate() can run again after a token expiry, and a listener left
+    // behind would hold the previous run's closure over the same nodes.
+    const eyeHandlers = GATE_PINS.map((id) => [
+      document.getElementById(`${id}-eye`),
+      () => setPinRevealed(id, document.getElementById(`${id}-eye`).getAttribute('aria-pressed') !== 'true'),
+    ]);
 
     // network/timeout only - the two codes that mean the agent said nothing
     // at all, which is what a PC that has not finished booting looks like
@@ -222,6 +266,7 @@ async function runGate() {
         e.form.removeEventListener('submit', onSubmit);
         e.pin.removeEventListener('input', updateGoEnabled);
         e.confirmPin.removeEventListener('input', updateGoEnabled);
+        for (const [btn, fn] of eyeHandlers) btn.removeEventListener('click', fn);
         // Removed with the rest: showGate can run again (onAuthLost), and a
         // listener left behind here would hold the previous run's closure
         // over the same DOM nodes - the exact stacking `pending` exists to
@@ -243,6 +288,7 @@ async function runGate() {
     e.form.addEventListener('submit', onSubmit);
     e.pin.addEventListener('input', updateGoEnabled);
     e.confirmPin.addEventListener('input', updateGoEnabled);
+    for (const [btn, fn] of eyeHandlers) btn.addEventListener('click', fn);
 
     checkStatus();
   });

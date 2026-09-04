@@ -49,3 +49,6 @@ agent/public/probe.txt
 agent/public/.hidden.js
 agent/public/symlink-escape.js
 agent/public/d1/
+
+# Playwright MCP scratch output (snapshots, console logs, screenshots).
+.playwright-mcp/

@@ -207,7 +207,10 @@ test('"sub/one" is rejected and no "sub" folder is created (nesting is impossibl
 
 test('create/launch contract: anything created here is launchable by resolveProjectPath', () => {
   createProject(base, 'launch-contract');
-  const result = resolveProjectPath(base, 'launch-contract');
+  const result = resolveProjectPath(
+    [{ path: base, mode: 'container', excludes: [], new_folders: 'show' }],
+    'launch-contract',
+  );
   assert.equal(result.ok, true);
 });
 

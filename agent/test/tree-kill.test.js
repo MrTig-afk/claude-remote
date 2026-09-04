@@ -1,5 +1,5 @@
 // The ONE test in this suite that touches a real process. Everything else
-// uses a fake killSpawner/handoffSpawner; this one exercises the production
+// uses a fake killSpawner; this one exercises the production
 // endSession() path against a REAL cmd.exe /c ping tree, with the real
 // taskkill and the real isPidAlive, to prove the whole tree - not just the
 // pid the agent's own pid file names - actually dies. No Claude Code, no
@@ -12,7 +12,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { test, after } from 'node:test';
 
 import { deriveSessionName, endSession } from '../sessions.js';
-import { recordLaunch, isPidAlive } from '../registry.js';
+import { recordLaunch, isPidAlive, pidFileNameFor } from '../registry.js';
 import { testSessionDirs } from './helper-auth.js';
 
 const perTestDirs = [];
@@ -101,11 +101,11 @@ test(
     assert.equal(isPidAlive(cmdPid), true, 'precondition: the cmd.exe wrapper must be alive');
     assert.equal(isPidAlive(childPid), true, 'precondition: the ping child must be alive');
 
-    const sessionName = deriveSessionName(projectPath);
+    const sessionName = deriveSessionName(projectPath, base);
     const registryPath = path.join(dir, 'sessions.json');
     const pidDir = path.join(dir, 'session-pids');
     fs.mkdirSync(pidDir, { recursive: true });
-    fs.writeFileSync(path.join(pidDir, `${sessionName}.pid`), String(cmdPid), 'ascii');
+    fs.writeFileSync(path.join(pidDir, pidFileNameFor(sessionName)), String(cmdPid), 'ascii');
 
     const ctx = {
       baseDir: base,
@@ -114,17 +114,8 @@ test(
       sessionDirs: testSessionDirs(dir),
       now: Date.now,
       // killSpawner and isPidAlive are left at their REAL defaults on purpose
-      // - this is the one test allowed to touch a real process. The handoff
-      // outcome is irrelevant here, only the tree-kill is under test - the
-      // fake runner exits on the next tick so the internal watch settles via
-      // the exit path, never the timeout path, which would otherwise spawn a
-      // real taskkill against a made-up pid.
-      handoffSpawner: () => {
-        const child = { pid: 999999, handlers: {}, on(event, fn) { this.handlers[event] = fn; return this; } };
-        setImmediate(() => { if (child.handlers.exit) child.handlers.exit(); });
-        return child;
-      },
-      handoffTimeoutMs: 50,
+      // - this is the one test allowed to touch a real process. Nothing else
+      // is faked: endSession spawns nothing but the taskkill now.
     };
 
     recordLaunch(ctx, { sessionName, project: 'ping-project', projectPath });
@@ -132,7 +123,7 @@ test(
     const result = await endSession(ctx, 'ping-project');
 
     assert.equal(result.ok, true);
-    assert.equal(result.body.result, 'handoff_started');
+    assert.equal(result.body.result, 'ended');
 
     assert.equal(await waitDead(cmdPid), true, 'the cmd.exe wrapper must be dead');
     assert.equal(await waitDead(childPid), true, 'the ping child must be dead too - not just the parent');

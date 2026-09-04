@@ -8,7 +8,7 @@ import { deriveSessionName } from '../sessions.js';
 import {
   STARTING_GRACE_MS,
   FAILED_RETENTION_MS,
-  HANDOFF_TIMEOUT_MS,
+  CLAIM_STALE_MS,
   REGISTRY_VERSION,
   isPidAlive,
   listSessions,
@@ -18,10 +18,11 @@ import {
   markSessionState,
   dropSession,
   discoverDeskSessions,
-  resolveDeskSessionId,
   claimDeskSession,
+  pidFileNameFor,
 } from '../registry.js';
 import { listProjects } from '../projects.js';
+import { nameUnder } from './helper-names.js';
 import { testSessionDirs } from './helper-auth.js';
 
 // An age that is unambiguously OUTSIDE the starting-grace window, expressed
@@ -39,6 +40,8 @@ const base = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-registry
 fs.mkdirSync(path.join(base, 'Pull Requests'));
 fs.mkdirSync(path.join(base, 'email-lint'));
 fs.writeFileSync(path.join(base, 'notes.txt'), 'hello');
+const PULL_REQUESTS = nameUnder(base, 'pull-requests');
+const EMAIL_LINT = nameUnder(base, 'email-lint');
 
 // Every makeDataDirs() call creates a temp dir; without tracking them the
 // suite leaked one per test (92 across a full run, measured 2026-08-25).
@@ -82,7 +85,7 @@ function writeSessions(registryPath, sessions, version = REGISTRY_VERSION) {
 function validEntry(project, startedAt = new Date().toISOString(), overrides = {}) {
   const resolved = path.resolve(base, project);
   return {
-    session_name: deriveSessionName(resolved),
+    session_name: deriveSessionName(resolved, base),
     project,
     original_path: resolved,
     started_at: startedAt,
@@ -151,7 +154,7 @@ test('listSessions - non-object members dropped, one good entry survives', () =>
   writeSessions(ctx.registryPath, [null, 5, 'x', good]);
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
-  assert.equal(views[0].session_name, 'pull-requests');
+  assert.equal(views[0].session_name, PULL_REQUESTS);
 });
 
 // --- 6-11: containment re-validation --------------------------------------------
@@ -229,11 +232,11 @@ test('listSessions - dropped entries are pruned from disk too', () => {
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
-  assert.equal(views[0].session_name, 'email-lint');
+  assert.equal(views[0].session_name, EMAIL_LINT);
 
   const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
   assert.equal(onDisk.sessions.length, 1);
-  assert.equal(onDisk.sessions[0].session_name, 'email-lint');
+  assert.equal(onDisk.sessions[0].session_name, EMAIL_LINT);
 });
 
 // --- 13-17: liveness -----------------------------------------------------------
@@ -244,7 +247,7 @@ test('listSessions - pid file holds a live pid -> running, pid present', () => {
   const entry = validEntry('Pull Requests');
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '555', 'ascii');
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
@@ -257,7 +260,7 @@ test('listSessions - pid file holds a dead pid -> pruned, pid file removed', () 
   const entry = validEntry('Pull Requests');
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  const pidFilePath = path.join(ctx.pidDir, 'pull-requests.pid');
+  const pidFilePath = path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS));
   fs.writeFileSync(pidFilePath, '4242', 'ascii');
 
   assert.deepEqual(listSessions(ctx), []);
@@ -349,7 +352,7 @@ test('listSessions - a failed-aged entry that DOES have a live pid file -> runni
   const entry = validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString());
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '777', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '777', 'ascii');
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
@@ -362,12 +365,12 @@ test('findLiveSession - null for a failed-aged entry, still returns a starting o
   const ctx = makeCtx({ now: () => now });
   const failedEntry = validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString());
   writeSessions(ctx.registryPath, [failedEntry]);
-  assert.equal(findLiveSession(ctx, 'pull-requests'), null);
+  assert.equal(findLiveSession(ctx, PULL_REQUESTS), null);
 
   const ctx2 = makeCtx({ now: () => now });
   const startingEntry = validEntry('Pull Requests', new Date(now - 5000).toISOString());
   writeSessions(ctx2.registryPath, [startingEntry]);
-  assert.ok(findLiveSession(ctx2, 'pull-requests'));
+  assert.ok(findLiveSession(ctx2, PULL_REQUESTS));
 });
 
 test('recordLaunch - over an existing entry with the same session_name replaces it, not appends', () => {
@@ -377,7 +380,7 @@ test('recordLaunch - over an existing entry with the same session_name replaces 
 
   const fixedNow = Date.parse('2026-08-26T00:00:00.000Z');
   recordLaunch({ ...ctx, now: () => fixedNow }, {
-    sessionName: 'pull-requests',
+    sessionName: PULL_REQUESTS,
     project: 'Pull Requests',
     projectPath: path.resolve(base, 'Pull Requests'),
   });
@@ -393,7 +396,7 @@ test('listSessions - dead pid beats a fresh started_at (definitive wins over the
   const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString());
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '4242', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '4242', 'ascii');
 
   assert.deepEqual(listSessions(ctx), []);
 });
@@ -408,7 +411,7 @@ test('listSessions - pid-file junk table treated as no pid (falls back to grace 
     const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString());
     writeSessions(ctx.registryPath, [entry]);
     fs.mkdirSync(ctx.pidDir, { recursive: true });
-    fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), junk, 'ascii');
+    fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), junk, 'ascii');
 
     const views = listSessions(ctx);
     assert.equal(views.length, 1, `junk: ${JSON.stringify(junk)}`);
@@ -423,7 +426,7 @@ test('listSessions - a BOM-prefixed pid file is parsed correctly', () => {
   const entry = validEntry('Pull Requests');
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '\uFEFF1234', 'utf8');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '\uFEFF1234', 'utf8');
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
@@ -437,14 +440,14 @@ test('findLiveSession - returns the matching live SessionView', () => {
   const ctx = makeCtx();
   const entry = validEntry('Pull Requests');
   writeSessions(ctx.registryPath, [entry]);
-  const found = findLiveSession(ctx, 'pull-requests');
+  const found = findLiveSession(ctx, PULL_REQUESTS);
   assert.ok(found);
-  assert.equal(found.session_name, 'pull-requests');
+  assert.equal(found.session_name, PULL_REQUESTS);
 });
 
 test('findLiveSession - null when no session matches', () => {
   const ctx = makeCtx();
-  assert.equal(findLiveSession(ctx, 'pull-requests'), null);
+  assert.equal(findLiveSession(ctx, PULL_REQUESTS), null);
 });
 
 // --- 19-22: writes -----------------------------------------------------------------
@@ -455,7 +458,7 @@ test('recordLaunch - creates the parent directory when absent, and the file pars
   // nest one level deeper to actually exercise the "absent" case.
   ctx.registryPath = path.join(path.dirname(ctx.registryPath), 'nested', 'sessions.json');
   assert.equal(fs.existsSync(path.dirname(ctx.registryPath)), false);
-  recordLaunch(ctx, { sessionName: 'pull-requests', project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
+  recordLaunch(ctx, { sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
   assert.equal(fs.existsSync(ctx.registryPath), true);
   const parsed = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
   assert.equal(parsed.version, REGISTRY_VERSION);
@@ -467,20 +470,20 @@ test('recordLaunch - preserves pre-existing valid entries and appends', () => {
   const existing = validEntry('email-lint');
   writeSessions(ctx.registryPath, [existing]);
 
-  recordLaunch(ctx, { sessionName: 'pull-requests', project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
+  recordLaunch(ctx, { sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
 
   const parsed = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
   assert.equal(parsed.sessions.length, 2);
-  assert.ok(parsed.sessions.some((s) => s.session_name === 'email-lint'));
-  assert.ok(parsed.sessions.some((s) => s.session_name === 'pull-requests'));
+  assert.ok(parsed.sessions.some((s) => s.session_name === EMAIL_LINT));
+  assert.ok(parsed.sessions.some((s) => s.session_name === PULL_REQUESTS));
 });
 
 test('recordLaunch - output has status starting, pid null, ISO started_at from ctx.now()', () => {
   const fixedNow = Date.parse('2026-08-25T21:14:03.123Z');
   const ctx = makeCtx({ now: () => fixedNow });
-  const view = recordLaunch(ctx, { sessionName: 'pull-requests', project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
+  const view = recordLaunch(ctx, { sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
   assert.deepEqual(view, {
-    session_name: 'pull-requests',
+    session_name: PULL_REQUESTS,
     project: 'Pull Requests',
     path: path.resolve(base, 'Pull Requests'),
     status: 'starting',
@@ -491,7 +494,7 @@ test('recordLaunch - output has status starting, pid null, ISO started_at from c
 
 test('recordLaunch - no orphan .tmp file is left behind', () => {
   const ctx = makeCtx();
-  recordLaunch(ctx, { sessionName: 'pull-requests', project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
+  recordLaunch(ctx, { sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath: path.resolve(base, 'Pull Requests') });
   assert.equal(fs.existsSync(`${ctx.registryPath}.tmp`), false);
 });
 
@@ -572,14 +575,12 @@ test('listSessions - handoff entry with no pid file -> status handoff, pid null'
   assert.equal(views[0].session_id, null);
 });
 
-test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_result', () => {
+test('listSessions - ended entry -> view carries ended_at and NO handoff verdict', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - 1000).toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -587,8 +588,10 @@ test('listSessions - ended entry -> view carries ended_at, handoff_ok, handoff_r
   assert.equal(views.length, 1);
   assert.equal(views[0].status, 'ended');
   assert.equal(views[0].ended_at, entry.ended_at);
-  assert.equal(views[0].handoff_ok, true);
-  assert.equal(views[0].handoff_result, 'written');
+  // Nothing writes a handoff any more, so nothing may report one: the ended
+  // banner says the session ended and stops there.
+  assert.equal(views[0].handoff_ok, undefined);
+  assert.equal(views[0].handoff_result, undefined);
   assert.equal(views[0].source, 'launched');
   assert.equal(views[0].session_id, null);
 });
@@ -601,7 +604,7 @@ test('listSessions - running/starting views still carry exactly the eight origin
   const starting = validEntry('email-lint', new Date(now - 1000).toISOString());
   writeSessions(ctx.registryPath, [running, starting]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '555', 'ascii');
 
   const views = listSessions(ctx);
   assert.equal(views.length, 2);
@@ -622,8 +625,6 @@ test('listSessions - ended record inside FAILED_RETENTION_MS survives', () => {
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - (FAILED_RETENTION_MS - 60_000)).toISOString(),
-    handoff_ok: false,
-    handoff_result: 'not_written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -637,8 +638,6 @@ test('listSessions - ended record past FAILED_RETENTION_MS is pruned and written
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - (FAILED_RETENTION_MS + 1000)).toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
@@ -647,52 +646,26 @@ test('listSessions - ended record past FAILED_RETENTION_MS is pruned and written
   assert.equal(onDisk.sessions.length, 0);
 });
 
-test('listSessions - handoff past HANDOFF_TIMEOUT_MS but inside 24h -> ended / interrupted', () => {
+test('listSessions - a claim past CLAIM_STALE_MS is DROPPED, not settled as an interrupted end', () => {
+  // It used to be rewritten to `ended` with handoff_ok:false so the owner got
+  // told the handoff was lost. There is no handoff to lose now: the claim only
+  // spans a taskkill, so a stale one means the agent died mid-STOP. Dropping
+  // it lets discovery re-report the process if it is still alive.
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
-  const handoffStarted = new Date(now - (HANDOFF_TIMEOUT_MS + 60_000)).toISOString();
-  const entry = validEntry('Pull Requests', new Date(now - (HANDOFF_TIMEOUT_MS + 120_000)).toISOString(), {
+  const entry = validEntry('Pull Requests', new Date(now - (CLAIM_STALE_MS + 120_000)).toISOString(), {
     status: 'handoff',
-    handoff_started_at: handoffStarted,
+    handoff_started_at: new Date(now - (CLAIM_STALE_MS + 60_000)).toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
 
-  const views = listSessions(ctx);
-  assert.equal(views.length, 1);
-  assert.equal(views[0].status, 'ended');
-  assert.equal(views[0].handoff_ok, false);
-  assert.equal(views[0].handoff_result, 'interrupted');
-  assert.equal(views[0].ended_at, handoffStarted);
+  assert.deepEqual(listSessions(ctx), []);
+  assert.equal(JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions.length, 0);
 });
 
-test('listSessions - an interrupted handoff is REWRITTEN to ended on disk, so it can be dismissed', () => {
-  // dismissSession -> dropSession(ctx, name, 'ended') is a compare-and-swap on
-  // the STORED status. While the entry stayed `handoff` the filter matched
-  // nothing, the record was never removed, and the PWA re-announced it on
-  // every open for 24h. The owner hit exactly this on 2026-08-27.
-  const now = Date.now();
-  const ctx = makeCtx({ now: () => now });
-  const handoffStarted = new Date(now - (HANDOFF_TIMEOUT_MS + 60_000)).toISOString();
-  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - (HANDOFF_TIMEOUT_MS + 120_000)).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: handoffStarted,
-  })]);
-
-  listSessions(ctx);
-
-  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
-  assert.equal(onDisk.sessions.length, 1, 'still retained - the owner has not seen it yet');
-  const e = onDisk.sessions[0];
-  assert.equal(e.status, 'ended', 'the STORED status is what dismiss compares against');
-  assert.equal(e.handoff_ok, false);
-  assert.equal(e.handoff_result, 'interrupted');
-  assert.equal(e.ended_at, handoffStarted);
-  assert.equal(e.handoff_started_at, undefined, 'the handoff key is gone: the ended branch validates a different shape');
-});
-
-test('listSessions - a LIVE handoff inside the timeout is left alone on disk', () => {
-  // The mirror of the test above: normalising early would let a dismiss race
-  // delete a handoff that is still running.
+test('listSessions - a claim inside the window is left alone on disk', () => {
+  // The mirror of the test above: dropping early would delete the mutex out
+  // from under a STOP that is still polling for the process to die.
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const handoffStarted = new Date(now - 1000).toISOString();
@@ -708,24 +681,11 @@ test('listSessions - a LIVE handoff inside the timeout is left alone on disk', (
   assert.equal(e.handoff_started_at, handoffStarted);
 });
 
-test('listSessions - handoff entry past FAILED_RETENTION_MS is pruned', () => {
-  const now = Date.now();
-  const ctx = makeCtx({ now: () => now });
-  const entry = validEntry('Pull Requests', new Date(now - (FAILED_RETENTION_MS + 120_000)).toISOString(), {
-    status: 'handoff',
-    handoff_started_at: new Date(now - (FAILED_RETENTION_MS + 60_000)).toISOString(),
-  });
-  writeSessions(ctx.registryPath, [entry]);
-
-  assert.deepEqual(listSessions(ctx), []);
-});
-
 test('listSessions - drop table for malformed handoff/ended/unknown status entries', () => {
   const now = Date.now();
   const rows = [
     { status: 'handoff', handoff_started_at: 'not-a-date' },
-    { status: 'ended', ended_at: 'not-a-date', handoff_ok: true, handoff_result: 'written' },
-    { status: 'ended', ended_at: new Date(now).toISOString(), handoff_ok: 'yes', handoff_result: 'written' },
+    { status: 'ended', ended_at: 'not-a-date' },
     { status: 'nonsense' },
   ];
   for (const overrides of rows) {
@@ -745,7 +705,7 @@ test('findLiveSession - returns a handoff entry (blocks relaunch)', () => {
   });
   writeSessions(ctx.registryPath, [entry]);
 
-  const found = findLiveSession(ctx, 'pull-requests');
+  const found = findLiveSession(ctx, PULL_REQUESTS);
   assert.ok(found);
   assert.equal(found.status, 'handoff');
 });
@@ -756,12 +716,10 @@ test('findLiveSession - null for an ended record (does not block relaunch)', () 
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date(now - 1000).toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [entry]);
 
-  assert.equal(findLiveSession(ctx, 'pull-requests'), null);
+  assert.equal(findLiveSession(ctx, PULL_REQUESTS), null);
 });
 
 test('recordLaunch - replaces an ended record with the same session_name rather than accumulating', () => {
@@ -769,13 +727,11 @@ test('recordLaunch - replaces an ended record with the same session_name rather 
   const ended = validEntry('Pull Requests', new Date(Date.now() - 60_000).toISOString(), {
     status: 'ended',
     ended_at: new Date().toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
   });
   writeSessions(ctx.registryPath, [ended]);
 
   recordLaunch(ctx, {
-    sessionName: 'pull-requests',
+    sessionName: PULL_REQUESTS,
     project: 'Pull Requests',
     projectPath: path.resolve(base, 'Pull Requests'),
   });
@@ -793,17 +749,13 @@ test('markSessionState - patches when fromStatus matches, returns true', () => {
   });
   writeSessions(ctx.registryPath, [entry]);
 
-  const patched = markSessionState(ctx, 'pull-requests', 'handoff', {
-    status: 'ended',
-    ended_at: new Date().toISOString(),
-    handoff_ok: true,
-    handoff_result: 'written',
-  });
+  const endedAt = new Date().toISOString();
+  const patched = markSessionState(ctx, PULL_REQUESTS, 'handoff', { status: 'ended', ended_at: endedAt });
 
   assert.equal(patched, true);
   const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
   assert.equal(onDisk.sessions[0].status, 'ended');
-  assert.equal(onDisk.sessions[0].handoff_result, 'written');
+  assert.equal(onDisk.sessions[0].ended_at, endedAt);
 });
 
 test('markSessionState - returns false and leaves the file byte-identical when fromStatus does not match', () => {
@@ -815,7 +767,7 @@ test('markSessionState - returns false and leaves the file byte-identical when f
   writeSessions(ctx.registryPath, [entry]);
   const before = fs.readFileSync(ctx.registryPath, 'utf8');
 
-  const patched = markSessionState(ctx, 'pull-requests', null, { status: 'ended' });
+  const patched = markSessionState(ctx, PULL_REQUESTS, null, { status: 'ended' });
 
   assert.equal(patched, false);
   const after = fs.readFileSync(ctx.registryPath, 'utf8');
@@ -831,10 +783,10 @@ test('dropSession - removes only the entry whose status matches fromStatus', () 
   const other = validEntry('email-lint');
   writeSessions(ctx.registryPath, [handoff, other]);
 
-  dropSession(ctx, 'pull-requests', 'handoff');
+  dropSession(ctx, PULL_REQUESTS, 'handoff');
 
   const left = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8')).sessions;
-  assert.deepEqual(left.map((e) => e.session_name), ['email-lint']);
+  assert.deepEqual(left.map((e) => e.session_name), [EMAIL_LINT]);
 });
 
 test('dropSession - leaves a same-name entry alone when its status is not fromStatus', () => {
@@ -844,7 +796,7 @@ test('dropSession - leaves a same-name entry alone when its status is not fromSt
   writeSessions(ctx.registryPath, [relaunched]);
   const before = fs.readFileSync(ctx.registryPath, 'utf8');
 
-  dropSession(ctx, 'pull-requests', 'handoff');
+  dropSession(ctx, PULL_REQUESTS, 'handoff');
 
   assert.equal(fs.readFileSync(ctx.registryPath, 'utf8'), before);
 });
@@ -860,7 +812,7 @@ test('markSessionState - returns false and leaves the file byte-identical when t
   const warn = console.warn;
   console.warn = () => {};
   try {
-    const claimed = markSessionState(ctx, 'pull-requests', null, { status: 'handoff' });
+    const claimed = markSessionState(ctx, PULL_REQUESTS, null, { status: 'handoff' });
     assert.equal(claimed, false);
     assert.equal(fs.readFileSync(ctx.registryPath, 'utf8'), before);
   } finally {
@@ -945,7 +897,7 @@ test('discoverDeskSessions - alive pid + exact project cwd + no registry entry -
   assert.equal(views[0].status, 'running');
   assert.equal(views[0].pid, 4242);
   assert.equal(views[0].session_id, 'abc-123');
-  assert.equal(views[0].session_name, 'pull-requests');
+  assert.equal(views[0].session_name, PULL_REQUESTS);
   assert.equal(views[0].project, 'Pull Requests');
   assert.equal(views[0].path, path.join(base, 'Pull Requests'));
   assert.equal(views[0].config_dir, path.dirname(ctx.sessionDirs[0]));
@@ -985,7 +937,7 @@ test('discoverDeskSessions - cwd is a subfolder of a project -> its OWN tile, na
   assert.equal(views.length, 1);
   assert.equal(views[0].project, 'Whatsapp Plugin');
   assert.equal(views[0].path, subCwd);
-  assert.equal(views[0].session_name, 'pull-requests/whatsapp-plugin');
+  assert.equal(views[0].session_name, nameUnder(base, 'pull-requests', 'whatsapp-plugin'));
   assert.equal(views[0].pid, 4245);
   assert.equal(views[0].source, 'desk');
 });
@@ -999,7 +951,7 @@ test('discoverDeskSessions - a desk session AT a project root is unchanged (tile
   assert.equal(views.length, 1);
   assert.equal(views[0].project, 'Pull Requests');
   assert.equal(views[0].path, cwd);
-  assert.equal(views[0].session_name, 'pull-requests');
+  assert.equal(views[0].session_name, PULL_REQUESTS);
 });
 
 test('discoverDeskSessions - two desk sessions in two subfolders of one project -> two tiles', () => {
@@ -1028,10 +980,10 @@ test('discoverDeskSessions - a subfolder session_name cannot collide with a real
   assert.ok(deskView, 'the subfolder session must still be discovered');
   assert.notEqual(
     deskView.session_name,
-    deriveSessionName(path.resolve(base, 'email-lint')),
+    deriveSessionName(path.resolve(base, 'email-lint'), base),
     'must not collide with the real top-level email-lint project own session_name',
   );
-  assert.equal(deskView.session_name, 'pull-requests/email-lint');
+  assert.equal(deskView.session_name, nameUnder(base, 'pull-requests', 'email-lint'));
 });
 
 test('discoverDeskSessions - a sibling folder whose name merely starts with the project name is NOT inside it', () => {
@@ -1052,7 +1004,7 @@ test('discoverDeskSessions - a registry entry for the project wins over a live d
   const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString());
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '555', 'ascii');
   writeDeskFile(ctx.sessionDirs[0], { pid: 4247, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
 
   const views = listSessions(ctx);
@@ -1065,7 +1017,7 @@ test('discoverDeskSessions - a registry entry still wins even when its status is
   const now = Date.now();
   const ctx = makeCtx({ now: () => now, livePids: new Set([4248]) });
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
-    status: 'ended', ended_at: new Date(now - 1000).toISOString(), handoff_ok: true, handoff_result: 'written',
+    status: 'ended', ended_at: new Date(now - 1000).toISOString(),
   });
   writeSessions(ctx.registryPath, [entry]);
   writeDeskFile(ctx.sessionDirs[0], { pid: 4248, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
@@ -1117,7 +1069,7 @@ test('discoverDeskSessions - sessionDirs pointing at a missing directory -> no t
   const entry = validEntry('email-lint', new Date(now - 1000).toISOString());
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'email-lint.pid'), '555', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(EMAIL_LINT)), '555', 'ascii');
 
   assert.doesNotThrow(() => listSessions(ctx));
   const views = listSessions(ctx);
@@ -1259,7 +1211,7 @@ test('LAUNCHED session - activity is matched by cwd, not by the cmd.exe wrapper 
   const entry = validEntry('Pull Requests', new Date(now - 1000).toISOString());
   writeSessions(ctx.registryPath, [entry]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '555', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '555', 'ascii');
   writeDeskFile(ctx.sessionDirs[0], {
     pid: 4330, sessionId: 'abc-launched', cwd: path.join(base, 'Pull Requests'), status: 'busy',
   });
@@ -1276,53 +1228,14 @@ test('LAUNCHED session - no matching session file -> no activity key', () => {
   const ctx = makeCtx({ now: () => now, livePids: new Set([556]) });
   writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 1000).toISOString())]);
   fs.mkdirSync(ctx.pidDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.pidDir, 'pull-requests.pid'), '556', 'ascii');
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '556', 'ascii');
 
   const views = listSessions(ctx);
   assert.equal(views[0].status, 'running');
   assert.equal('activity' in views[0], false);
 });
 
-test('resolveDeskSessionId - { sessionId, configDir } of the newest live EXACT match, null when dead/subfolder/dir missing', () => {
-  const cwd = path.join(base, 'Pull Requests');
-
-  {
-    const ctx = makeCtx({ livePids: new Set([4290, 4291]) });
-    writeDeskFile(ctx.sessionDirs[0], {
-      pid: 4290, sessionId: 'older', cwd, startedAt: new Date(Date.now() - 60_000).toISOString(),
-    });
-    writeDeskFile(ctx.sessionDirs[0], {
-      pid: 4291, sessionId: 'newer', cwd, startedAt: new Date().toISOString(),
-    });
-    assert.deepEqual(
-      resolveDeskSessionId(ctx, cwd),
-      { sessionId: 'newer', configDir: path.dirname(ctx.sessionDirs[0]) },
-    );
-  }
-
-  {
-    const ctx = makeCtx({ livePids: new Set() });
-    writeDeskFile(ctx.sessionDirs[0], { pid: 4292, sessionId: 'dead', cwd });
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
-  }
-
-  {
-    const ctx = makeCtx({ livePids: new Set([4293]) });
-    writeDeskFile(ctx.sessionDirs[0], { pid: 4293, sessionId: 'sub', cwd: path.join(cwd, 'sub') });
-    // A subfolder session is its own tile now (owner, 2026-08-27,
-    // supersedes 2ed64f5) - it must NOT be picked up as the launched
-    // session's underlying conversation.
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
-  }
-
-  {
-    const ctx = makeCtx({ livePids: new Set() });
-    ctx.sessionDirs = [path.join(base, 'no-such-dir')];
-    assert.deepEqual(resolveDeskSessionId(ctx, cwd), { sessionId: null, configDir: null });
-  }
-});
-
-test('claimDeskSession - writes a handoff entry listSessions then reports, and returns false when already claimed', () => {
+test('claimDeskSession - writes a claim listSessions then reports, and returns false when already claimed', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
   const projectPath = path.join(base, 'Pull Requests');
@@ -1330,17 +1243,17 @@ test('claimDeskSession - writes a handoff entry listSessions then reports, and r
   const handoffStartedAt = new Date(now - 1000).toISOString();
 
   const claimed = claimDeskSession(ctx, {
-    sessionName: 'pull-requests', project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
+    sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
   });
   assert.equal(claimed, true);
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
   assert.equal(views[0].status, 'handoff');
-  assert.equal(views[0].session_name, 'pull-requests');
+  assert.equal(views[0].session_name, PULL_REQUESTS);
 
   const second = claimDeskSession(ctx, {
-    sessionName: 'pull-requests', project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
+    sessionName: PULL_REQUESTS, project: 'Pull Requests', projectPath, startedAt, handoffStartedAt,
   });
   assert.equal(second, false, 'a second claim on the same session_name must write nothing and return false');
 });

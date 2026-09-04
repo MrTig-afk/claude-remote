@@ -28,27 +28,60 @@ foreach ($dir in @('venv', '.venv')) {
 # 'Stop', so with stdio:'ignore' the agent reports 202 "starting" and
 # nothing ever starts. Verified on this machine 2026-08-25.
 $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -PassThru -ArgumentList @(
-    # `--channels=<value>` as ONE argument. The plugin is `whatsapp-channel`;
-    # the MARKETPLACE is `whatsapp-claude-plugin`, which is the easy thing to
-    # confuse it with. An earlier release carried the marketplace's wording in
-    # the plugin half of the spec, and that stale form resolves to "plugin not
-    # installed": the channel is allowlisted, then fails to load, so outbound
-    # tools keep working while inbound messages never arrive. A test asserts
-    # this whole token and that the stale form is absent.
-    '--channels=plugin:whatsapp-channel@whatsapp-claude-plugin',
+    # NO --channels HERE, and that is a deliberate reversal. Measured
+    # 2026-09-05: with `--channels=plugin:whatsapp-channel@whatsapp-claude-plugin`
+    # a PWA-launched session starts fine - correct window title, TUI drawn - and
+    # then sits on `/rc connecting...` indefinitely; the Code-tab row never
+    # appears. Removing ONLY that flag, with the same exe, quoting, --name and
+    # --remote-control, connects quickly. Owner confirmed both arms on his own
+    # machine. Channels is an experimental second input channel into the same
+    # session that Remote Control also wants to own, and the two do not coexist.
+    #
+    # The cost, stated plainly: a session launched FROM THE PHONE can no longer
+    # receive WhatsApp messages. That is the right trade here and only here -
+    # a phone-launched session exists to become a Code-tab row, which is exactly
+    # what the flag was preventing. The desk aliases (`claudemax`/`claudepro` in
+    # ~/.bashrc and the PowerShell profile) still pass --channels, so WhatsApp
+    # inbound is untouched where it is actually used.
+    #
+    # If it ever comes back, it must come back BEHIND a check that Remote
+    # Control still connects, not on the assumption that adding a flag is free.
+
     # The terminal tab. `--remote-control <name>` names the REMOTE CONTROL
     # session (the Code-tab row) and does NOT touch the window title - a
     # PWA-launched tab read "Claude Code" until this was added, verified from
     # the owner's screenshot 2026-08-27. --name is the one that reaches the
     # title (its --help: "shown in the prompt box, /resume picker, and
-    # terminal title"). The FOLDER leaf, not $SessionName: the owner wants
-    # `MingleHub`, and $SessionName is the sanitized lowercase-hyphen form.
+    # terminal title"). The FOLDER leaf, because the owner wants `MingleHub`.
+    # CORRECTED 2026-09-04: this used to add "not $SessionName, which is the
+    # sanitized lowercase-hyphen form" - true then, wrong now. $SessionName is
+    # the folder leaf too since the Code-tab row was found reading
+    # `f-dev-projects-repos-02b052.email-lint`. The two carry the same value by
+    # different routes; only the internal session name is still slugged.
     # The inner quotes are load-bearing - Start-Process joins ArgumentList
     # with spaces and adds no quoting of its own, so a project like
     # `Pull Requests` would otherwise arrive as `--name=Pull` plus a stray
     # `Requests` that claude reads as an initial prompt.
     "--name=`"$(Split-Path -Leaf $ProjectPath)`"",
-    '--remote-control', $SessionName
+    # ONE ARGUMENT, and the `=` matters. Start-Process joins ArgumentList with
+    # spaces and adds no quoting of its own, so passing the flag and the value
+    # as two separate array entries splits any name containing a space:
+    # `Video Editing` arrives as the flag plus `Video`, and then a stray
+    # `Editing`, which claude reads as an INITIAL PROMPT and types into the
+    # session. Any project whose folder name contains a space hits this, as
+    # does the collision form `email-lint (Work)`.
+    #
+    # HISTORY, so nobody re-runs it: the two-argument form was reverted to on
+    # 2026-09-04 while diagnosing an outage (a launched session opened a blank
+    # console and never reached the Code tab) and did NOT fix it. The failure
+    # reproduced with this file byte-identical to its last known-good version,
+    # and the same file then succeeded seven launches in a row. The argument
+    # form was never the cause; that outage has no proven root cause.
+    #
+    # The value FORM is pinned in sessions.test.js's recipe-integrity test and
+    # in detachment.test.js's requiredTokens - it was the bare flag until
+    # 2026-09-04, which is how a change here passed 992 green tests.
+    "--remote-control=`"$SessionName`""
 )
 
 # Liveness for the agent's session registry. The pid the agent's own

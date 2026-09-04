@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { getRegistryFilePath, getPidDirPath, getSessionDirPaths } from './config.js';
-import { resolveProjectPath, deriveSessionName, slugSegment } from './sessions.js';
-import { listProjects } from './projects.js';
+import { resolveProjectPath, deriveSessionName, sessionNameFor } from './sessions.js';
+import { listProjects, rootsFrom } from './projects.js';
 
 // How long a launch with no pid file yet is still called `starting` rather
 // than `failed`. It was 30s, and 30s is a desk figure: on a WARM machine the
@@ -30,10 +30,14 @@ export const REGISTRY_VERSION = 1;
 // PWA. Not worth an endpoint for one banner.
 export const FAILED_RETENTION_MS = 24 * 60 * 60 * 1000;
 
-// A handoff run the agent is no longer watching (it restarted mid-run) is
-// reported as an ended-with-failure record past this window, so a `handoff`
-// entry can never block a relaunch forever.
-export const HANDOFF_TIMEOUT_MS = 10 * 60 * 1000;
+// How long a STOP claim (the vestigially-named `handoff` status - see
+// endSession) may sit before the prune decides the agent died mid-STOP and
+// drops it. It used to be 10 minutes because a real handoff runner was
+// working behind it; the claim now spans one taskkill plus the 5s liveness
+// poll, so a minute is already generous. Dropping is the whole recovery:
+// discovery re-reports the process if it is still alive, and the entry
+// simply vanishes if it is not.
+export const CLAIM_STALE_MS = 60_000;
 
 /** process.kill(pid, 0): true if a process with that pid exists. Never throws. */
 // Known ceiling: Windows recycles pids, and nothing in node's builtins can tell a
@@ -56,15 +60,19 @@ export function isPidAlive(pid) {
 }
 
 /**
- * The pid FILE name for a session name. A nested session name carries a '/'
- * (deriveSessionName), which path.join would turn into a subdirectory that
- * nothing creates - the pid file would never be written and the session
- * would report `failed` while running. Collapsing it to '.' is safe and
+ * The pid FILE name for a session name. A project's session name carries at
+ * least one '/' - the root prefix, plus one more for a container child
+ * (deriveSessionName / sessionNameFor). A single-mode root is the one shape
+ * with none: its whole name IS the root prefix. Any '/' that is there,
+ * path.join would turn into a subdirectory that nothing creates - the pid
+ * file would never be written and the session would report `failed` while
+ * running. Collapsing it to '.' is safe and
  * collision-free, not a sanitization of untrusted input: the slug rule maps
- * every '.' and every whitespace run to '-', so NO single-segment session
- * name can ever contain a '.', and 'pull-requests.vercel.pid' is therefore
- * unreachable by any flat project. The confinement check below is unchanged
- * and still runs on the joined result.
+ * every '.' and every whitespace run to '-', so no segment - root prefix
+ * included, digest included - can ever contain a '.', and
+ * 'pull-requests.vercel.pid' is therefore unreachable by any flat project.
+ * The confinement check below is unchanged and still runs on the joined
+ * result.
  */
 export function pidFileNameFor(sessionName) {
   return `${sessionName.replace(/\//g, '.')}.pid`;
@@ -256,43 +264,42 @@ function readSessionFiles(ctx) {
  * session working in a subfolder of a project gets its OWN tile, named by
  * that subfolder (owner, 2026-08-27 - supersedes 2ed64f5's "attribute to
  * the parent tile" rule: a session in `Pull Requests\Whatsapp Plugin` reads
- * as "Whatsapp Plugin", not "Pull Requests"). projects is
- * listProjects(ctx.baseDir) output, used only as the "is this cwd under
- * SOME listed project" gate; claimedSessionNames is the Set of session_name
- * values the registry already produced a view for (registry wins, disjoint
- * sets). Never throws.
+ * as "Whatsapp Plugin", not "Pull Requests"). projects is listProjects's
+ * output over EVERY usable root, used both as the "is this cwd under SOME
+ * listed project" gate and to resolve the OWNING root (each top-level entry
+ * carries `root`) so a cwd under the second root is named under that root's
+ * slug, not the first; claimedSessionNames is the Set of session_name values
+ * the registry already produced a view for (registry wins, disjoint sets).
+ * Never throws.
  */
 // True when cwd is projectPath itself or anywhere below it - the gate for
 // "is this a project's own working tree at all", not an attribution rule.
-// Projects are flat siblings under baseDir, so a cwd can sit inside at most
-// one of them.
+// Roots never overlap (T94's 409 overlapping_root at write time, projects.js's
+// usableRoots' D2 at read time), and within a root projects are flat
+// siblings - so a cwd sits inside at most one LISTED project. The .find()
+// below makes that deterministic even if it ever stopped holding.
 function isInsideProject(projectPath, cwd) {
   const rel = path.relative(projectPath, cwd);
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 // PowerShell/URL-safe and collision-proof against a root project's own
-// name: 'pull-requests/whatsapp-plugin', never just 'whatsapp-plugin' -
-// deriveSessionName(cwd) alone could equal a REAL top-level project's own
-// session_name, and END for that real project would then resolve to the
-// wrong session entirely (a live danger: wrong kill target, handoff written
-// into the wrong folder - not merely a cosmetic collision). Per-segment,
-// same slugging rule as deriveSessionName, joined with '/' - never the raw
-// OS separator, which is neither.
+// name: 'f-dev-projects-repos/pull-requests/whatsapp-plugin', never just
+// 'whatsapp-plugin' - deriveSessionName(cwd) alone could equal a REAL
+// top-level project's own session_name, and END for that real project would
+// then resolve to the wrong session entirely (a live danger: wrong kill
+// target, handoff written into the wrong folder - not merely a cosmetic
+// collision).
 // Exported ONLY so the invariant below can be tested against
 // deriveSessionName directly. A source-scanning test is a proxy for it and a
-// proxy missed a real divergence once.
-export function deriveDeskSessionName(baseDir, cwd) {
-  const rel = path.relative(path.resolve(baseDir), cwd);
-  // slugSegment is IMPORTED, never re-implemented here. This function and
-  // deriveSessionName (sessions.js) must return the same string for the same
-  // path or listSessions emits two views for one live session - and since
-  // T72 that same string is the identity a nested session's STOP resolves
-  // on, so a divergence would end the wrong session. A second copy of the
-  // regex is how that divergence happens; there used to be one.
-  return rel.split(path.sep).filter(Boolean)
-    .map(slugSegment)
-    .join('/');
+// proxy missed a real divergence once. A ONE-LINE DELEGATE to sessionNameFor
+// (sessions.js) - THE ONE IMPLEMENTATION of the naming rule - so this
+// function and deriveSessionName cannot drift: a second copy of the rule is
+// exactly how one live session renders as two tiles, and since T72 that same
+// string is the identity a nested session's STOP resolves on, so a
+// divergence would end the wrong session.
+export function deriveDeskSessionName(root, cwd) {
+  return sessionNameFor(root, cwd);
 }
 
 export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
@@ -300,9 +307,11 @@ export function discoverDeskSessions(ctx, projects, claimedSessionNames) {
 
   for (const record of readSessionFiles(ctx)) {
     const cwd = path.resolve(record.cwd);
-    if (!projects.some((p) => isInsideProject(p.path, cwd))) continue;   // outside every listed project
+    const owner = projects.find((p) => isInsideProject(p.path, cwd));
+    if (!owner) continue;   // outside every listed project
 
-    const sessionName = deriveDeskSessionName(ctx.baseDir, cwd);
+    const sessionName = deriveDeskSessionName(owner.root, cwd);
+    if (sessionName === null) continue;   // structurally unreachable after the gate above
     if (claimedSessionNames.has(sessionName)) continue;   // registry wins
 
     const existing = best.get(cwd);
@@ -342,20 +351,6 @@ function newestRecordAt(ctx, targetPath) {
   return best;
 }
 
-/** { sessionId, configDir } of the newest live interactive session whose
- *  cwd IS EXACTLY targetPath (owner, 2026-08-27: a subfolder session is now
- *  its own tile with its own STOP, not folded into an ancestor's), or
- *  { sessionId: null, configDir: null } when none matches. Called with the
- *  view's OWN path in both callers (a launched session's root, or a desk
- *  session's own cwd - see endSession), never with a path a client
- *  supplied. configDir is set whenever a record matched at all, even if
- *  that record's own sessionId failed validation, because the profile (not
- *  the id) is what --continue also needs to run in the right place. */
-export function resolveDeskSessionId(ctx, targetPath) {
-  const best = newestRecordAt(ctx, targetPath);
-  return best ? { sessionId: best.sessionId, configDir: best.configDir } : { sessionId: null, configDir: null };
-}
-
 /**
  * Inserts a `handoff` registry entry for a session the agent did NOT launch,
  * ONLY IF no entry with that session_name exists. Returns true iff it wrote.
@@ -380,7 +375,7 @@ export function claimDeskSession(ctx, { sessionName, project, projectPath, start
     handoff_started_at: handoffStartedAt,
     // The prune loop below cannot validate this entry the normal way -
     // `project` is a display label (a subfolder's basename), not something
-    // resolveProjectPath(baseDir, project) would ever resolve - so it needs
+    // resolveProjectPath(roots, project) would ever resolve - so it needs
     // its own rule, keyed off this marker.
     source: 'desk',
   });
@@ -388,23 +383,26 @@ export function claimDeskSession(ctx, { sessionName, project, projectPath, start
 }
 
 /**
- * Every live session, pruned and re-validated against ctx.baseDir. Writes
- * the pruned registry back only if entries were dropped. Never throws: any
- * read/parse/validate failure yields [].
+ * Every live session, pruned and re-validated against rootsFrom(ctx) (the
+ * shared set). Writes the pruned registry back only if entries were dropped.
+ * Never throws: any read/parse/validate failure yields [].
  */
 export function listSessions(ctx) {
   const {
-    baseDir,
     registryPath = getRegistryFilePath(),
     pidDir = getPidDirPath(),
     isPidAlive: isAlive = isPidAlive,
     now = Date.now,
   } = ctx;
 
+  // rootsFrom(ctx), never a bare ctx.baseDir read - it is the only door onto
+  // the shared set (projects.js).
+  const roots = rootsFrom(ctx);
+
   // Computed once, reused by the desk-entry prune check below AND by
   // discovery at the end of this function - both need "is this cwd inside
   // some listed project", and listProjects() is a filesystem read.
-  const projects = listProjects(baseDir);
+  const projects = listProjects(roots);
 
   // A missing, empty or corrupt registry is treated as zero registry
   // entries, NOT as an early exit: discovery (below) must still run, or a
@@ -447,7 +445,6 @@ export function listSessions(ctx) {
   // Set when an entry is normalised IN PLACE rather than removed. Without it
   // the write-back below never fires for a mutation, and the normalisation
   // would be recomputed - and lost - on every single request.
-  let rewroteAny = false;
 
   for (const entry of entries) {
     const drop = (sessionNameForCleanup) => {
@@ -478,8 +475,8 @@ export function listSessions(ctx) {
     }
 
     // A desk claim's `project` is a display label only (a subfolder's
-    // basename) - resolveProjectPath(baseDir, project) would 404 it, since
-    // it is never a direct child of baseDir. Its honesty rests on
+    // basename) - resolveProjectPath(roots, project) would 404 it, since it
+    // is never a direct child of any root. Its honesty rests on
     // original_path instead: it must sit inside SOME listed project, and
     // its OWN derived name (the same rule discovery used to name it) must
     // match session_name. A launched entry (no `source` marker) keeps the
@@ -487,26 +484,44 @@ export function listSessions(ctx) {
     let resolvedPath;
     if (entrySource === 'desk') {
       const resolved = path.resolve(originalPath);
-      if (!projects.some((p) => isInsideProject(p.path, resolved))) {
+      const owner = projects.find((p) => isInsideProject(p.path, resolved));
+      if (!owner) {
         drop(sessionName);
         continue;
       }
-      if (deriveDeskSessionName(baseDir, resolved) !== sessionName) {
+      if (deriveDeskSessionName(owner.root, resolved) !== sessionName) {
         drop(sessionName);
         continue;
       }
       resolvedPath = resolved;
     } else {
-      const r = resolveProjectPath(baseDir, project);
+      // MUST NOT go through resolveProjectPath's multi-root form-2 scan: an
+      // identifier that is ambiguous across two roots would return 400, and
+      // the prune drops on !r.ok - so a legitimately running session would
+      // be SILENTLY KILLED OFF THE REGISTRY on the 5s poll. Resolve the
+      // owning root from original_path first (the server-side truth this
+      // entry already carries), then resolve `project` within THAT ONE root.
+      // One root in the array makes form 2 unambiguous by construction - one
+      // lstat per entry, and the full resolveProjectPath trust boundary
+      // still runs. Both identifier forms round-trip this way: a stored
+      // form-1 `project` matches that root's slug and is stripped; a stored
+      // legacy `project` resolves against that one root.
+      const resolvedOriginal = path.resolve(originalPath);
+      const owningRoot = roots.find((rt) => isInsideProject(path.resolve(rt.path), resolvedOriginal));
+      if (!owningRoot) {
+        drop(sessionName);
+        continue;
+      }
+      const r = resolveProjectPath([owningRoot], project);
       if (!r.ok) {
         drop(sessionName);
         continue;
       }
-      if (r.path !== path.resolve(originalPath)) {
+      if (r.path !== resolvedOriginal) {
         drop(sessionName);
         continue;
       }
-      if (deriveSessionName(r.path, baseDir) !== sessionName) {
+      if (deriveSessionName(r.path, owningRoot.path) !== sessionName) {
         drop(sessionName);
         continue;
       }
@@ -523,74 +538,31 @@ export function listSessions(ctx) {
         drop(sessionName);
         continue;
       }
+      // One window, both ends. The lower bound is the same clock-tamper rule
+      // the `starting` branch uses below: without it a timestamp from the
+      // future blocks every future relaunch, and CLAIM_STALE_MS is short
+      // enough now that it would block one for a very long time.
       const age = nowMs - Date.parse(entry.handoff_started_at);
-      // Same clock-tamper rule the `starting` branch uses below - without a
-      // drop here a tampered timestamp blocks every future relaunch.
-      if (age < -STARTING_GRACE_MS) {
+      if (!(age > -STARTING_GRACE_MS && age < CLAIM_STALE_MS)) {
         drop(sessionName);
         continue;
       }
-      const eff = Math.max(0, age);
-      if (eff < HANDOFF_TIMEOUT_MS) {
-        survivors.push(entry);
-        views.push({
-          session_name: sessionName,
-          project,
-          path: resolvedPath,
-          status: 'handoff',
-          started_at: startedAt,
-          pid: null,
-          source: 'launched',
-          session_id: null,
-        });
-      } else if (eff >= FAILED_RETENTION_MS) {
-        drop(sessionName);
-        continue;
-      } else {
-        // Past the timeout but inside 24h: the agent restarted mid-run and
-        // never got to record a verdict. Report it as an interrupted end
-        // rather than leaving the entry stuck as `handoff` forever.
-        //
-        // The entry is REWRITTEN, not merely re-reported. dismissSession is a
-        // compare-and-swap on the STORED status (dropSession, fromStatus
-        // 'ended'), so an entry still saying `handoff` matched nothing and the
-        // record could never be dismissed: the PWA re-announced "the handoff
-        // was not written" on EVERY open for a full 24h (owner hit this
-        // 2026-08-27). Normalising the stored status is what lets the one
-        // banner be the last one.
-        const settled = {
-          ...entry,
-          status: 'ended',
-          ended_at: entry.handoff_started_at,
-          handoff_ok: false,
-          handoff_result: 'interrupted',
-        };
-        delete settled.handoff_started_at;
-        survivors.push(settled);
-        rewroteAny = true;
-        views.push({
-          session_name: sessionName,
-          project,
-          path: resolvedPath,
-          status: 'ended',
-          started_at: startedAt,
-          pid: null,
-          ended_at: entry.handoff_started_at,
-          handoff_ok: false,
-          handoff_result: 'interrupted',
-          source: 'launched',
-          session_id: null,
-        });
-      }
+      survivors.push(entry);
+      views.push({
+        session_name: sessionName,
+        project,
+        path: resolvedPath,
+        status: 'handoff',
+        started_at: startedAt,
+        pid: null,
+        source: 'launched',
+        session_id: null,
+      });
       continue;
     }
 
     if (entry.status === 'ended') {
-      if (!Number.isFinite(Date.parse(entry.ended_at)) || typeof entry.handoff_ok !== 'boolean') {
-        drop(sessionName);
-        continue;
-      }
-      if (typeof entry.handoff_result !== 'string' || entry.handoff_result === '') {
+      if (!Number.isFinite(Date.parse(entry.ended_at))) {
         drop(sessionName);
         continue;
       }
@@ -610,8 +582,6 @@ export function listSessions(ctx) {
         started_at: startedAt,
         pid: null,
         ended_at: entry.ended_at,
-        handoff_ok: entry.handoff_ok,
-        handoff_result: entry.handoff_result,
         source: 'launched',
         session_id: null,
       });
@@ -684,7 +654,7 @@ export function listSessions(ctx) {
     });
   }
 
-  if (droppedAny || rewroteAny) {
+  if (droppedAny) {
     writeRegistry(registryPath, survivors);
   }
 

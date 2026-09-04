@@ -16,8 +16,12 @@ export function onAuthLost(cb) { authLost = cb; }
  *          |{ok:false, status:number|0, code:string}}
  * Never throws. `code` is one of: the server's own `error` string,
  * 'network', 'timeout', 'bad_response', 'http'.
+ * timeoutMs overrides the 10s default for one call. A radio switched off does
+ * not refuse a connection, it swallows it, so every "the PC is gone" answer
+ * costs a full timeout before the screen can change - which is why the idle
+ * probe asks for a short one.
  */
-async function request(path, options = {}) {
+async function request(path, options = {}, timeoutMs = TIMEOUT_MS) {
   let res;
   try {
     res = await fetch(path, {
@@ -28,7 +32,7 @@ async function request(path, options = {}) {
         ...(token ? { 'X-Claude-Remote-Token': token } : {}),
         ...(options.headers || {}),
       },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     return { ok: false, status: 0, code: err.name === 'TimeoutError' ? 'timeout' : 'network' };
@@ -71,8 +75,46 @@ function post(path, body) {
   });
 }
 
+function put(path, body) {
+  return request(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 export function getProjects() {
   return request('/api/projects');
+}
+
+export function getDrives() {
+  return request('/api/drives');
+}
+
+// encodeURIComponent, once: handleRequest's `new URL` decodes exactly once,
+// and folders.js rejects any surviving '%' - so a second encode here would be
+// rejected by the server, correctly.
+export function getFolders(p) {
+  return request(`/api/folders?path=${encodeURIComponent(p)}`);
+}
+
+export function putShared(body) {
+  return put('/api/shared', body);
+}
+
+export function getAcknowledged() {
+  return request('/api/acknowledge');
+}
+
+// Empty body by contract - the server reads nothing from it. `{}` rather than
+// no body at all so this can go through the same post() helper as every other
+// write in this file.
+export function acknowledge() {
+  return post('/api/acknowledge', {});
+}
+
+export function getStatus(timeoutMs) {
+  return request('/api/status', {}, timeoutMs);
 }
 
 export function getSessions() {
@@ -108,4 +150,13 @@ export function setPasscode(pc, confirm) {
 
 export function unlock(pc) {
   return post('/api/auth/unlock', { passcode: pc });
+}
+
+// Not /api/auth/*, and that is the point: this one runs behind the token gate
+// (see server.js), so a 401 here IS a lost session and must re-lock the app -
+// which the /api/auth/ exclusion above would otherwise suppress.
+// The success body carries no token: the agent has just dropped every one,
+// this device's included, so the caller re-locks rather than carrying on.
+export function changePasscode(current, pc, confirm) {
+  return post('/api/passcode', { current, passcode: pc, confirm });
 }

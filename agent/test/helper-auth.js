@@ -38,7 +38,13 @@ export function makeAuthCtx({ now } = {}) {
     attemptsPath: path.join(dir, 'passcode-attempts.json'),
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
+    configPath: path.join(dir, 'config.json'),
     sessionDirs: testSessionDirs(dir),
+    // T94's PUT /api/shared writes through ctx.configPath. Omitting it here
+    // is the exact same bug class the comment below already warns about, one
+    // key later: agent/config.js's real getConfigFilePath() would take over
+    // and the suite would overwrite the owner's live config.json.
+    configPath: path.join(dir, 'config.json'),
     tokens: new Map(),
     now: now || Date.now,
   };
@@ -50,7 +56,13 @@ export function makeAuthCtx({ now } = {}) {
 // ~/.claude/plugins/data/claude-remote-claude-remote/sessions.json on every
 // run, silently, for two days. `undefined` is the dangerous value (it is what
 // triggers the config.js fallback), so a missing key throws like a wrong one.
-const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir'];
+// configPath IS in this list. M11 briefly argued it should not be - on the
+// grounds that readStatusFacts only reads it - but M9 gave the agent routes
+// that WRITE the config (PUT /api/shared, POST /api/acknowledge), so a
+// fixture missing configPath would write the owner's real shared folders.
+// That is the same class of accident registryPath and pidDir are here to
+// prevent, and it is why the M11 reasoning no longer applies.
+const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir', 'configPath'];
 
 // The fifth key that falls back to the real world, and the only one that is
 // not a path: sessions.js does `const { baseDir, spawner = spawn } = ctx`, so
@@ -65,25 +77,24 @@ function refuseSpawn() {
   );
 }
 
-// The two seams endSession() uses. Same reasoning as refuseSpawn above: a
-// fixture with neither would tree-kill a real pid and start a real handoff
-// run on the owner's account.
+// The seam endSession() uses. Same reasoning as refuseSpawn above: a fixture
+// without it would tree-kill a real pid on this machine.
 function refuseKill() {
   throw new Error(
     'helper-auth: this fixture server has no killSpawner, so ending a session would run a REAL '
     + 'taskkill against a pid on this machine. Pass an explicit killSpawner to the ctx.',
   );
 }
-function refuseHandoff() {
-  throw new Error(
-    'helper-auth: this fixture server has no handoffSpawner, so ending a session would start a REAL '
-    + "handoff run on the owner's account. Pass an explicit handoffSpawner to the ctx.",
-  );
-}
 function refusePidImageName() {
   throw new Error(
     'helper-auth: this fixture server has no pidImageName, so ending a session would query a REAL '
     + "process's image name via tasklist on this machine. Pass an explicit pidImageName to the ctx.",
+  );
+}
+function refuseDriveExec() {
+  throw new Error(
+    'helper-auth: this fixture server has no driveExec, so GET /api/drives would run a REAL '
+    + "powershell.exe Get-CimInstance on this machine. Pass an explicit driveExec to the ctx.",
   );
 }
 
@@ -124,8 +135,8 @@ export function fixtureServer(ctx) {
   // A typeof check covers both the missing and the undefined case.
   if (typeof ctx.spawner !== 'function') ctx.spawner = refuseSpawn;
   if (typeof ctx.killSpawner !== 'function') ctx.killSpawner = refuseKill;
-  if (typeof ctx.handoffSpawner !== 'function') ctx.handoffSpawner = refuseHandoff;
   if (typeof ctx.pidImageName !== 'function') ctx.pidImageName = refusePidImageName;
+  if (typeof ctx.driveExec !== 'function') ctx.driveExec = refuseDriveExec;
   return createAgentServer(ctx);
 }
 
