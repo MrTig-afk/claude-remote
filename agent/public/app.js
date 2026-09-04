@@ -4,8 +4,8 @@ import { getProjects, getSessions, launchSession, endSession, dismissEnded, crea
 import { showGate, messageFor, setPinRevealed } from './lock.js';
 import {
   TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
-  CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON,
-  NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle,
+  CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON, RETRY_BUTTON,
+  NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle, PHONE_OFFLINE,
   emptyDayOneTitle, EMPTY_DAY_ONE_BODY,
 } from './copy.js';
 import {
@@ -45,6 +45,9 @@ const state = {
   // answer AND the reason was network/timeout, which is the one failure that
   // ends by itself when the PC finishes waking up. waitForAgent() owns it.
   reachable: null,
+  // R4. Set from navigator.onLine at the moment a request comes back with
+  // nothing, never polled: a stale reading here would blame the wrong end.
+  offline: false,
   // GET /api/status's body, or null = not asked yet / it failed. Only the
   // Agent status screen reads it, and it is fetched when that screen opens
   // rather than on boot - the project list does not need it, and the first
@@ -489,7 +492,10 @@ function buildRow(p, rs) {
 // The way out (T100). `withAction` is false for 'unknown-shared' only - see
 // the safety rule on onChooseFolders; it is the one state that must NOT
 // offer the picker.
-function buildEmptyState({ title, body }, withAction) {
+// `action` is 'choose', 'retry', or null for an empty state with no control.
+// It was a boolean until R4 needed a second kind; a second builder would have
+// been two copies of the same four elements.
+function buildEmptyState({ title, body }, action) {
   const el = document.createElement('div');
   el.className = 'empty';
   const t = document.createElement('div');
@@ -500,12 +506,12 @@ function buildEmptyState({ title, body }, withAction) {
   b.className = 'empty-body';
   b.textContent = body;
   el.appendChild(b);
-  if (withAction) {
+  if (action) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'empty-action';
-    btn.dataset.choose = '1';
-    btn.textContent = CHOOSE_FOLDERS_BUTTON;
+    btn.dataset[action] = '1';
+    btn.textContent = action === 'retry' ? RETRY_BUTTON : CHOOSE_FOLDERS_BUTTON;
     el.appendChild(btn);
   }
   return el;
@@ -1001,6 +1007,13 @@ function renderConn() {
     setDot(dot, 'filled');
     text.textContent = 'AGENT REACHABLE';
     text.classList.add('reachable');
+  } else if (state.offline) {
+    // R4. Names THIS device, not the PC. "CANNOT REACH AGENT" here would be
+    // true and useless - it is the sentence that sends someone to go and
+    // check a machine that is working.
+    setDot(dot, 'dim');
+    text.textContent = 'NO NETWORK';
+    text.classList.remove('reachable');
   } else {
     setDot(dot, 'dim');
     text.textContent = 'CANNOT REACH AGENT';
@@ -1043,6 +1056,7 @@ function renderProjects() {
   // precedence order and why "unreachable" must beat every shared-set check.
   const zone = listZoneState({
     reachable: state.reachable,
+    offline: state.offline,
     openFolderEmpty: !!open && (open.children || []).length === 0,
     projectCount: state.projects.length,
     shared: state.shared,
@@ -1130,7 +1144,11 @@ function renderProjects() {
     for (const root of missingRoots(state.shared)) listEl.appendChild(buildGoneNotice(root));
   }
 
-  if (zone.kind === 'waiting') {
+  if (zone.kind === 'offline') {
+    // The one empty state with a retry rather than a picker: there is nothing
+    // to choose, only something to fix, and it is on this device.
+    listEl.appendChild(buildEmptyState(PHONE_OFFLINE, 'retry'));
+  } else if (zone.kind === 'waiting') {
     const msg = document.createElement('div');
     msg.className = 'msg';
     msg.textContent = 'Waiting for the PC. This screen will fill in on its own as soon as the agent answers.';
@@ -1152,14 +1170,14 @@ function renderProjects() {
     // The one state that must NOT offer the picker - see the safety rule on
     // onChooseFolders. Entering blind would open the picker with initial =
     // [] and a SAVE from there wipes every shared folder.
-    listEl.appendChild(buildEmptyState(SHARED_UNKNOWN, false));
+    listEl.appendChild(buildEmptyState(SHARED_UNKNOWN, null));
   } else if (zone.kind === 'nothing-shared') {
-    listEl.appendChild(buildEmptyState(NOTHING_SHARED, true));
+    listEl.appendChild(buildEmptyState(NOTHING_SHARED, 'choose'));
   } else if (zone.kind === 'all-gone') {
-    listEl.appendChild(buildEmptyState(ALL_ROOTS_GONE, true));
+    listEl.appendChild(buildEmptyState(ALL_ROOTS_GONE, 'choose'));
   } else if (zone.kind === 'empty-day-one') {
     const names = zone.roots.map((r) => crumbSegments(r.path).at(-1).label);
-    listEl.appendChild(buildEmptyState({ title: emptyDayOneTitle(names), body: EMPTY_DAY_ONE_BODY }, true));
+    listEl.appendChild(buildEmptyState({ title: emptyDayOneTitle(names), body: EMPTY_DAY_ONE_BODY }, 'choose'));
   }
 
   allCount.textContent = String(state.projects.length);
@@ -1364,10 +1382,26 @@ async function load() {
     getProjects(), getSessions(), getAcknowledged(), getStatus(),
   ]);
   const p = proj.value; // api.js never throws - always fulfilled
+  // R4. Read ONLY here, at the moment a request has come back with nothing -
+  // never polled and never trusted on its own. navigator.onLine is famously
+  // optimistic (true on a captive portal, true on a tailnet that is down), so
+  // it is used to DISAMBIGUATE a failure that already happened rather than to
+  // predict one. Answering `false` is the case it is reliable for.
+  state.offline = !p.ok && (p.code === 'network' || p.code === 'timeout') && navigator.onLine === false;
   if (p.ok) {
     state.projects = p.data.projects;
     state.reachable = true;
     state.waitTries = 0;
+  } else if (state.offline) {
+    // Deliberately NOT 'waiting': waitForAgent retries on a backing-off
+    // ladder against a PC that is almost certainly fine, and the line would
+    // read WAITING FOR PC while the fault is on this device. Nothing retries
+    // automatically here - the `online` listener below does it the moment
+    // there is a network again.
+    state.projects = [];
+    state.reachable = false;
+    state.waitTries = 0;
+    hideBanner();
   } else if (p.code === 'network' || p.code === 'timeout') {
     // The only two codes that mean "the agent said nothing at all", and so
     // the only two that a PC finishing its boot produces. Everything else is
@@ -1414,6 +1448,9 @@ async function load() {
 async function onProjectTap(e) {
   // The two T100 checks come first, each with an early return, so neither
   // can fall through to [data-folder] or [data-project].
+  // R4. Same delegate as CHOOSE FOLDERS, and checked first for the same
+  // reason: it is a control inside the list, not a project row.
+  if (e.target.closest('[data-retry]')) { load(); return; }
   const choose = e.target.closest('[data-choose]');
   if (choose) { onChooseFolders(); return; }
   const remove = e.target.closest('[data-remove-root]');
@@ -2646,6 +2683,20 @@ function renderAbout() {
   rows.push({
     id: 'howto', icon: 'i-info', name: 'How this works', state: 'the two-app flow', enterable: true,
   });
+  // R5. ABSENT once installed, which is the failure this placement is most
+  // likely to produce: a row that is always there becomes a control that does
+  // nothing the moment it has been used. Same rule as Lane 5's update row.
+  // Two shapes, because the platforms genuinely differ and inventing a
+  // screen the Artifact does not draw would be worse than either. Chromium
+  // hands us a real dialog to raise, so the row is a button. iOS Safari
+  // exposes no API whatsoever, so the row states the gesture instead of
+  // pretending to perform it - informational, no chevron, nothing to tap and
+  // have nothing happen.
+  if (!isInstalled()) {
+    rows.push(installPrompt
+      ? { id: 'install', icon: 'i-dl', name: 'Add to home screen', state: 'opens like an app', enterable: true }
+      : { id: 'install', icon: 'i-dl', name: 'Add to home screen', state: 'Share, then Add to Home Screen', enterable: false });
+  }
   for (const row of rows) listEl.appendChild(buildSettingsRow(row));
 }
 
@@ -3465,6 +3516,9 @@ function wireEvents() {
     // Not a sub-screen: R2's sheet is an overlay, so it opens ON TOP of About
     // and GOT IT drops the owner back there rather than anywhere new.
     if (id === 'howto') { showSheet(); return; }
+    // R5. Only reachable when a prompt was captured - the informational form
+    // of this row is not enterable and carries no data-settings at all.
+    if (id === 'install') { runInstall(); return; }
     if (SETTINGS_SUBS.has(id)) {
       openSettingsSub(id);
       // Fetched on open, not on boot: this is the only screen that reads it.
@@ -3534,7 +3588,61 @@ function wireEvents() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') load();
   });
+  // R4. The offline state deliberately has no retry ladder of its own - this
+  // is what ends it. Only when we were actually showing the offline screen,
+  // so a spurious `online` on a working connection costs nothing. Recovery
+  // is silent by design: load() clears the banner and the dim, and a "you
+  // are back" toast is a notification nobody asked for.
+  window.addEventListener('online', () => { if (state.offline) load(); });
+  // R5. preventDefault stops Chromium's own mini-infobar, which is the
+  // interruption the owner rejected; the saved event is what the About row
+  // raises instead, at a moment the owner chose.
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    installPrompt = e;
+  });
+  // Fires on a real install. The row is gone on the next render either way
+  // via isInstalled(), but dropping the stale event keeps the two in step.
+  window.addEventListener('appinstalled', () => { installPrompt = null; });
   window.addEventListener('popstate', onPopState);
+}
+
+// ---------------------------------------------------------------------------
+// R5 (Lane 15) - installing to the home screen.
+//
+// A ROW in Settings > About, never a prompt. The owner chose that over a
+// one-time bar, accepting the cost: nobody browsing Settings is looking for
+// an install button, so most people will never find it and the README
+// carries the instruction instead.
+// ---------------------------------------------------------------------------
+
+// Chromium fires this INSTEAD of showing its own mini-infobar once
+// preventDefault() is called, and the saved event is the only way to raise
+// the real dialog later. iOS Safari fires nothing at all and has no API, so
+// `null` here is the normal state on half the devices this app targets - it
+// means "tell them how", not "something failed".
+let installPrompt = null;
+
+/** Already running as an installed app? Then there is nothing to offer. */
+function isInstalled() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;   // iOS's own, older flag
+}
+
+/**
+ * Raise the browser's own install dialog.
+ *
+ * The saved event is single-use: once prompted it cannot be re-raised, so it
+ * is dropped either way and About re-rendered. Accepting leaves isInstalled()
+ * true and the row goes; declining leaves no way to ask again this session,
+ * which is the browser's rule and not ours to work around.
+ */
+async function runInstall() {
+  const prompt = installPrompt;
+  if (!prompt) return;
+  installPrompt = null;
+  try { await prompt.prompt(); } catch { /* dismissed, or already consumed */ }
+  renderAbout();
 }
 
 function registerServiceWorker() {

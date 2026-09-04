@@ -2127,10 +2127,19 @@ test('load() waits and retries only on network/timeout, and dead-ends on every o
   assert.match(load, /p\.code === 'network' \|\| p\.code === 'timeout'/);
   assert.match(load, /state\.reachable = 'waiting'/);
   assert.match(load, /waitForAgent\(\)/);
-  assert.ok(
-    load.indexOf("state.reachable = 'waiting'") < load.indexOf('state.reachable = false'),
-    'the waiting branch must be checked before the dead-end branch',
-  );
+  // Three branches since R4, and their ORDER is the precedence:
+  //   offline  - this device has no network      (beats everything)
+  //   waiting  - the PC has not answered yet
+  //   else     - the agent answered with a refusal, which waiting cannot fix
+  // This used to compare the two `state.reachable =` assignments, but the
+  // offline branch also assigns false, so that proxy stopped meaning what it
+  // said. Pin the branch conditions instead.
+  const iOffline = load.indexOf('} else if (state.offline) {');
+  const iWaiting = load.indexOf("} else if (p.code === 'network' || p.code === 'timeout') {");
+  const iDead = load.indexOf('setErrorBanner(p.code, p.status)');
+  assert.ok(iOffline > 0, 'load() must have an offline branch');
+  assert.ok(iWaiting > iOffline, 'offline must be checked before waiting - it blames the right end');
+  assert.ok(iDead > iWaiting, 'the waiting branch must be checked before the dead-end branch');
   assert.match(load, /if \(state\.reachable === true\) maybeFailedBanner\(\);/,
     "'waiting' is truthy, so this test pins the explicit comparison");
 });

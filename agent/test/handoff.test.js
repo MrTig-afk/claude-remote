@@ -13,9 +13,19 @@ import { fileURLToPath } from 'node:url';
 import {
   CLAUDE_APP_LINK, handoffReady, handoffCopy, SHEET_SEEN_KEY, SHEET,
 } from '../public/handoff-ui.js';
+import { listZoneState } from '../public/folders-ui.js';
+import { PHONE_OFFLINE } from '../public/copy.js';
 
 const PUBLIC = path.resolve(fileURLToPath(new URL('../public/', import.meta.url)));
 const read = (f) => fs.readFileSync(path.join(PUBLIC, f), 'utf8');
+
+// Strips comments. Claims about what the CODE does must not be answered by
+// what the source EXPLAINS - a comment describing a rule kept failing the
+// test enforcing it. Fourth time in this project; see HANDOFF's gotchas.
+const codeOnly = (js) => js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+/** load()'s body. `state.offline` branches exist in renderConn too. */
+const loadBody = (js) => js.slice(js.indexOf('async function load()'), js.indexOf('async function onProjectTap('));
 
 // --- handoffReady: which statuses mean "go and type in it" ----------------
 
@@ -162,4 +172,87 @@ test('the hand-off button carries the external-link glyph the Artifact draws', (
   const fn = app.slice(app.indexOf('function showHandoff('), app.indexOf('// ---- Lane 10 / R2'));
   assert.doesNotMatch(fn, /createElementNS/, 'no namespace URL may reach a shipped asset');
   assert.match(fn, /handoff-go-label/, 'showHandoff writes the label, never the anchor');
+});
+
+// ---------------------------------------------------------------------------
+// R4 (Lane 13) - the phone being offline is a DIFFERENT screen from the PC
+// not answering. The shipped app had one story for both.
+// ---------------------------------------------------------------------------
+
+test('offline outranks every other list state, including waiting', () => {
+  // Both produce the same silence from the agent. Only one of them is the
+  // PC's fault, and saying "no answer from the PC" when the phone has no
+  // network sends someone to go and check a machine that is working.
+  const base = { openFolderEmpty: false, projectCount: 0, shared: [] };
+  assert.equal(listZoneState({ ...base, reachable: 'waiting', offline: true }).kind, 'offline');
+  assert.equal(listZoneState({ ...base, reachable: false, offline: true }).kind, 'offline');
+  assert.equal(listZoneState({ ...base, reachable: true, projectCount: 9, offline: true }).kind, 'offline');
+});
+
+test('offline defaults to false, so every existing caller is unchanged', () => {
+  assert.equal(listZoneState({ reachable: 'waiting', openFolderEmpty: false, projectCount: 0, shared: [] }).kind, 'waiting');
+});
+
+test('the offline copy blames this device and names Tailscale', () => {
+  // "Check your connection" alone leaves someone staring at a full signal
+  // bar; on this setup the usual cause is that the tailnet is not up.
+  assert.match(PHONE_OFFLINE.title + ' ' + PHONE_OFFLINE.body, /Tailscale/);
+  assert.match(PHONE_OFFLINE.body, /Nothing is wrong with your PC/);
+});
+
+test('navigator.onLine is only ever read to explain a failure, never to predict one', () => {
+  // It is optimistic - true on a captive portal, true on a tailnet that is
+  // down - so it is trustworthy only when it answers false, and only about a
+  // request that has ALREADY come back with nothing.
+  const app = codeOnly(read('app.js'));
+  const hits = app.match(/navigator\.onLine/g) || [];
+  assert.equal(hits.length, 1, 'one reading, at the one place it is meaningful');
+  assert.match(app, /navigator\.onLine === false/, 'only the false answer is trusted');
+});
+
+test('the offline state retries on the online event, not on a ladder of its own', () => {
+  // waitForAgent backs off against a PC that is almost certainly fine.
+  const app = read('app.js');
+  assert.match(app, /addEventListener\('online'/);
+  const load = loadBody(app);
+  const branch = codeOnly(load.slice(load.indexOf('} else if (state.offline) {'), load.indexOf("} else if (p.code === 'network'")));
+  assert.ok(branch.length > 0, 'load() must carry an offline branch');
+  // codeOnly, because the branch's own comment explains why waitForAgent is
+  // the wrong thing here - and an ungutted grep reads that as calling it.
+  assert.doesNotMatch(branch, /waitForAgent/, 'the offline branch must not start the PC retry ladder');
+});
+
+// ---------------------------------------------------------------------------
+// R5 (Lane 15) - installing. A row in About, never a prompt.
+// ---------------------------------------------------------------------------
+
+test('nothing in the app raises an install prompt on its own', () => {
+  // The owner rejected the one-time bar. Chromium's own mini-infobar is
+  // suppressed too, or the app would interrupt exactly the way he said not to.
+  const app = read('app.js');
+  assert.match(app, /beforeinstallprompt/);
+  assert.match(app, /e\.preventDefault\(\)/);
+  const wire = app.slice(app.indexOf("addEventListener('beforeinstallprompt'"), app.indexOf("addEventListener('appinstalled'"));
+  assert.doesNotMatch(wire, /\.prompt\(\)/, 'the captured event must not be raised at capture time');
+});
+
+test('the install row is absent once the app is already installed', () => {
+  // The failure this placement is most likely to produce: a row that is
+  // always there becomes a control that does nothing the moment it is used.
+  const app = read('app.js');
+  assert.match(app, /function isInstalled\(\)/);
+  assert.match(app, /display-mode: standalone/);
+  const about = app.slice(app.indexOf('function renderAbout('), app.indexOf('function renderUpdateDot('));
+  assert.match(about, /if \(!isInstalled\(\)\)/, 'renderAbout must gate the row on it');
+});
+
+test('the install row is only tappable when there is a dialog to raise', () => {
+  // iOS Safari exposes no install API at all. A chevron there would be a tap
+  // that does nothing, so that form of the row is informational instead and
+  // states the gesture rather than pretending to perform it.
+  const app = read('app.js');
+  const about = app.slice(app.indexOf('function renderAbout('), app.indexOf('function renderUpdateDot('));
+  assert.match(about, /installPrompt\s*\?/, 'the row has two shapes');
+  assert.match(about, /enterable: false/, 'the no-API form must not be enterable');
+  assert.match(about, /Add to Home Screen/, 'and must name the platform gesture');
 });

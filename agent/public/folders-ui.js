@@ -116,8 +116,14 @@ export function truncatedNote(total, shown) {
  *  | 'empty-day-one' roots = the roots that are NOT missing
  */
 export function listZoneState({
-  reachable, openFolderEmpty, projectCount, shared,
+  reachable, openFolderEmpty, projectCount, shared, offline = false,
 }) {
+  // R4: the phone being offline outranks everything, including 'waiting'.
+  // Both produce the same silence from the agent, but only one of them is
+  // the PC's fault - and telling someone their PC has not answered when the
+  // phone has no network sends them to the wrong machine. Checked first for
+  // the same reason 'waiting' is checked before the shared-set states.
+  if (offline) return { kind: 'offline', roots: [] };
   // Unreachable (or still waking up) beats every state below, and it must
   // stay first: the phone cannot tell "nothing shared" from "the PC did not
   // answer" - both look like an empty list - and `shared` is stale or absent

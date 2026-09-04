@@ -103,10 +103,29 @@ export const CHOOSE_FOLDERS_BUTTON = 'CHOOSE FOLDERS';
 export const PICKER_SKIP = 'SKIP FOR NOW';
 export const PICKER_CANCEL = 'CANCEL';
 export const REMOVE_BUTTON = 'REMOVE';
+// R4. The offline state's only control: there is nothing to choose here,
+// only something to fix, and it is on this device.
+export const RETRY_BUTTON = 'TRY AGAIN';
 
 export const NOTHING_SHARED = {
   title: 'No folders shared yet.',
   body: 'Pick the folder your projects are in. Nothing outside it is listed here.',
+};
+
+/**
+ * R4 (Lane 13). The phone has no network at all - a DIFFERENT failure from
+ * "the PC has not answered", and the app must not confuse them. The shipped
+ * app had one story for both, and when the phone is the one that is offline
+ * that story sends someone to go and physically check a machine that is
+ * fine.
+ *
+ * Tailscale is named because on this setup it is the most common cause: the
+ * phone has signal, the tailnet is simply not up. "Check your connection" on
+ * its own would leave someone staring at a full signal bar.
+ */
+export const PHONE_OFFLINE = {
+  title: 'This phone is offline.',
+  body: 'Nothing is wrong with your PC. Check your connection, then check Tailscale is on.',
 };
 
 export const SHARED_UNKNOWN = {
