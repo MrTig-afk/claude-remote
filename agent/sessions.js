@@ -54,21 +54,17 @@ async function defaultPidImageName(pid) {
 }
 
 /**
- * Was a port of ConvertTo-SessionName (ClaudeRemote.psm1) in its
- * ONE-ARGUMENT form. IT NO LONGER IS, and that divergence is deliberate:
- * slugSegment below is an allowlist, while ConvertTo-SessionName is still
- * the original denylist. They are not the same rule any more and must not be
- * "resynced" by loosening this side.
- * The two delivery paths do not share a sink - this one feeds
- * launch-session.ps1 and cmd.exe, the PowerShell one feeds a tmux session
- * name through wsl.exe - so the fix landed only where the sink is. Whether
- * the SSH path needs its own is an open question for that path, not a reason
- * to weaken this one. The old note about .NET \s vs JS \s is moot here: no
- * whitespace class is used any more.
+ * Began as a port of a PowerShell ConvertTo-SessionName, then deliberately
+ * diverged: slugSegment below is an ALLOWLIST, where the original was a
+ * denylist. That divergence is the security fix described on slugSegment, and
+ * it must not be "resynced" by loosening this side.
  *
- * The TWO-ARGUMENT form has NO PowerShell counterpart - ConvertTo-SessionName
- * has no concept of a root or a container folder, and the Pester suite does
- * not cover this branch. Called with a root, ANY depth below it derives
+ * T53 deleted the PowerShell implementation on 2026-09-05, so this is now the
+ * ONLY session-name rule in the tree and there is no second one to drift from.
+ * The history is kept here because it explains WHY the rule is an allowlist -
+ * that reasoning outlives the file it came from.
+ *
+ * Called with a root, ANY depth below it derives
  * '<root-slug>/<seg>/<seg>/...' (sessionNameFor, below) - owner decision 1,
  * 2026-08-29: the root prefix is ALWAYS present, and every segment between
  * root and target is carried, not just the first two. 'Pull Requests\Vercel'

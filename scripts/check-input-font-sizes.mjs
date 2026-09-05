@@ -37,6 +37,7 @@
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -56,21 +57,31 @@ const MIME = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 // Static server over the shell directory, on an ephemeral port. Only reason it
 // exists is that the shell's asset links are absolute; see the note at the top.
 function servePublic(PUBLIC) {
+  // The WHOLE handler is wrapped. An async handler that rejects has nobody to
+  // catch it and takes the process down, and two things in here can throw
+  // outside a narrow try: decodeURIComponent on a malformed escape (`/%` ->
+  // URIError), and a second writeHead after the body has started
+  // (ERR_HTTP_HEADERS_SENT), which used to be raised INSIDE the old catch.
+  // Chrome sends neither, but this binds an ephemeral port on 127.0.0.1 that
+  // any local process can reach while the check runs.
   const server = createServer(async (req, res) => {
-    const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
-    const file = path.join(PUBLIC, rel === '/' ? 'index.html' : rel);
-    // Never serve outside agent/public, even for a local throwaway. Checked
-    // with path.relative rather than startsWith: a bare prefix test has no
-    // separator boundary, so `/../public-notes/x` resolves to a SIBLING
-    // directory whose path still starts with PUBLIC and would be served.
-    const within = path.relative(PUBLIC, file);
-    if (within.startsWith('..') || path.isAbsolute(within)) { res.writeHead(403).end(); return; }
     try {
-      const body = await readFile(file);
+      const rel = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+      const file = path.join(PUBLIC, rel === '/' ? 'index.html' : rel);
+      // Never serve outside agent/public, even for a local throwaway. Checked
+      // with path.relative rather than startsWith: a bare prefix test has no
+      // separator boundary, so `/../public-notes/x` resolves to a SIBLING
+      // directory whose path still starts with PUBLIC and would be served.
+      const within = path.relative(PUBLIC, file);
+      if (within.startsWith('..') || path.isAbsolute(within)) { res.writeHead(403).end(); return; }
+      const body = await readFile(file).catch(() => null);
+      if (body === null) { res.writeHead(404).end(); return; }
       res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
       res.end(body);
     } catch {
-      res.writeHead(404).end();
+      // headersSent guard: once a status line is out, writing another throws.
+      if (!res.headersSent) res.writeHead(400);
+      res.end();
     }
   });
   return new Promise((resolve, reject) => {
@@ -84,19 +95,34 @@ function servePublic(PUBLIC) {
   });
 }
 
-// Windows only, like the rest of this project (PowerShell launcher, WSL1,
-// Windows OpenSSH). Anywhere else, CHROME=<path> is the whole answer, which is
-// why there is no list of other platforms' install locations here.
+// Windows only, like the rest of this project - the agent runs on native
+// Windows and launches sessions through a PowerShell script. Anywhere else,
+// CHROME=<path> is the whole answer, which is why there is no list of other
+// platforms' install locations here.
 const CHROME_CANDIDATES = [
   process.env.CHROME,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
 ].filter(Boolean);
 
+/**
+ * Marks an error as "this machine cannot launch Chrome", as opposed to "the
+ * stylesheet is wrong". Callers use the CODE, not the message: the test's
+ * opt-out used to match the string /no Chrome found/, which meant a CHROME
+ * pointing at a NON-EXECUTABLE (spawn EFTYPE) blew past the opt-out and failed
+ * the suite on a machine that had explicitly said it could not run this.
+ */
+export const CHROME_UNAVAILABLE = 'CHROME_UNAVAILABLE';
+function unavailable(message) {
+  const err = new Error(message);
+  err.code = CHROME_UNAVAILABLE;
+  return err;
+}
+
 function findChrome() {
   const hit = CHROME_CANDIDATES.find((p) => existsSync(p));
   if (!hit) {
-    throw new Error(
+    throw unavailable(
       `no Chrome found. Tried:\n  ${CHROME_CANDIDATES.join('\n  ')}\nSet CHROME=<path> to override.`,
     );
   }
@@ -124,7 +150,7 @@ async function readDevToolsPort(userDataDir, deadline) {
     } catch {
       // not written yet
     }
-    await new Promise((r) => setTimeout(r, 50));
+    await sleep(50);
   }
   throw new Error('Chrome never wrote DevToolsActivePort - it failed to start');
 }
@@ -138,7 +164,7 @@ async function firstPageTarget(port, deadline) {
     } catch {
       // devtools endpoint not up yet
     }
-    await new Promise((r) => setTimeout(r, 50));
+    await sleep(50);
   }
   throw new Error('no CDP page target appeared');
 }
@@ -233,33 +259,53 @@ export async function runCheck({ publicDir = DEFAULT_PUBLIC } = {}) {
   const SHELL = path.join(PUBLIC, 'index.html');
   if (!existsSync(SHELL)) throw new Error(`shell not found at ${SHELL}`);
   const chrome = findChrome();
-  const userDataDir = await mkdtemp(path.join(tmpdir(), 'input-font-check-'));
   const deadline = Date.now() + 30_000;
-  const { server, port: httpPort } = await servePublic(PUBLIC);
 
-  const child = spawn(chrome, [
-    '--headless=new',
-    '--disable-gpu',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--remote-debugging-port=0',
-    `--user-data-dir=${userDataDir}`,
-    'about:blank',
-  ], { stdio: 'ignore' });
-
-  // A failed spawn (EACCES, the binary moved between existsSync and here, an
-  // antivirus block) emits 'error' with no 'exit' to follow. Unhandled, that
-  // throws as an uncaught exception - which, now that this runs inside
-  // `node --test`, would take down the whole test PROCESS rather than fail one
-  // test. Captured and rethrown below so it surfaces as an ordinary failure.
+  // EVERY resource is acquired INSIDE the try that releases it. They used to be
+  // acquired above it, which meant the one thing that can throw synchronously -
+  // `spawn` on Windows, with EFTYPE/EINVAL when the target is not an executable
+  // - skipped the `finally` entirely. The HTTP server stayed listening, kept
+  // the event loop alive, and the whole `node --test` run HUNG FOREVER with no
+  // output. Reproduced by review with `CHROME=agent/public/app.css`.
+  // Reachable without anyone doing anything odd: the binary can be swapped or
+  // quarantined between findChrome's existsSync and this line.
+  let userDataDir = null;
+  let server = null;
+  let child = null;
+  let client = null;
   let spawnError = null;
-  child.on('error', (err) => { spawnError = err; });
-
-  let client;
   try {
+    userDataDir = await mkdtemp(path.join(tmpdir(), 'input-font-check-'));
+    ({ server } = await servePublic(PUBLIC));
+    const httpPort = server.address().port;
+
+    try {
+      child = spawn(chrome, [
+        '--headless=new',
+        '--disable-gpu',
+        '--no-first-run',
+        '--no-default-browser-check',
+        '--remote-debugging-port=0',
+        `--user-data-dir=${userDataDir}`,
+        'about:blank',
+      ], { stdio: 'ignore' });
+    } catch (err) {
+      // SYNCHRONOUS throw, which is the Windows case: EFTYPE/EINVAL when the
+      // target is not an executable. Tagged so the opt-out treats it as "no
+      // usable Chrome" rather than a stylesheet failure.
+      throw unavailable(`could not launch Chrome at '${chrome}': ${err.message}`);
+    }
+
+    // An ASYNCHRONOUS spawn failure (EACCES, an antivirus block) emits 'error'
+    // with no 'exit' to follow. Unhandled, that throws as an uncaught
+    // exception, which inside `node --test` takes down the test PROCESS rather
+    // than failing one test.
+    child.on('error', (err) => { spawnError = err; });
     const cdpPort = await readDevToolsPort(userDataDir, deadline).catch((err) => {
       // A spawn failure is the real cause; the port timeout is just its symptom.
-      throw spawnError ? new Error(`Chrome failed to start: ${spawnError.message}`) : err;
+      throw spawnError
+        ? unavailable(`Chrome failed to start: ${spawnError.message}`)
+        : err;
     });
     client = cdp(await firstPageTarget(cdpPort, deadline));
 
@@ -287,19 +333,32 @@ export async function runCheck({ publicDir = DEFAULT_PUBLIC } = {}) {
       if (Date.now() > deadline) {
         throw new Error(`page never loaded the shell (last state: ${result.value})`);
       }
-      await new Promise((r) => setTimeout(r, 50));
+      await sleep(50);
     }
 
-    // MEASURED AT EVERY VIEWPORT THAT MATTERS, not just the default.
+    // Measured at TWO SAMPLED WIDTHS, and that is a sample, not full coverage.
     // Headless Chrome starts at 800x600, so a rule inside
     // `@media (max-width: 430px)` would never apply - and the static test sees
     // only top-level rules, so a breakpoint was invisible to BOTH guards. That
-    // is the likeliest place in a phone-first PWA for an input to be shrunk,
-    // and the regex sweep this replaced did scan inside at-rules, so missing it
-    // would have been a straight coverage regression.
+    // is the likeliest place in a phone-first PWA for an input to be shrunk.
+    //
+    // HONEST LIMIT, because an earlier version of this comment claimed "every
+    // viewport that matters" and that was not true: a rule in a band neither
+    // sample hits - say `(min-width: 431px) and (max-width: 899px)` - is a
+    // false PASS. Nothing in app.css is in such a band today (its only
+    // breakpoint is min-width: 900px), and the two samples are chosen to sit
+    // either side of it. If a middle breakpoint is ever added, ADD A VIEWPORT
+    // HERE, or this silently stops covering it. Media features other than
+    // width - `hover`, `pointer`, `prefers-reduced-motion`,
+    // `prefers-color-scheme` - are not emulated at all.
     const enumerateAt = async (viewport) => {
       await client.send('Emulation.setDeviceMetricsOverride', {
-        width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: true,
+        width: viewport.width,
+        height: viewport.height,
+        deviceScaleFactor: 1,
+        // Per viewport, not hardcoded true: forcing mobile on the desktop pass
+        // made it a second phone pass for any `hover`/`pointer` query.
+        mobile: viewport.mobile,
       });
       const { result, exceptionDetails } = await client.send('Runtime.evaluate', {
         expression: ENUMERATE,
@@ -310,8 +369,8 @@ export async function runCheck({ publicDir = DEFAULT_PUBLIC } = {}) {
     };
 
     const VIEWPORTS = [
-      { name: 'desktop', width: 1280, height: 900 },
-      { name: 'phone', width: 390, height: 844 },   // the owner's actual device size
+      { name: 'desktop', width: 1280, height: 900, mobile: false },
+      { name: 'phone', width: 390, height: 844, mobile: true },   // the owner's device
     ];
     const passes = [];
     for (const v of VIEWPORTS) passes.push({ viewport: v, inputs: await enumerateAt(v) });
@@ -320,15 +379,21 @@ export async function runCheck({ publicDir = DEFAULT_PUBLIC } = {}) {
 
     // One row per input, carrying the SMALLEST size any viewport produced and
     // saying which one. The smallest is what decides whether iOS zooms.
+    // Keyed on DOM POSITION, not on id-or-class: the key was
+    // `id || cls|type`, which collapsed two id-less inputs sharing a class and
+    // type into one row. Detection still fired, but the FAIL line and
+    // textInputsBelow16.length named only one of them, so a fixer would repair
+    // one and ship the sibling. Position is stable here because both passes
+    // enumerate the same DOM in the same order.
     const byKey = new Map();
     for (const pass of passes) {
-      for (const i of pass.inputs) {
-        const key = i.id || `${i.cls}|${i.type}`;
+      pass.inputs.forEach((i, idx) => {
+        const key = i.id || `#${idx}`;
         const prev = byKey.get(key);
         if (!prev || i.computedFontSizePx < prev.computedFontSizePx) {
           byKey.set(key, { ...i, smallestAt: pass.viewport.name });
         }
-      }
+      });
     }
     const inputs = [...byKey.values()];
 
@@ -348,22 +413,35 @@ export async function runCheck({ publicDir = DEFAULT_PUBLIC } = {}) {
 
     return report;
   } finally {
+    // Every release is optional-chained or null-checked: after the fix above,
+    // any of these can legitimately be null because the throw happened partway
+    // through acquiring them.
     client?.close();
-    server.close();
-    // WAIT for Chrome to actually exit before deleting its profile. kill()
-    // only signals: on Windows the profile's lock files are still held when it
-    // returns, so the rm threw, the .catch() swallowed it, and every run left a
-    // ~1.1MB directory behind in %TEMP% (seven of them had accumulated before
-    // review caught it). Bounded so a wedged Chrome cannot hang the script.
-    const exited = new Promise((resolve) => child.once('exit', resolve));
-    child.kill();
-    // unref'd, or the pending timer keeps the event loop alive and the CLI sits
-    // idle for a full 5s AFTER printing its report. It also always waited the
-    // whole 5s on the spawn-failure path, where 'exit' never fires at all
-    // because the child never started.
-    await Promise.race([exited, new Promise((r) => { setTimeout(r, 5000).unref(); })]);
-    await rm(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
-      .catch(() => {});
+    server?.close();
+
+    if (child) {
+      // WAIT for Chrome to actually exit before deleting its profile. kill()
+      // only signals: on Windows the profile's lock files are still held when
+      // it returns, so the rm threw, the .catch() swallowed it, and every run
+      // left a ~1.1MB directory behind in %TEMP%.
+      const exited = new Promise((resolve) => child.once('exit', resolve));
+      child.kill();
+      // REF'D AND CLEARED, not unref'd. Unref'd was worse than the 5s idle it
+      // fixed: on an async spawn failure 'exit' never fires, so with no ref'd
+      // handle behind the race the loop drained and NODE EXITED 0 WITH NO
+      // OUTPUT - rm skipped, main().catch() never reached, exitCode never set.
+      // A check whose whole contract is "exits non-zero on failure" silently
+      // exited zero when the browser never started. Clearing the timer when
+      // `exited` wins is what keeps the fast path fast.
+      let timer;
+      await Promise.race([exited, new Promise((r) => { timer = setTimeout(r, 5000); })]);
+      clearTimeout(timer);
+    }
+
+    if (userDataDir) {
+      await rm(userDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+        .catch(() => {});
+    }
   }
 }
 

@@ -1,42 +1,41 @@
 ---
 name: setup
-description: One-time host setup for claude-remote - prepares this Windows machine so a persistent Claude Code session can be reached over Tailscale from any of your other devices. Not yet implemented; reports its status and stops.
+description: One-time host setup for claude-remote. NOT IMPLEMENTED - the design it was written for was deleted. Reports its status and stops.
 ---
 
 # Claude Remote - host setup
 
-**Status: not implemented yet, except steps 1 and 2.** This skill is a placeholder. The
-host-setup steps below are specified in `docs/claude-remote-prd.md` section 5.0 and
-section 6, and land as this project's milestone M0 work completes. Steps 1 and 2 are
-implemented as `Test-TailscaleRunning` and `Get-DefaultShellPath` in
-`src/ClaudeRemote/ClaudeRemote.psm1`. Until the rest lands, do not attempt any of the
-other steps by hand from this skill.
+**Status: NOT IMPLEMENTED, and the steps it used to describe are gone.**
 
-Tell the user, plainly, that setup is not built yet, list the steps it will perform,
-and stop. Do not improvise the automation, do not run `wsl`, `ssh-keygen`,
-`sshd`, or any firewall command, and do not edit any system configuration.
+This skill described one-time setup for the SSH + WSL1 + tmux design: install
+WSL1, install tmux/Node/ttyd inside it, install and configure Windows OpenSSH
+Server, add a firewall rule, generate an SSH keypair. Steps 1 and 2 were real
+and called `Test-TailscaleRunning` / `Get-DefaultShellPath` in
+`src/ClaudeRemote/ClaudeRemote.psm1`.
 
-## What this skill will do once implemented
+**T53 deleted that whole path on 2026-09-05** (owner's call, 2026-08-27:
+"A: delete"). WSL is not installed on the host and never was; the path had
+never run end to end. So every step this skill described now points at code
+that does not exist, and following any of it would be following a design the
+project abandoned.
 
-1. Import `src/ClaudeRemote/ClaudeRemote.psm1` and call `Test-TailscaleRunning`. On
-   `$false`, stop the whole setup, tell the user Tailscale is not running and to start
-   it (`tailscale up`) then re-run setup - never continue to a firewall step or fall
-   back to an unscoped rule.
-2. Call `Get-DefaultShellPath`, which returns the full path to `pwsh.exe` when
-   PowerShell 7 is installed and the `powershell.exe` (5.1) path otherwise, and hand
-   that path to step 6.
-3. Install WSL1 if absent, then tmux, Node, ttyd, and the Claude Code CLI inside it.
-4. Install and configure Windows OpenSSH Server: key-based auth only, password auth
-   disabled.
-5. Add a Windows Firewall rule scoped to the Tailscale interface/subnet only, never
-   `0.0.0.0`.
-6. Set the OpenSSH default shell to the PowerShell detected in step 2.
-7. Generate the SSH keypair and print the connection string once - never logging or
-   persisting the private key.
-8. Ask one setup question, "Default folder when you're not inside a specific project?"
-   (Desktop suggested), and persist it.
+The shipped product is a **Node agent on native Windows serving a PWA on
+8790**, exposed by `tailscale serve`. It needs no WSL, no tmux, no SSH server
+and no keypair.
 
-## Per-run use is a different thing
+## What to do if a user runs this
 
-Starting or resuming a session is `claude-remote.ps1` at the repo root, not this skill.
-This skill runs once per host.
+Tell them plainly that automated host setup is not built, and that the setup
+this skill described belongs to a design that was removed. Do not improvise it.
+Specifically: **do not run `wsl`, `ssh-keygen` or `sshd`, do not add a firewall
+rule, and do not edit any system configuration.**
+
+The real remaining setup steps are Tailscale (`tailscale up`, then
+`tailscale serve --bg --https=8790 8790`) and setting a passcode on first open
+of the PWA. Both are in `README.md` and `docs/tailscale-https.md`.
+
+## Why this file still exists
+
+Rewriting it properly is T60's job, and doing it here would pre-empt that with
+a guess. What is fixed now is only the actively harmful part: it no longer
+tells a reader to import a module that was deleted.

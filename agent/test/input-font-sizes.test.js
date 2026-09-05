@@ -17,7 +17,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runCheck, DEFAULT_PUBLIC, FLOOR_PX } from '../../scripts/check-input-font-sizes.mjs';
+import {
+  runCheck, DEFAULT_PUBLIC, FLOOR_PX, CHROME_UNAVAILABLE,
+} from '../../scripts/check-input-font-sizes.mjs';
 
 /**
  * Runs the check. A missing Chrome FAILS by default and skips only when the
@@ -34,7 +36,11 @@ async function check(ctx, publicDir) {
   try {
     return await runCheck({ publicDir });
   } catch (err) {
-    if (/no Chrome found/.test(err.message)) {
+    // The CODE, not the message. This matched /no Chrome found/ until review
+    // showed a CHROME pointing at a non-executable throws `spawn EFTYPE`
+    // instead - so the opt-out was bypassed and the suite failed on a machine
+    // that had explicitly declared it could not run this check.
+    if (err.code === CHROME_UNAVAILABLE) {
       if (process.env.ALLOW_NO_CHROME === '1') {
         ctx.skip('ALLOW_NO_CHROME=1 - the input-zoom floor is NOT being checked on this run');
         return null;

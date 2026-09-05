@@ -5,8 +5,10 @@ import path from 'node:path';
 export const FALLBACK_BASE_DIR = 'F:\\Dev\\Projects\\Repos';
 
 /**
- * Absolute path of the claude-remote config file, same folder the
- * PowerShell side (Get-ConfigFilePath, ClaudeRemote.psm1:102) reads.
+ * Absolute path of the claude-remote config file. It used to be shared with a
+ * PowerShell reader (Get-ConfigFilePath); that path was deleted by T53 on
+ * 2026-09-05, so this is now the ONLY reader and the location is free to
+ * change if there is ever a reason.
  */
 export function getConfigFilePath() {
   return path.join(os.homedir(), '.claude', 'plugins', 'data', 'claude-remote-claude-remote', 'config.json');
@@ -107,8 +109,10 @@ export function getAttemptsFilePath() {
 
 /**
  * Resolves the base project directory from the claude-remote config file,
- * mirroring Get-DefaultBaseFolder (ClaudeRemote.psm1:133) and falling back
- * to FALLBACK_BASE_DIR whenever the config is absent, empty or invalid.
+ * falling back to FALLBACK_BASE_DIR whenever the config is absent, empty or
+ * invalid. It used to mirror a PowerShell Get-DefaultBaseFolder; that reader
+ * was deleted by T53, so there is no second implementation to stay in step
+ * with any more. (T54 still wants the fallback itself replaced by a refusal.)
  */
 export function resolveBaseDir(configPath = getConfigFilePath()) {
   let raw;

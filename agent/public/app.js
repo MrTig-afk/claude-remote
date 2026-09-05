@@ -1753,8 +1753,15 @@ let removingRoot = false;
  */
 async function removeRoot(rootPath) {
   if (removingRoot) return null;
+  const body = withoutRoot(state.shared, rootPath);
+  // REFUSE rather than guess. The notice this is tapped from was drawn from a
+  // shared set that may have been nulled by a load() between the paint and the
+  // tap, and writing then would turn "remove this one dead root" into "remove
+  // all roots". onChooseFolders already refuses to "enter blind"; this is the
+  // same rule on the way out.
+  if (body === null) return { ok: false, status: 0, code: 'shared_unknown' };
   removingRoot = true;
-  const res = await putShared(withoutRoot(state.shared, rootPath));
+  const res = await putShared(body);
   removingRoot = false;
   if (res.ok) state.shared = res.data.shared_folders ?? null;
   return res;
@@ -2761,6 +2768,13 @@ function agentStateLine(reachable) {
 
 function openSettingsSub(key) {
   if (!SETTINGS_SUBS.has(key)) return;
+  // The double-tap guard every other history-push site already has (openConfirm,
+  // openFolderScreen, openSettings, showSheet). Without it a double-tap left
+  // settingsSubs as ['shared','shared'] with two stacked history entries, so the
+  // first back gesture popped one and re-rendered the SAME screen - the back
+  // button reading as dead for one press - and via openRootEditor it fired two
+  // GET /api/folders for the same root.
+  if (currentSub() === key) return;
   settingsSubs.push(key);
   showScreen(key, 'deeper');
   renderSettingsSub(key);
@@ -3328,8 +3342,19 @@ function toggleRootTick(name, ticked) {
 async function saveRootEdit() {
   if (rootEdit === null || rootEdit.rows === null) return;
   const btn = document.getElementById('root-save');
-  btn.disabled = true;
   const body = withRootExcludes(state.shared, rootEdit.path, excludesFrom(rootEdit.rows));
+  // REFUSE rather than wipe. state.shared is nulled by load() whenever
+  // GET /api/acknowledge fails, and load() runs on every visibilitychange - so
+  // backgrounding the app on this screen during a network blip and then tapping
+  // SAVE used to write `{ shared_folders: [] }` and unshare EVERY folder.
+  // Saying so and doing nothing is the only safe answer: the excludes on screen
+  // were themselves derived from the same unknown set.
+  if (body === null) {
+    document.getElementById('root-msg').textContent =
+      'Lost track of your shared folders while the app was in the background. Tap REFRESH on the project list, then try again.';
+    return;
+  }
+  btn.disabled = true;
   const res = await putShared(body);
   btn.disabled = false;
 

@@ -153,9 +153,18 @@ export function missingRoots(shared) {
  * { shared_folders: [] }, which PUT /api/shared accepts.
  */
 export function withoutRoot(shared, path) {
+  // NULL IN, NULL OUT - never an empty set. `(shared || [])` used to turn "this
+  // app does not currently know the shared set" into "the shared set is empty",
+  // and PUT /api/shared accepts an empty array as a valid set, so the result
+  // was: every shared root wiped from config.json. state.shared is nulled by
+  // load() whenever GET /api/acknowledge fails, and load() runs on every
+  // visibilitychange - so a network blip while the app was backgrounded was
+  // enough. Callers must refuse to save on null; they cannot do that if this
+  // function has already invented an answer.
+  if (!Array.isArray(shared)) return null;
   const target = pathKey(path);
   return {
-    shared_folders: (shared || [])
+    shared_folders: shared
       .filter((r) => pathKey(r.path) !== target)
       .map((r) => ({
         path: r.path,
@@ -396,9 +405,12 @@ export function excludesFrom(rows) {
  * own excludes. A root this app does not hold is returned unchanged.
  */
 export function withRootExcludes(shared, path, excludes) {
+  // NULL IN, NULL OUT, for the same reason as withoutRoot above: an unknown
+  // shared set must never be written out as an empty one.
+  if (!Array.isArray(shared)) return null;
   const target = pathKey(path);
   return {
-    shared_folders: (shared || []).map((r) => ({
+    shared_folders: shared.map((r) => ({
       path: r.path,
       mode: r.mode === 'single' ? 'single' : 'container',
       excludes: pathKey(r.path) === target

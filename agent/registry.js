@@ -440,7 +440,7 @@ export function listSessions(ctx) {
 
   const nowMs = now();
   const survivors = [];
-  const views = [];
+  let views = [];   // let, not const: the desk-discovery merge at the end reassigns it
   let droppedAny = false;
   // Set when an entry is normalised IN PLACE rather than removed. Without it
   // the write-back below never fires for a mutation, and the normalisation
@@ -668,8 +668,32 @@ export function listSessions(ctx) {
   // Discovery runs AFTER the prune/write and never writes anything itself -
   // a read of /api/sessions must not mutate the registry on account of a
   // desk session.
-  const claimed = new Set(views.map((v) => v.session_name));
-  views.push(...discoverDeskSessions(ctx, projects, claimed));
+  // LIVE views only. This was every view, including the ones pushed as
+  // `failed` and `ended` - and those represent nothing runnable, which is
+  // exactly why findLiveSession excludes them. Including them here let a dead
+  // record hide a real session: a launch whose pid file never landed ages into
+  // `failed` and is kept for 24h, and if the owner then walks to the desk and
+  // starts Claude in that same folder, deriveDeskSessionName produces the
+  // identical name, discovery skips it, and the phone shows "launch
+  // unconfirmed" with no tile and no STOP for a session that IS running - for
+  // up to a day. The two rules must agree on what "live" means.
+  const claimed = new Set(
+    views.filter((v) => v.status !== 'failed' && v.status !== 'ended')
+      .map((v) => v.session_name),
+  );
+  const desk = discoverDeskSessions(ctx, projects, claimed);
+
+  // A discovered LIVE session REPLACES a dead record for the same name rather
+  // than sitting beside it - otherwise one folder would draw two rows, one
+  // saying "ended" and one saying "running", which is worse than the masking
+  // this fixes. When no desk session is found the dead record is untouched and
+  // still reports what happened, which is the whole reason it is retained.
+  if (desk.length) {
+    const found = new Set(desk.map((v) => v.session_name));
+    views = views.filter((v) => !(found.has(v.session_name)
+      && (v.status === 'failed' || v.status === 'ended')));
+  }
+  views.push(...desk);
   return views;
 }
 

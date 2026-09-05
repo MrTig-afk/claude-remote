@@ -1,6 +1,6 @@
 {
   "name": "claude-remote",
-  "description": "Keep a Claude Code session running on your Windows host and reach it from any device on your Tailscale network, over WSL1 tmux and SSH. Run /claude-remote:setup for one-time host setup.",
+  "description": "Start a Claude Code session on your Windows PC from your phone, over your Tailscale network. A small local agent serves a PWA; the session it starts appears in the Claude app's Code tab and you drive it from there.",
   "version": "0.1.0",
   "author": {
     "name": "Kaushik Narumanchi"
