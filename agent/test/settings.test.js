@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { codeOnly } from './helper-source.js';
 
 import * as folders from '../public/folders-ui.js';
 import * as update from '../public/update-ui.js';
@@ -582,7 +583,12 @@ test('S14 - onChooseFolders never enters the picker blind, and showFolders( has 
   await onChooseFolders();
   assert.equal(entered, false, 'a null shared set must never open the picker');
 
-  const js = read('app.js');
+  // codeOnly: this counted call sites in RAW source, so any COMMENT naming the
+  // function counted as one. That has now broken the suite four separate times
+  // while the code was correct - the exact confusion helper-source.js exists to
+  // end. A claim about what the code DOES must not be answered by what the
+  // source SAYS.
+  const js = codeOnly(read('app.js'));
   const callSites = [...js.matchAll(/showFolders\(/g)].filter((m) => {
     const before = js.slice(Math.max(0, m.index - 9), m.index);
     return before !== 'function ';

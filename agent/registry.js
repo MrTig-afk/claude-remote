@@ -440,17 +440,33 @@ export function listSessions(ctx) {
 
   const nowMs = now();
   const survivors = [];
-  const views = [];
+  let views = [];   // let, not const: the desk-discovery merge at the end reassigns it
   let droppedAny = false;
-  // Set when an entry is normalised IN PLACE rather than removed. Without it
-  // the write-back below never fires for a mutation, and the normalisation
-  // would be recomputed - and lost - on every single request.
+  // Pid files whose entries were pruned this pass. Unlinked only AFTER the
+  // registry write succeeds - see the note on drop() below.
+  const pidFilesToClear = [];
+  // (A comment stood here describing a second flag - "set when an entry is
+  // normalised IN PLACE rather than removed" - that had no declaration under
+  // it and no code behind it. Verified before deleting: nothing in this loop
+  // assigns to `entry`, and every survivor is pushed unmodified, so there is no
+  // in-place normalisation to persist. It read as documentation of
+  // `droppedAny`, whose only writer is drop(), and pointed the next reader at a
+  // guard that does not exist.)
 
   for (const entry of entries) {
+    // DEFERRED, not immediate. This used to unlink the pid file here - the
+    // irreversible half - while the durable half (writeRegistry) runs ~200
+    // lines below and SWALLOWS its own failure, returning false that nobody
+    // reads. So if that write failed (a file lock from AV, a full disk, a
+    // read-only profile dir) the pid file was already gone and the entry
+    // survived: the next poll found no pid, aged it past the grace window, and
+    // reported `failed` - "launch unconfirmed" - for a session that had run and
+    // exited cleanly, for the full 24h retention. Collect the names and flush
+    // them only once the registry write has actually landed.
     const drop = (sessionNameForCleanup) => {
       droppedAny = true;
       if (typeof sessionNameForCleanup === 'string' && sessionNameForCleanup !== '') {
-        clearPidFile({ pidDir }, sessionNameForCleanup);
+        pidFilesToClear.push(sessionNameForCleanup);
       }
     };
 
@@ -662,14 +678,46 @@ export function listSessions(ctx) {
   }
 
   if (droppedAny) {
-    writeRegistry(registryPath, survivors);
+    // The pid files go ONLY if the registry write actually landed. writeRegistry
+    // returns false on failure rather than throwing, and that return was
+    // previously ignored - which is what let the irreversible half happen
+    // without the durable half. If the write failed the entries are still in
+    // sessions.json, so their pid files must still be there to match, and the
+    // next poll re-derives the same truth instead of inventing a `failed`.
+    if (writeRegistry(registryPath, survivors)) {
+      for (const name of pidFilesToClear) clearPidFile({ pidDir }, name);
+    }
   }
 
   // Discovery runs AFTER the prune/write and never writes anything itself -
   // a read of /api/sessions must not mutate the registry on account of a
   // desk session.
-  const claimed = new Set(views.map((v) => v.session_name));
-  views.push(...discoverDeskSessions(ctx, projects, claimed));
+  // LIVE views only. This was every view, including the ones pushed as
+  // `failed` and `ended` - and those represent nothing runnable, which is
+  // exactly why findLiveSession excludes them. Including them here let a dead
+  // record hide a real session: a launch whose pid file never landed ages into
+  // `failed` and is kept for 24h, and if the owner then walks to the desk and
+  // starts Claude in that same folder, deriveDeskSessionName produces the
+  // identical name, discovery skips it, and the phone shows "launch
+  // unconfirmed" with no tile and no STOP for a session that IS running - for
+  // up to a day. The two rules must agree on what "live" means.
+  const claimed = new Set(
+    views.filter((v) => v.status !== 'failed' && v.status !== 'ended')
+      .map((v) => v.session_name),
+  );
+  const desk = discoverDeskSessions(ctx, projects, claimed);
+
+  // A discovered LIVE session REPLACES a dead record for the same name rather
+  // than sitting beside it - otherwise one folder would draw two rows, one
+  // saying "ended" and one saying "running", which is worse than the masking
+  // this fixes. When no desk session is found the dead record is untouched and
+  // still reports what happened, which is the whole reason it is retained.
+  if (desk.length) {
+    const found = new Set(desk.map((v) => v.session_name));
+    views = views.filter((v) => !(found.has(v.session_name)
+      && (v.status === 'failed' || v.status === 'ended')));
+  }
+  views.push(...desk);
   return views;
 }
 

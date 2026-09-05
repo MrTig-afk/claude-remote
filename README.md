@@ -69,24 +69,17 @@ To expose the agent to your phone over HTTPS via Tailscale, follow
 
 ## Tests
 
-```powershell
-Invoke-Pester .\tests\ClaudeRemote.Tests.ps1
-```
-
 ```
 node --test "agent/test/**/*.test.js"
 ```
 
-Run the second one from the repo root; the bare-directory form
-(`node --test agent/test/`) fails on this host.
+Run it from the repo root; the bare-directory form (`node --test agent/test/`)
+fails on this host.
 
-## Legacy: SSH + WSL1 + tmux path
-
-`claude-remote.ps1`, `src/`, and `tests/` are the earlier Tailscale +
-Windows OpenSSH Server + WSL1 (tmux, Node, Claude Code CLI) design, driven
-from an SSH client such as ConnectBot or Blink Shell. That path is present in
-the repo but not supported and not documented further; the PWA and Local
-Agent above are the current design.
+Some of the suite drives a real headless Chrome to check that no text input
+renders under 16px, because below that iOS Safari zooms the page and does not
+zoom back out. If Chrome is not installed where the check looks, set
+`CHROME=<path>`, or `ALLOW_NO_CHROME=1` to skip that check knowingly.
 
 ## License
 

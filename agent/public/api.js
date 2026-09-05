@@ -38,10 +38,30 @@ async function request(path, options = {}, timeoutMs = TIMEOUT_MS) {
     return { ok: false, status: 0, code: err.name === 'TimeoutError' ? 'timeout' : 'network' };
   }
 
+  // 204 means "done, nothing to say", so there is no body to parse - and
+  // res.json() THROWS on an empty one. Without this, POST /api/sessions/dismiss
+  // (server.js writes 204) always came back as `bad_response`: harmless only
+  // because that one caller is fire-and-forget, but this is the single network
+  // path for the whole app and the next 204 route would have read as a failure.
+  if (res.status === 204) {
+    return { ok: true, status: 204, data: {} };
+  }
+
   let data;
   try {
     data = await res.json();
-  } catch {
+  } catch (err) {
+    // A TIMEOUT DURING THE BODY READ IS A TIMEOUT, not a bad response.
+    // AbortSignal.timeout aborts the body stream too, so headers arriving at 9s
+    // and the body stalling landed here and reported `bad_response` with a real
+    // HTTP status. load() only routes 'network' and 'timeout' into the waiting
+    // ladder; everything else gets an error banner with waitTries reset and NO
+    // retry - so a PC that slept mid-response left the app permanently on "the
+    // agent refused the request" instead of the retry state built for exactly
+    // that case. Same discrimination the outer catch already makes.
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      return { ok: false, status: 0, code: 'timeout' };
+    }
     return { ok: false, status: res.status, code: 'bad_response' };
   }
 

@@ -1054,7 +1054,17 @@ test('discoverDeskSessions - a registry entry for the project wins over a live d
   assert.equal(views[0].status, 'running');
 });
 
-test('discoverDeskSessions - a registry entry still wins even when its status is ended', () => {
+// BEHAVIOUR CHANGED 2026-09-05 by the whole-repo review. This test used to
+// assert the opposite - "a registry entry still wins even when its status is
+// ended" - and that was the bug, pinned. `claimed` was built from EVERY view,
+// including `failed` and `ended`, so a dead record hid a session that was
+// genuinely running: a launch whose pid file never landed ages into `failed`
+// and is kept 24h, and if the owner then starts Claude at the desk in that same
+// folder, deriveDeskSessionName produces the identical name and discovery
+// skipped it. The phone showed "launch unconfirmed", with no tile and no STOP,
+// for a live session, for up to a day. findLiveSession has always treated
+// failed/ended as NOT live; the two rules now agree.
+test('discoverDeskSessions - a LIVE desk session replaces a dead `ended` record, and does not double it', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now, livePids: new Set([4248]) });
   const entry = validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
@@ -1062,6 +1072,24 @@ test('discoverDeskSessions - a registry entry still wins even when its status is
   });
   writeSessions(ctx.registryPath, [entry]);
   writeDeskFile(ctx.sessionDirs[0], { pid: 4248, sessionId: 'abc-123', cwd: path.join(base, 'Pull Requests') });
+
+  const views = listSessions(ctx);
+  // ONE row, not two: replacing rather than appending. One folder showing both
+  // "ended" and "running" at once would be worse than the masking it fixes.
+  assert.equal(views.length, 1, 'the dead record must be replaced, not joined');
+  assert.equal(views[0].source, 'desk');
+  assert.equal(views[0].status, 'running');
+  assert.equal(views[0].pid, 4248);
+});
+
+test('discoverDeskSessions - with NO desk session, the `ended` record still reports what happened', () => {
+  // The other half of the same rule: the retention exists so the owner learns a
+  // session ended. Only a live session in that folder may displace it.
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 60_000).toISOString(), {
+    status: 'ended', ended_at: new Date(now - 1000).toISOString(),
+  })]);
 
   const views = listSessions(ctx);
   assert.equal(views.length, 1);
