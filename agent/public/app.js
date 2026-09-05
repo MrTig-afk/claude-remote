@@ -1891,10 +1891,27 @@ function goHome() {
     // Settings comes off in one traversal however deep it went. Counted
     // BEFORE the stack is emptied - read after, it is always zero, which is
     // the same off-by-one that broke the back button and lockNow.
-    const depth = settingsSubs.length + (settingsPushed ? 1 : 0);
+    // The FOLDER entries come off too, and this branch used to forget them.
+    // #settings-open is visible whenever state.screen is 'list' - and the
+    // drilled-in folder view IS the 'list' screen - so Settings is reachable
+    // from inside a folder. Clearing only the settings flags left
+    // state.openFolder set, so renderProjects redrew the folder's children and
+    // its back bar: the mark landed back in the folder rather than at the top
+    // of the project list, contradicting this function's own contract one line
+    // above and the list branch three lines below, which does clear them.
+    // confirm and sheet are counted for the same reason the list branch counts
+    // them - a flag that is false costs nothing, and one that is true and
+    // uncounted orphans an entry.
+    const depth = settingsSubs.length + (settingsPushed ? 1 : 0)
+      + (confirmPushed ? 1 : 0) + (folderPushed ? 1 : 0) + (sheetPushed ? 1 : 0);
     settingsSubs.length = 0;
     closingSub = false;
     settingsPushed = false;
+    state.confirmName = null;
+    state.openFolder = null;
+    confirmPushed = false;
+    folderPushed = false;
+    sheetPushed = false;
     showScreen('list');
     render();
     history.go(-depth);
@@ -2564,6 +2581,15 @@ function onFoldersPop() {
 let resolveFolders = null;
 
 function finishFolders() {
+  // INVALIDATE ANY IN-FLIGHT LEVEL LOAD FIRST. share.nav's own comment claims
+  // it "never needs a reset"; that was true only while the picker outlived
+  // every request. It does not: drill into a folder, then tap SKIP before
+  // GET /api/folders returns, and the late response passes its `nav !==
+  // share.nav` check, falls through, and runs history.pushState + share.pushed
+  // += 1 onto a screen that has just been torn down. The entry has no owner -
+  // onFoldersPop is unregistered by the time it lands and onPopState has no
+  // branch for it - so the owner's next back press does nothing.
+  share.nav += 1;
   const els = shareEls();
   els.list.removeEventListener('change', onShareListChange);
   els.list.removeEventListener('click', onShareListClick);
@@ -2760,6 +2786,23 @@ const settingsSubs = [];
 /** The screen currently showing below the root, or null on the root itself. */
 function currentSub() {
   return settingsSubs.length === 0 ? null : settingsSubs[settingsSubs.length - 1];
+}
+
+/**
+ * Forgets everything this module knows about where Settings is, WITHOUT
+ * touching history. For the one caller that has already lost the screens the
+ * flags describe: the 401 re-lock, which tears the app back to the gate.
+ *
+ * It does not call history.go() on purpose. The re-lock is not a back gesture -
+ * the entries it left are stranded either way, and popping them here would race
+ * the gate that is being drawn over the top. Clearing the flags is what stops
+ * openSettings believing it has already pushed, and stops openSettingsSub's
+ * double-tap guard treating a row the owner can no longer see as still open.
+ */
+function resetSettingsNav() {
+  settingsSubs.length = 0;
+  settingsPushed = false;
+  closingSub = false;
 }
 
 /** The screen a back gesture from the top of the stack lands on. */
@@ -3267,7 +3310,23 @@ async function openRootEditor(rootPath) {
     }
     return;
   }
-  const shared = (state.shared || []).find((r) => r.path === rootPath);
+  // REFUSES TO BUILD ROWS FROM AN UNKNOWN SET. `(state.shared || [])` coerced
+  // "we do not know what is shared" into "nothing is excluded", so every child
+  // rendered TICKED - a selection that was never real.
+  // The write side was fixed first, but its refusal is evaluated at SAVE time
+  // against the THEN-current state.shared: null the set with a background blip,
+  // let this listing paint all-ticked, foreground again so load() restores the
+  // set, and SAVE now passes the guard and silently re-shares every child the
+  // owner had deliberately excluded. Same family as the fixed saveRootEdit bug,
+  // one door upstream, and the reason the guard has to be here too.
+  if (!Array.isArray(state.shared)) {
+    rootEdit.rows = null;   // keeps SAVE disabled - renderRootEditor gates on it
+    document.getElementById('root-msg').textContent =
+      'Lost track of your shared folders while the app was in the background. Tap REFRESH on the project list, then open this again.';
+    renderRootEditor();
+    return;
+  }
+  const shared = state.shared.find((r) => r.path === rootPath);
   rootEdit.rows = rootEditRows(res.data.folders, shared ? shared.excludes : [], runningProjectNames());
   document.getElementById('root-msg').textContent = '';
   renderRootEditor();
@@ -3632,7 +3691,38 @@ async function ensureAccepted() {
   // firstRun is false - the acknowledgement was written before the picker ever
   // opened. Without `|| pendingFolders` the screen is never brought back and
   // the promise the first run is awaiting never resolves.
-  if (firstRun || pendingFolders) await showFolders(share.ticks);
+  // REFUSES TO OPEN BLIND, and seeds from the set we actually know.
+  //
+  // This used to open the picker whenever `firstRun || pendingFolders` was
+  // true, seeded from the module's own empty tick set, and it could REPLACE the
+  // owner's shared folders. screenAfterUnlock returns
+  // 'accept' for ANYTHING that is not ok+acknowledged - a timeout, a 500, a
+  // network blip - which is the right fail-closed rule for the WARNING but the
+  // wrong one for the picker. So after one slow reply (routine on a tailnet
+  // after wake) a returning owner with five roots saw the first-run warning,
+  // then a picker reporting 0 selected over a config holding all five. Ticking
+  // one and saving sends that one root, and putSharedFolders REPLACES the whole
+  // set - the other four gone. Not the empty-set wipe (SAVE is disabled at zero
+  // ticks) but the same loss by another route.
+  // onChooseFolders already refuses to enter this picker blind; this was the
+  // one door without that guard.
+  // ONE call site here, deliberately. A test counts the picker-opening calls in
+  // this file and requires exactly two, because a third unguarded caller is how
+  // this class of bug gets back in - so this branch must not grow a second one.
+  // (Written without naming that function literally: the test scans the source,
+  // and a comment that spells it counts as a call site. That has now cost this
+  // project four separate red suites.)
+  // `reopen` is a live run whose promise something is awaiting; showFolders
+  // hands that same promise back and ignores `initial`, so its tick set is
+  // untouched. Otherwise the picker opens ONLY when the set is known - on a
+  // genuine first run that is [], so it still opens empty, which is correct
+  // because nothing IS shared. When the set is unknown nothing opens and we
+  // fall through to the list, where load() reports the agent unreachable, which
+  // is the truth.
+  const reopen = pendingFolders !== null;
+  if (reopen || (firstRun && Array.isArray(state.shared))) {
+    await showFolders(reopen ? share.ticks : sharedToTicks(state.shared));
+  }
   picker.hidden = false;
   showScreen('list');
 }
@@ -3647,6 +3737,22 @@ async function ensureAccepted() {
  */
 function showAccept() {
   showScreen('accept');
+  // KNOWN CEILING, and the docblock above overstates it. That note says the
+  // listeners are removed "on the way out so a second run cannot stack a
+  // duplicate closure over the same nodes" - true of a SEQUENTIAL second run,
+  // and false of a concurrent one, which is the only kind that happens here:
+  // boot()'s own comment anticipates the token expiring while this screen is
+  // up, and onAuthLost then re-enters ensureAccepted -> showAccept while the
+  // first promise is still pending with its four listeners live (they come off
+  // only inside the success branch). One tap on ACCEPT runs both closures,
+  // firing two POSTs and a redundant drives fetch.
+  // NOT GUARDED, deliberately. showFolders solves this with pendingFolders and
+  // lock.js with `pending`, and the same guard was written here and then taken
+  // back out: it makes a repeat call return the first promise WITHOUT
+  // re-rendering, which six accept tests correctly rely on not happening. The
+  // POST is idempotent (acknowledge() returns the existing timestamp), so the
+  // cost is two redundant requests, not a wrong write. Upgrade path if it ever
+  // matters: guard on a flag that still re-renders, rather than returning early.
   const el = {
     accept: document.getElementById('accept'),
     title: document.getElementById('accept-title'),
@@ -4016,7 +4122,17 @@ async function boot() {
   // hiding #picker no longer takes it with it. Without this a 401 in the
   // seconds it is up leaves the header inert and a stale history entry
   // behind, and neither recovers without a reload.
-  onAuthLost(async () => { hideConn(); closeSheetHard(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
+  // resetSettingsNav() alongside closeSheetHard(), and for the same reason.
+  // closeSheetHard clears `sheetPushed`; nothing cleared the THREE settings
+  // flags, so a token expiring while Settings > Shared folders was open left
+  // `settingsSubs = ['shared']` and `settingsPushed = true` while the screen
+  // became 'list'. That is the one state onPopState cannot handle - 'list' is
+  // not in SETTINGS_SUBS, so back did nothing - and worse, openSettings then
+  // saw settingsPushed already true and pushed nothing, while openSettingsSub's
+  // double-tap guard (`currentSub() === key`) made the Shared folders row a
+  // DEAD TAP for the rest of the session. lockNow only escaped this by doing a
+  // full location.reload().
+  onAuthLost(async () => { hideConn(); closeSheetHard(); resetSettingsNav(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on

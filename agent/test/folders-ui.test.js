@@ -385,27 +385,35 @@ test('H4 (OQ1) - GET /api/projects reflects a PUT /api/shared write on the SAME 
 // editor during a network blip and then tapping SAVE was enough.
 
 test('withoutRoot(null, path) returns NULL, never an empty set', () => {
-  assert.equal(withoutRoot(null, 'F:\Dev'), null);
-  assert.equal(withoutRoot(undefined, 'F:\Dev'), null);
+  assert.equal(withoutRoot(null, String.raw`F:\Dev`), null);
+  assert.equal(withoutRoot(undefined, String.raw`F:\Dev`), null);
 });
 
 test('withRootExcludes(null, ...) returns NULL, never an empty set', () => {
-  assert.equal(withRootExcludes(null, 'F:\Dev', ['x']), null);
-  assert.equal(withRootExcludes(undefined, 'F:\Dev', ['x']), null);
+  assert.equal(withRootExcludes(null, String.raw`F:\Dev`, ['x']), null);
+  assert.equal(withRootExcludes(undefined, String.raw`F:\Dev`, ['x']), null);
 });
 
 test('a non-array shared set is refused too, not coerced', () => {
   // The failure mode is a WRITE built from a value that is not a known set.
   // Anything that is not an array qualifies, however it got there.
   for (const bad of [{}, 'nope', 0, false]) {
-    assert.equal(withoutRoot(bad, 'F:\Dev'), null, `withoutRoot(${JSON.stringify(bad)})`);
-    assert.equal(withRootExcludes(bad, 'F:\Dev', []), null, `withRootExcludes(${JSON.stringify(bad)})`);
+    assert.equal(withoutRoot(bad, String.raw`F:\Dev`), null, `withoutRoot(${JSON.stringify(bad)})`);
+    assert.equal(withRootExcludes(bad, String.raw`F:\Dev`, []), null, `withRootExcludes(${JSON.stringify(bad)})`);
   }
 });
 
-test('an EMPTY array is still a known set, and still removable', () => {
-  // The guard must not over-fire: [] means "nothing is shared", which is a real
-  // answer the app can act on, unlike null.
-  assert.deepEqual(withoutRoot([], 'F:\Dev'), { shared_folders: [] });
-  assert.deepEqual(withRootExcludes([], 'F:\Dev', ['x']), { shared_folders: [] });
+test('an EMPTY array is still a known set, and removing from it is a no-op', () => {
+  // The null guard must not over-fire: [] means "nothing is shared", which is a
+  // real answer the app can act on, unlike null. Removing a root from an empty
+  // set is idempotent and legitimate.
+  assert.deepEqual(withoutRoot([], String.raw`F:\Dev`), { shared_folders: [] });
+});
+
+test('editing excludes on a root that is NOT in a known set returns null', () => {
+  // A different question from the null guard, added in review pass 7. The set
+  // is KNOWN here; the root simply is not in it. Returning an identical body
+  // made the PUT succeed and saveRootEdit report a clean save while discarding
+  // the owner's edit. An empty set is the simplest case of "not there".
+  assert.equal(withRootExcludes([], String.raw`F:\Dev`, ['x']), null);
 });

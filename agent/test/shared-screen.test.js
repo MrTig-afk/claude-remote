@@ -442,10 +442,24 @@ test('L29 - SAVE writes this root\'s excludes and leaves every sibling byte for 
   });
 });
 
-test('L30 - a root this app does not hold is left exactly as it was', () => {
+// BEHAVIOUR CHANGED 2026-09-05, review pass 7. This asserted that an absent
+// root is "left exactly as it was" - an identical body. That is what the
+// docblock said, and it is what made the bug: the PUT then returns 200 and
+// saveRootEdit reports a clean save and closes the screen, with the owner's
+// edit silently thrown away. Reachable whenever state.shared is refreshed
+// between opening the editor and saving and no longer holds this root - a root
+// removed from another client, or dropped by usableRoots' filters.
+// "Not found" and "done" must not look alike. The old test pinned the
+// behaviour, not a decision: it carried no rationale for preferring silence.
+test('L30 - a root this app does not hold returns NULL, so the caller cannot report a false save', () => {
   const shared = [{ path: REPOS, mode: 'container', excludes: ['x'], new_folders: 'show' }];
-  assert.deepEqual(withRootExcludes(shared, 'D:\\Nope', ['y']), {
-    shared_folders: [{ path: REPOS, mode: 'container', excludes: ['x'], new_folders: 'show' }],
+  assert.equal(withRootExcludes(shared, 'D:\\Nope', ['y']), null);
+});
+
+test('L30b - a root that IS held still edits normally, so the guard is not over-firing', () => {
+  const shared = [{ path: REPOS, mode: 'container', excludes: ['x'], new_folders: 'show' }];
+  assert.deepEqual(withRootExcludes(shared, REPOS, ['y']), {
+    shared_folders: [{ path: REPOS, mode: 'container', excludes: ['y'], new_folders: 'show' }],
   });
 });
 

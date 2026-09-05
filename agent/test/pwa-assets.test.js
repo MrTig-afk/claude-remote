@@ -3023,14 +3023,34 @@ test('A14 - a second showFolders while one is pending re-reveals the screen, add
   assert.equal(drivesCalls, 2, 'the current level must be re-fetched on re-entry');
 });
 
-test('A15 - ensureAccepted re-opens the picker when a run is still pending', () => {
-  const js = read('app.js').replace(/\r/g, '');
+test('A15 - ensureAccepted re-opens a pending picker, and refuses to open one blind', () => {
+  // REWRITTEN 2026-09-05, review pass 7. This used to pin the LITERAL source
+  // string `if (firstRun || pendingFolders) await showFolders(` and call it
+  // "exactly this shape" - which pinned the BUG. screenAfterUnlock returns
+  // 'accept' for any non-401 failure, so after one slow reply a returning owner
+  // with N roots got the first-run warning and a picker reporting 0 selected;
+  // ticking one root and saving REPLACED the whole set. The test could not have
+  // caught that, because it asserted the presence of the line that caused it.
+  //
+  // Now asserts the three things that must be TRUE, on comment-stripped source:
+  // the gate runs first, a pending run still re-opens, and the picker is gated
+  // on the shared set being known.
+  const js = codeOnly(read('app.js').replace(/\r/g, ''));
   const fn = js.slice(js.indexOf('async function ensureAccepted()'), js.indexOf('function wireEvents()'));
-  const condition = 'if (firstRun || pendingFolders) await showFolders(';
-  assert.ok(fn.includes(condition), 'the re-entrancy condition must be exactly this shape');
+
   const gateLine = "if (screenAfterUnlock(res) === 'accept') await showAccept();";
   assert.ok(fn.includes(gateLine), 'the acknowledgement gate line must still be present verbatim');
-  assert.ok(fn.indexOf(gateLine) < fn.indexOf(condition), 'the gate line must still come before the re-entrancy condition');
+
+  const openIdx = fn.search(/await showFolders\(/);
+  assert.notEqual(openIdx, -1, 'ensureAccepted must still be able to open the picker');
+  assert.ok(fn.indexOf(gateLine) < openIdx, 'the gate must still come before the picker opens');
+
+  assert.match(fn, /pendingFolders/, 'a run already in flight must still be re-opened, or its awaiter hangs');
+  assert.match(
+    fn,
+    /Array\.isArray\(state\.shared\)/,
+    'the picker must open ONLY when the shared set is known - opening blind replaces the owner\'s roots',
+  );
 });
 
 test('A16 - finishFolders removes all six listeners and nulls pendingFolders', async () => {

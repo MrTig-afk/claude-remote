@@ -409,6 +409,14 @@ export function withRootExcludes(shared, path, excludes) {
   // shared set must never be written out as an empty one.
   if (!Array.isArray(shared)) return null;
   const target = pathKey(path);
+  // NULL when the target root is not in the set either. The docblock used to
+  // say "a root this app does not hold is returned unchanged", which
+  // understated what that means: the map produces a body byte-identical to the
+  // current set, the PUT returns 200, and the caller reports a clean save and
+  // closes the screen - with the owner's edit silently thrown away. Reachable
+  // whenever the set is refreshed between opening the editor and saving and no
+  // longer holds this root. "Not found" and "done" must not look alike.
+  if (!shared.some((r) => pathKey(r.path) === target)) return null;
   return {
     shared_folders: shared.map((r) => ({
       path: r.path,

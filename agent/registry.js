@@ -442,15 +442,31 @@ export function listSessions(ctx) {
   const survivors = [];
   let views = [];   // let, not const: the desk-discovery merge at the end reassigns it
   let droppedAny = false;
-  // Set when an entry is normalised IN PLACE rather than removed. Without it
-  // the write-back below never fires for a mutation, and the normalisation
-  // would be recomputed - and lost - on every single request.
+  // Pid files whose entries were pruned this pass. Unlinked only AFTER the
+  // registry write succeeds - see the note on drop() below.
+  const pidFilesToClear = [];
+  // (A comment stood here describing a second flag - "set when an entry is
+  // normalised IN PLACE rather than removed" - that had no declaration under
+  // it and no code behind it. Verified before deleting: nothing in this loop
+  // assigns to `entry`, and every survivor is pushed unmodified, so there is no
+  // in-place normalisation to persist. It read as documentation of
+  // `droppedAny`, whose only writer is drop(), and pointed the next reader at a
+  // guard that does not exist.)
 
   for (const entry of entries) {
+    // DEFERRED, not immediate. This used to unlink the pid file here - the
+    // irreversible half - while the durable half (writeRegistry) runs ~200
+    // lines below and SWALLOWS its own failure, returning false that nobody
+    // reads. So if that write failed (a file lock from AV, a full disk, a
+    // read-only profile dir) the pid file was already gone and the entry
+    // survived: the next poll found no pid, aged it past the grace window, and
+    // reported `failed` - "launch unconfirmed" - for a session that had run and
+    // exited cleanly, for the full 24h retention. Collect the names and flush
+    // them only once the registry write has actually landed.
     const drop = (sessionNameForCleanup) => {
       droppedAny = true;
       if (typeof sessionNameForCleanup === 'string' && sessionNameForCleanup !== '') {
-        clearPidFile({ pidDir }, sessionNameForCleanup);
+        pidFilesToClear.push(sessionNameForCleanup);
       }
     };
 
@@ -662,7 +678,15 @@ export function listSessions(ctx) {
   }
 
   if (droppedAny) {
-    writeRegistry(registryPath, survivors);
+    // The pid files go ONLY if the registry write actually landed. writeRegistry
+    // returns false on failure rather than throwing, and that return was
+    // previously ignored - which is what let the irreversible half happen
+    // without the durable half. If the write failed the entries are still in
+    // sessions.json, so their pid files must still be there to match, and the
+    // next poll re-derives the same truth instead of inventing a `failed`.
+    if (writeRegistry(registryPath, survivors)) {
+      for (const name of pidFilesToClear) clearPidFile({ pidDir }, name);
+    }
   }
 
   // Discovery runs AFTER the prune/write and never writes anything itself -
