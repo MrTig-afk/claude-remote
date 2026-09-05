@@ -78,14 +78,23 @@ async function staleWhileRevalidate(req, event) {
   // by the test harness, which passes no event.
   if (event && typeof event.waitUntil === 'function') event.waitUntil(fromNetwork);
 
-  const cached = await caches.match(req);
+  // SCOPED TO THIS WORKER'S OWN CACHE. Bare caches.match queries EVERY cache in
+  // the origin, oldest first, so an old cache that outlived its delete would
+  // permanently shadow the new one - and nothing would ever refresh it, because
+  // install's addAll and the revalidate write above both target CACHE only. The
+  // app would be stuck on the old shell across every launch, with Settings >
+  // Reset as the only escape. activate does delete the old caches, but its
+  // Promise.all sits in a waitUntil whose rejection is swallowed, so one failed
+  // delete (quota, storage pressure, an eviction race) is enough. Naming the
+  // cache is correct whether or not that ever happens.
+  const cached = await caches.match(req, { cacheName: CACHE });
   if (cached) return cached;
 
   const res = await fromNetwork;
   if (res) return res;
 
   if (req.mode === 'navigate') {
-    const shell = await caches.match('/index.html');
+    const shell = await caches.match('/index.html', { cacheName: CACHE });
     if (shell) return shell;
   }
   return new Response('claude-remote: agent unreachable', {

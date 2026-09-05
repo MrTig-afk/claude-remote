@@ -503,7 +503,7 @@ test('S12b - every enterable settings row has somewhere to go', () => {
 });
 // --- S13 - the one door, order-checked ---------------------------------------
 
-function loadOpenPickerFromShared(onChooseFoldersSpy, { subPushed = true, settingsPushed = true } = {}) {
+function loadOpenPickerFromShared(onChooseFoldersSpy, { subPushed = true, settingsPushed = true, sharedSet = [] } = {}) {
   const js = read('app.js');
   const start = js.indexOf('function openPickerFromShared(');
   const end = js.indexOf('function buildSettingsRow(');
@@ -513,20 +513,28 @@ function loadOpenPickerFromShared(onChooseFoldersSpy, { subPushed = true, settin
   // The three flags are module-level `let`s in app.js and this function
   // ASSIGNS them, so they are declared inside the body rather than injected -
   // a parameter could be written but never read back out.
+  // state and document are injected because pass 8 gave this function a guard:
+  // it refuses to dismantle Settings when the shared set is unknown, since
+  // onChooseFolders would then return silently and the owner would be left with
+  // Settings closed and nothing opened. A KNOWN set is the precondition for the
+  // normal path these two tests describe; the refusal path has its own test.
   const fn = new Function(
-    'showScreen', 'render', 'history', 'onChooseFolders',
+    'showScreen', 'render', 'history', 'onChooseFolders', 'state', 'document',
     `const settingsSubs = ${subPushed ? "['shared']" : '[]'};
      let closingSub = false, settingsPushed = ${settingsPushed};
      ${src}
      return { openPickerFromShared, flags: () => ({ subs: settingsSubs.length, closingSub, settingsPushed }) };`,
   );
+  const msg = { textContent: '' };
   const mod = fn(
     (name) => order.push(`showScreen:${name}`),
     () => {},
     { go: (n) => gos.push(n) },
     () => order.push('onChooseFolders'),
+    { shared: sharedSet },
+    { getElementById: () => msg },
   );
-  return { ...mod, order, gos };
+  return { ...mod, order, gos, msg };
 }
 
 test('S13 - ADD A FOLDER leaves Settings BEFORE it opens the picker', () => {
@@ -553,6 +561,23 @@ test('S13b - BOTH settings entries come off in one traversal, counted before the
   const shallow = loadOpenPickerFromShared(null, { subPushed: false, settingsPushed: false });
   shallow.openPickerFromShared();
   assert.deepEqual(shallow.gos, [], 'with no entries pushed there is nothing to traverse');
+});
+
+test('S13c - ADD A FOLDER refuses, and SAYS SO, when the shared set is unknown', () => {
+  // RED WHEN: the guard is removed, or moved below the teardown. Found by
+  // review pass 8: onChooseFolders correctly refuses an unknown set, but it
+  // returns SILENTLY - so this door used to close Settings and run the history
+  // traversal FIRST and then do nothing at all, with nothing said. Settings
+  // gone, no picker, no message.
+  const blind = loadOpenPickerFromShared(null, { sharedSet: null });
+  blind.openPickerFromShared();
+  assert.deepEqual(blind.order, [], 'nothing may be torn down and nothing opened');
+  assert.deepEqual(blind.gos, [], 'history must not move');
+  assert.deepEqual(
+    blind.flags(), { subs: 1, closingSub: false, settingsPushed: true },
+    'Settings must be left exactly as it was',
+  );
+  assert.match(blind.msg.textContent, /Lost track/, 'the refusal has to be visible');
 });
 
 // --- S14 - the guard T78 inherits, and its one point of entry ---------------

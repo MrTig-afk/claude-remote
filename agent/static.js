@@ -22,9 +22,15 @@ const FILE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/; // final segment: name + one ext
 const BAD_CHARS = /[%\\:]|\/\//; // percent, backslash, colon, double-slash
 const CONTROL_CHARS = /[\x00-\x1f]/;
 
-// The shell files the service worker precaches, and sw.js's own bytes, are
-// what the cache key is derived from. Kept in step with PRECACHE in sw.js by
-// a test, not by hope.
+// The shell files the service worker precaches are what the cache key is
+// derived from. Kept in step with PRECACHE in sw.js by a test, not by hope.
+//
+// sw.js ITSELF IS NOT IN THIS LIST, and the comment here used to claim it was.
+// It cannot be: the key is stamped INTO sw.js, so hashing sw.js to compute the
+// key it then contains is circular. Nothing is lost by its absence - editing
+// sw.js changes the bytes the browser fetches, so it installs a new worker and
+// install() re-fetches the whole PRECACHE into the same key. Corrected rather
+// than "fixed" by adding the entry, which would not have worked.
 const SHELL_FILES = [
   'index.html', 'app.css', 'app.js', 'api.js', 'lock.js', 'copy.js', 'folders-ui.js',
   'update-ui.js', 'handoff-ui.js',
