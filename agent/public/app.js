@@ -146,6 +146,14 @@ const ERROR_COPY = {
   // acknowledge().
   config_unreadable: 'The agent could not read its config file on the PC. Check its terminal window.',
   write_failed: 'The agent could not save that on the PC. Check its terminal window.',
+  // Owner-approved 2026-09-05. Rare by construction - the picker only draws
+  // NON-container folders as tappable - so this needs a race to reach: the list
+  // is drawn, the folder gains a child on disk, then the row is tapped. Until
+  // now it fell through to the generic "The agent refused the request (status
+  // 400)", which tells the owner nothing about what to do. Says nothing about
+  // the PC terminal, because unlike internal_error there is nothing wrong there
+  // to look at.
+  project_is_container: 'That folder holds your projects rather than being one. Tap REFRESH, then pick a project inside it.',
 };
 
 function errorCopy(code, status) {

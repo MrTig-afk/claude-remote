@@ -3478,11 +3478,28 @@ test('errorCopy carries real copy for config_unreadable and write_failed, not th
   assert.ok(fnMatch, 'app.js must carry errorCopy');
   const errorCopy = new Function('ERROR_COPY', 'code', 'status', `return ${fnMatch[1]};`);
   const ERROR_COPY = new Function(`return {${table[1]}\n};`)();
-  for (const code of ['config_unreadable', 'write_failed']) {
+  // project_is_container joined this list 2026-09-05, owner-approved. It is the
+  // one refusal the picker cannot prevent by construction: the list is drawn,
+  // the folder gains a child on disk, the row is tapped. Until it had copy it
+  // fell through to "The agent refused the request (status 400)", which tells
+  // the owner nothing about what to do next.
+  for (const code of ['config_unreadable', 'write_failed', 'project_is_container']) {
     const msg = errorCopy(ERROR_COPY, code, 500);
     assert.ok(msg && msg.length > 0, `${code} must have a non-empty message`);
     assert.ok(!msg.includes('status 500'), `${code} must not fall through to the generic "status" fallback`);
   }
+});
+
+test('project_is_container copy names the ACTION, not the status code', () => {
+  // The point of this entry is that the reader knows what to do. A message that
+  // is merely non-empty would pass the test above while still being useless.
+  const js = read('app.js');
+  const table = js.match(/const ERROR_COPY = \{([\s\S]*?)\n\};/);
+  const ERROR_COPY = new Function(`return {${table[1]}\n};`)();
+  const msg = ERROR_COPY.project_is_container;
+  assert.match(msg, /REFRESH/, 'must tell the owner to refresh');
+  assert.match(msg, /inside it|a project in/i, 'must say to pick a project inside the folder');
+  assert.ok(!/\b400\b|status/i.test(msg), 'must not leak the status code to the owner');
 });
 
 test('index.html ships every accept-screen text node empty - the words live only in copy.js', () => {
