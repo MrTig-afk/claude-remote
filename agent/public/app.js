@@ -1911,7 +1911,13 @@ function goHome() {
     state.openFolder = null;
     confirmPushed = false;
     folderPushed = false;
-    sheetPushed = false;
+    // closeSheetHard, not `sheetPushed = false` - identical to the list branch
+    // below, and for the reason that branch already has it. Clearing the flag
+    // alone leaves the sheet ON SCREEN with `.hdr` still inert and its history
+    // entry disowned: a bricked header whose only route out is a reload. The
+    // combination is reachable - the how-to sheet opens on top of About, so a
+    // settings sub-screen and a pushed sheet are live at the same time.
+    if (sheetPushed) closeSheetHard();
     showScreen('list');
     render();
     history.go(-depth);
@@ -3417,8 +3423,15 @@ async function saveRootEdit() {
   // Saying so and doing nothing is the only safe answer: the excludes on screen
   // were themselves derived from the same unknown set.
   if (body === null) {
-    document.getElementById('root-msg').textContent =
-      'Lost track of your shared folders while the app was in the background. Tap REFRESH on the project list, then try again.';
+    // TWO causes now, and they need different words. withRootExcludes returns
+    // null both when the set is UNKNOWN and, since pass 7, when the set is
+    // known but no longer holds this root. Telling the second case to "tap
+    // REFRESH and try again" sends the owner to perform an action that can
+    // never clear the condition - the folder has genuinely stopped being
+    // shared, most likely from another device.
+    document.getElementById('root-msg').textContent = Array.isArray(state.shared)
+      ? 'This folder is not shared any more. It was removed somewhere else. Tap REFRESH on the project list.'
+      : 'Lost track of your shared folders while the app was in the background. Tap REFRESH on the project list, then try again.';
     return;
   }
   btn.disabled = true;
@@ -3457,6 +3470,17 @@ function stopSharingFromEditor() {
 // ternary reads the value it has just nulled and the traversal is one entry
 // short. That exact bug has been fixed twice in this file already.
 function openPickerFromShared() {
+  // CHECKED BEFORE SETTINGS IS DISMANTLED. onChooseFolders refuses to enter the
+  // picker with an unknown set - correctly - but it returns SILENTLY, and this
+  // door used to close Settings and run history.go() first. So backgrounding
+  // the app on Shared folders, coming back after a failed acknowledge leg, and
+  // tapping ADD A FOLDER closed Settings and then did nothing at all, with
+  // nothing said. The guard is right; it just had no way to speak from here.
+  if (!Array.isArray(state.shared)) {
+    document.getElementById('shared-msg').textContent =
+      'Lost track of your shared folders while the app was in the background. Tap REFRESH on the project list, then try again.';
+    return;
+  }
   const depth = settingsSubs.length + (settingsPushed ? 1 : 0);
   settingsSubs.length = 0;
   closingSub = false;
@@ -3678,6 +3702,16 @@ async function ensureAccepted() {
   // Pinned verbatim by the suite - see the comment above it. The picker call
   // below reads the same pure answer rather than restructuring this line.
   const firstRun = screenAfterUnlock(res) === 'accept';
+  // SNAPSHOT, taken with firstRun and from the SAME response. The picker guard
+  // below used to re-read state.shared, and there is an unbounded, owner-paced
+  // `await showAccept()` between the two reads - so a visibilitychange during
+  // it runs load(), whose failing acknowledge leg nulls state.shared, and a
+  // GENUINE first run then skipped the picker entirely and landed on an empty
+  // list. Worse, CHOOSE FOLDERS is a no-op in that state too, because
+  // onChooseFolders refuses a null set as well: no way in until a load()
+  // succeeds. Two reads of a mutable value either side of an await is the bug;
+  // one read is the fix.
+  const knownShared = Array.isArray(state.shared) ? state.shared : null;
   // THIS LINE IS THE ACKNOWLEDGEMENT GATE. Do not replace it, and do not make
   // it conditional on anything else - without it the warning screen is never
   // shown and no test fails, because the suite checks what showAccept() does,
@@ -3720,8 +3754,8 @@ async function ensureAccepted() {
   // fall through to the list, where load() reports the agent unreachable, which
   // is the truth.
   const reopen = pendingFolders !== null;
-  if (reopen || (firstRun && Array.isArray(state.shared))) {
-    await showFolders(reopen ? share.ticks : sharedToTicks(state.shared));
+  if (reopen || (firstRun && knownShared !== null)) {
+    await showFolders(reopen ? share.ticks : sharedToTicks(knownShared));
   }
   picker.hidden = false;
   showScreen('list');

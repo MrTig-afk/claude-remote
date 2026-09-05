@@ -207,6 +207,15 @@ const SHARE_ERROR_COPY = {
   drives_unavailable: () => 'Could not read your drives.',
   config_unreadable: () => 'The agent could not read its config file on the PC.',
   write_failed: () => 'The agent could not save that on the PC.',
+  // The agent caps a request body at 8KB, and both save paths send the WHOLE
+  // shared set every time - so a set the server otherwise permits (up to 32
+  // roots, each with an unbounded excludes list) can be refused once one root
+  // carries roughly 150+ unticked children. Without this entry the owner saw
+  // "The agent refused the request (status 413)" and lost the edit with nothing
+  // to act on. The cap itself is left alone deliberately: it bounds memory on
+  // EVERY route, three tests pin it, and the honest trade is to make the
+  // failure legible rather than weaken the control for a rare set.
+  payload_too_large: () => 'That is too much to send at once. Untick fewer folders individually - share a narrower folder instead.',
   // api.js's own codes - never server codes, but this is the one place both
   // families of failure end up as a row/banner message.
   network: () => 'Cannot reach the agent. Check the PC is awake and Tailscale is connected.',
