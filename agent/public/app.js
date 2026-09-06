@@ -4030,13 +4030,21 @@ let installPromptUsed = false;
 // above the gate for the same class of reason.
 // preventDefault stops Chromium's own mini-infobar, which is the interruption
 // the owner rejected; the saved event is raised only from the About row.
-window.addEventListener('beforeinstallprompt', (e) => {
+// THE DOM GUARD (T104). Every line above this point is a declaration; these two
+// listeners and the boot() call at the end of the file are the ONLY things that
+// RUN when this module is imported. Guarding them is the whole cost of making
+// app.js importable under node - without it the import throws on `window` here,
+// before a test can reach a single function. In a browser IN_BROWSER is always
+// true, so nothing about the running app changes.
+const IN_BROWSER = typeof window !== 'undefined';
+
+if (IN_BROWSER) window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   installPrompt = e;
 });
 // A real install. isInstalled() drops the row on the next render anyway, but
 // releasing the stale event keeps the two in step.
-window.addEventListener('appinstalled', () => { installPrompt = null; });
+if (IN_BROWSER) window.addEventListener('appinstalled', () => { installPrompt = null; });
 
 /** Already running as an installed app? Then there is nothing to offer. */
 function isInstalled() {
@@ -4181,4 +4189,4 @@ async function boot() {
   await load();
 }
 
-boot().finally(hideSplash);
+if (IN_BROWSER) boot().finally(hideSplash);
