@@ -6,7 +6,7 @@ import { test, after } from 'node:test';
 
 import {
   getConfigFilePath, readConfig, resolveSharedFolders,
-  resolveClaudeConfigDir, getSessionDirPaths,
+  resolveClaudeConfigDir, getSessionDirPaths, resolvePreLaunchCommand,
 } from '../config.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-config-'));
@@ -217,6 +217,33 @@ test('getSessionDirPaths - any ~/.claude-* profile holding sessions/ is DISCOVER
   assert.ok(!dirs.some((d) => d.includes('Documents')), 'a non-.claude directory is never scanned');
   assert.equal(new Set(dirs).size, dirs.length, 'no directory may be scanned twice');
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// pre_launch_command. ABSENT BY DEFAULT is the behaviour under test as much as
+// the happy path: an unset key must mean "keep the venv auto-detect that has
+// always run", never "run something we guessed".
+test('pre_launch_command is null when the key is absent, and null on a missing config', () => {
+  assert.equal(resolvePreLaunchCommand(writeConfig('prelaunch-absent.json', JSON.stringify({}))), null);
+  assert.equal(resolvePreLaunchCommand(writeConfig('prelaunch-nofile.json')), null);
+});
+
+test('pre_launch_command returns the configured string verbatim', () => {
+  const configPath = writeConfig('prelaunch-set.json', JSON.stringify({
+    pre_launch_command: 'conda activate myenv',
+  }));
+  assert.equal(resolvePreLaunchCommand(configPath), 'conda activate myenv');
+});
+
+test('pre_launch_command ignores a non-string or blank value rather than running it', () => {
+  // Each of these would otherwise reach Invoke-Expression in the launcher, so
+  // "ignored" is the security-relevant behaviour, not just tidiness. A blank
+  // string is rejected too: it would bind to -PreLaunch and suppress the venv
+  // auto-detect while doing nothing, which is the worst of both.
+  for (const bad of [42, true, {}, [], '', '   ']) {
+    const configPath = writeConfig(`prelaunch-bad-${JSON.stringify(bad)}.json`.replace(/[^\w.-]/g, '_'),
+      JSON.stringify({ pre_launch_command: bad }));
+    assert.equal(resolvePreLaunchCommand(configPath), null, `${JSON.stringify(bad)} must be ignored`);
+  }
 });
 
 test('a profile relocated behind a junction or symlink is still discovered', () => {

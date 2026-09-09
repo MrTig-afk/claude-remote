@@ -78,6 +78,37 @@ For it to survive a reboot, register the scheduled task - the full procedure,
 including the known limitation that an at-logon trigger means a cold boot
 sitting at the lock screen has no agent, is in `docs/agent-autostart.md`.
 
+### Does anything need to run before Claude starts?
+
+ASK THE OWNER THIS - do not assume, and do not skip it because their machine
+happens to look like a plain Python project. When a session launches, the
+launcher `cd`s into the project and then activates an environment. Out of the
+box it looks for a `venv` or `.venv` folder holding
+`Scripts\Activate.ps1` and dot-sources it. That covers a standard Python
+project on Windows and nothing else.
+
+If they use conda, poetry, uv, pipenv, a differently-named folder, or a
+non-Python stack, that auto-detect finds nothing and the session starts in the
+wrong environment - silently, with no sign of it from the phone. Set
+`pre_launch_command` in the config file for that case:
+
+```json
+{ "pre_launch_command": "conda activate myenv" }
+```
+
+Whatever they would type in PowerShell: `conda activate myenv`,
+`poetry shell`, `.\.venv\Scripts\Activate.ps1`, or several joined with `;`.
+
+Two things to tell them plainly:
+
+- Setting it REPLACES the `venv`/`.venv` auto-detect rather than adding to it,
+  so nothing is activated behind their back. Leave it out and today's
+  behaviour is unchanged.
+- The value is executed. Anyone who can edit that file can already run
+  anything as this user, which is why the setting lives in the file and NOT in
+  the app - no route can write it, and the phone must never be able to decide
+  what runs on the PC.
+
 **Nothing about folders is configured here.** Which directories the app can see
 is chosen by the owner IN THE APP on first run, on a screen that explains what
 access is being granted before any of it is shared. Do not add a base-folder

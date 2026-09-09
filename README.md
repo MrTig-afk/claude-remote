@@ -132,6 +132,34 @@ agent becomes reachable. Never do 5 before 4.
 No firewall rule is needed. Under serve the agent never leaves loopback, and
 loopback traffic does not traverse the firewall at all.
 
+## What launching a session does to your environment
+
+Worth knowing, because it is invisible from the phone. When you tap a project,
+the launcher changes into that directory and activates an environment before
+starting Claude Code. By default it looks for a `venv` or `.venv` folder
+containing `Scripts\Activate.ps1` and activates it. Nothing to configure, and
+nothing happens if there is no such folder.
+
+That covers a standard Python project on Windows. **If you use conda, poetry,
+uv, pipenv, a differently-named folder, or a non-Python stack, it will find
+nothing** and your session starts in the wrong environment with no visible
+sign of it. Set `pre_launch_command` in the config file
+(`%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\config.json`):
+
+```json
+{ "pre_launch_command": "conda activate myenv" }
+```
+
+Anything you would type in PowerShell works, including several commands joined
+with `;`. Setting it **replaces** the `venv`/`.venv` auto-detect rather than
+running in addition to it, so nothing is activated behind your back.
+
+This setting is deliberately not in the app. The value is executed, so a text
+box reachable from your phone would turn the six-digit passcode into a way to
+run anything on your PC - the exact threat described at the top of this file.
+Editing the config file requires access to the machine, and anyone with that
+can already run anything as you.
+
 ## Daily use
 
 1. Open the PWA on your phone and enter the passcode.

@@ -193,6 +193,57 @@ test('B8 - PUT and DELETE /api/acknowledge -> 404 not_found', async () => {
   }
 });
 
+test('no API route can introduce or change pre_launch_command', async () => {
+  // THE SECURITY BOUNDARY FOR pre_launch_command, and the reason it is a
+  // config-file setting rather than a dialog in the PWA. The launcher runs
+  // that value through Invoke-Expression, so a route that let a request body
+  // reach it would turn the six-digit passcode into arbitrary code execution
+  // as this user - against exactly the threat the README names, an unlocked
+  // phone in someone else's hand.
+  //
+  // PUT /api/shared is the one authenticated route that takes a client body
+  // and writes config.json, so it is the boundary worth pinning. It assigns
+  // only config.shared_folders onto the merged object; this proves a body
+  // carrying the key changes nothing, and would fail the moment anyone
+  // spread a request body into the config.
+  const shareCtx = makeAuthCtx();
+  seedPasscode(shareCtx, '481902');
+  const token = issueTestToken(shareCtx);
+  fs.writeFileSync(shareCtx.configPath, JSON.stringify({ pre_launch_command: 'conda activate mine' }));
+
+  const sharedRoot = path.join(shareCtx.dir, 'shared-root-prelaunch');
+  fs.mkdirSync(sharedRoot);
+  const tmpLetter = path.parse(path.resolve(shareCtx.dir)).root.replace(/[\\/]+$/, '').toUpperCase();
+  const blockedLetter = ['Q:', 'Y:', 'X:', 'W:'].find((l) => l !== tmpLetter);
+  const server = fixtureServer({
+    ...shareCtx,
+    driveExec: async () => JSON.stringify([{ DeviceID: tmpLetter, VolumeName: 'Test' }, { DeviceID: blockedLetter, VolumeName: 'Sys' }]),
+    systemDrive: blockedLetter,
+    systemDirs: [],
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
+
+  try {
+    const res = await authedFetch('/api/shared', {
+      method: 'PUT',
+      body: JSON.stringify({
+        shared_folders: [{ path: sharedRoot }],
+        pre_launch_command: 'calc.exe',
+      }),
+    });
+    assert.equal(res.status, 200);
+    const onDisk = JSON.parse(fs.readFileSync(shareCtx.configPath, 'utf8'));
+    assert.equal(
+      onDisk.pre_launch_command, 'conda activate mine',
+      'a request body must never reach pre_launch_command - it is passed to Invoke-Expression',
+    );
+  } finally {
+    server.close();
+    cleanupAuthCtx(shareCtx);
+  }
+});
+
 test('B9 - PUT /api/shared does not clear a previously-set acknowledged_at', async () => {
   const shareCtx = makeAuthCtx();
   seedPasscode(shareCtx, '481902');

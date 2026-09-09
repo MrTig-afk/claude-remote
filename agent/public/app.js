@@ -4149,14 +4149,19 @@ async function maybeResetCache() {
 }
 
 async function boot() {
-  // FIRST, before any await. The header sits outside the screen <main>s and
-  // has no hide rule, so it is visible behind the gate and accept screens -
-  // and the passcode is asked on every open. Filling it inside wireEvents(),
-  // which runs after both awaits, left the badge blank for the whole locked
-  // period of every launch, and blank for the life of the page if either
-  // await rejected.
-  document.getElementById('hdr-ver').textContent = `v${SHELL_VERSION}`;
   if (await maybeResetCache()) return;
+  // BEFORE THE GATE, but AFTER maybeResetCache, and both halves are load
+  // bearing. Before the gate because the header sits outside the screen
+  // <main>s with no hide rule, so it shows behind the gate and accept screens,
+  // and the passcode is asked on every open.
+  // After maybeResetCache because `?reset-cache` is the documented escape
+  // hatch: sw.js is stale-while-revalidate and claims clients mid-load, so a
+  // client can hold OLD index.html (whose badge has no id) against NEW app.js.
+  // Dereferencing first threw before anything ran - blank page, and the one
+  // recovery route dead with it. The null guard keeps that mismatch costing a
+  // blank badge rather than a blank app.
+  const badge = document.getElementById('hdr-ver');
+  if (badge) badge.textContent = `v${SHELL_VERSION}`;
   registerServiceWorker(); // above the gate: the PWA must stay installable
                             // from the lock screen
   // hideAccept() is not decoration: if the token expires while the accept

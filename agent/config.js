@@ -68,6 +68,35 @@ export function resolveClaudeConfigDir(configPath = getConfigFilePath()) {
   return resolved;
 }
 
+/**
+ * The command to run in the project directory before `claude` starts, or null
+ * to keep the launcher's own `venv`/`.venv` auto-detect. ABSENT BY DEFAULT,
+ * same as claude_config_dir above: an unset key means "do what you already
+ * do", never "run something we guessed".
+ *
+ * THIS IS ARBITRARY CODE EXECUTION BY DESIGN - launch-session.ps1 runs the
+ * value through Invoke-Expression. Acceptable ONLY because setting it requires
+ * desk access to config.json, and anyone with that can already run anything as
+ * this user. It must therefore NEVER become settable over the API, which
+ * `accept.test.js` pins behaviourally.
+ */
+let warnedBadPreLaunch = false;
+export function resolvePreLaunchCommand(configPath = getConfigFilePath()) {
+  const value = readConfig(configPath).pre_launch_command;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || value.trim() === '') {
+    // ONCE, for the same reason the config-dir warns once: this is reached
+    // from the launch path, not a 5s poll, but a misconfigured key would
+    // otherwise print on every single launch and bury anything worth reading.
+    if (!warnedBadPreLaunch) {
+      warnedBadPreLaunch = true;
+      console.warn(`claude-remote agent: config '${configPath}' has a pre_launch_command that is not a non-empty string; ignoring it`);
+    }
+    return null;
+  }
+  return value;
+}
+
 /** Claude Code profile session directories to scan. Only <pid>.json is ever
  *  opened from them, so listing a directory that does not exist costs nothing
  *  and every entry here is a candidate rather than a requirement.

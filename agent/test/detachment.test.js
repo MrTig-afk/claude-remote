@@ -151,6 +151,24 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     // can land on a workspace-trust modal nobody can answer from a phone.
     // Review deleted this block and the whole suite stayed green - hence this.
     'Remove-Item Env:CLAUDE_CONFIG_DIR',
+    // The pre-launch branch, BOTH halves, for the same reason the ConfigDir
+    // conditional above is pinned rather than the bare variable: the behaviour
+    // is the choice between them. Losing the `if` would run a configured
+    // command AND the auto-detect; losing the `else` would silently drop venv
+    // activation for every existing install, which is the regression that
+    // matters because nothing about it is visible from a phone.
+    'if ($PreLaunch)',
+    // THE WHOLE try/catch, not the bare Invoke-Expression, and for the reason
+    // the --remote-control entry below spells out. $ErrorActionPreference is
+    // 'Stop', so without the catch a failing pre_launch_command aborts the
+    // launcher BEFORE Start-Process: no session, no pid file, and nothing
+    // visible from the phone. Pinning only the call would let the guard be
+    // deleted with the suite green.
+    'try { Invoke-Expression $PreLaunch } catch',
+    // The auto-detect must survive INSIDE that else. Pinned as the loop header
+    // rather than the whole block so reformatting does not turn the suite red
+    // for no regression.
+    "foreach ($dir in @('venv', '.venv'))",
     // WHOLE token, not the bare flag, for a bug that actually
     // happened: this entry was the bare flag `'--remote-control'` on
     // 2026-09-04, so changing the argument FORM stripped nothing this list

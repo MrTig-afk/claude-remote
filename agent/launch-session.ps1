@@ -1,10 +1,12 @@
 [CmdletBinding()]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Deliberate: $ErrorActionPreference is Stop, and by this point the session is already launched - a failed pid-file write must not abort the script or surface an error with nowhere to go (NonInteractive, stdio ignored).')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingInvokeExpression', '', Justification = 'Running the string IS the feature. -PreLaunch carries the owner-configured pre_launch_command, and it must take effect in THIS session so environment changes reach claude.cmd - a child process would exit and undo them. The rule guards against executing untrusted input; this input comes only from config.json on the local disk, which no API route can write (pinned by a test in accept.test.js) and which already requires the desk access needed to run anything as this user. See resolvePreLaunchCommand in agent/config.js.')]
 param(
     [Parameter(Mandatory)][string]$ProjectPath,
     [Parameter(Mandatory)][string]$SessionName,
     [string]$PidFile,                    # optional ON PURPOSE - see below
-    [string]$ConfigDir                   # optional: absent = Claude Code's own default
+    [string]$ConfigDir,                  # optional: absent = Claude Code's own default
+    [string]$PreLaunch                   # optional: absent = auto-detect venv/.venv
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,11 +34,27 @@ if ($ConfigDir) {
 
 Set-Location -LiteralPath $ProjectPath
 
-foreach ($dir in @('venv', '.venv')) {
-    $activate = Join-Path $ProjectPath "$dir\Scripts\Activate.ps1"
-    if (Test-Path -LiteralPath $activate) {
-        . $activate
-        break
+# THE ENVIRONMENT. Two mutually exclusive paths; the default is the one that
+# has always run. -PreLaunch REPLACES the auto-detect rather than preceding it,
+# so a conda user gets no stray `.venv`. It runs IN THIS SESSION, not a child -
+# a child exits and takes the environment with it - and after Set-Location, so
+# a relative path resolves against the project. Why executing it is acceptable
+# is in the PSAvoidUsingInvokeExpression justification at the top of this file.
+if ($PreLaunch) {
+    # NOT OPTIONAL. $ErrorActionPreference is 'Stop', so a failure here aborts
+    # the script BEFORE Start-Process: no session, no pid file, and nothing
+    # visible - the agent still answers 202, stdio is ignored, and the tile
+    # ages into `failed`. Reachable from the docs' own examples (`conda
+    # activate` off PATH, a wrong Activate.ps1). A broken environment step must
+    # cost the environment, not the session.
+    try { Invoke-Expression $PreLaunch } catch { Write-Warning "pre_launch_command failed: $_" }
+} else {
+    foreach ($dir in @('venv', '.venv')) {
+        $activate = Join-Path $ProjectPath "$dir\Scripts\Activate.ps1"
+        if (Test-Path -LiteralPath $activate) {
+            . $activate
+            break
+        }
     }
 }
 

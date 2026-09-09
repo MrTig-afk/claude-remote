@@ -594,6 +594,33 @@ test('launchSession - no -ConfigDir at all when no profile is configured (T56)',
   );
 });
 
+test('launchSession - no -PreLaunch at all when none is configured', () => {
+  // The DEFAULT, and the one that must not regress: with no switch, the
+  // launcher falls to the venv/.venv auto-detect that has always run. Passing
+  // an empty value would bind in PowerShell and silently suppress it.
+  const { spawner, calls } = makeFakeSpawner();
+  launchSession({
+    spawner, baseDir: base, claudeConfigDir: null, preLaunchCommand: null, ...makeRegCtx(),
+  }, 'Video Editing');
+  assert.ok(
+    !calls[0].args.includes('-PreLaunch'),
+    'an absent pre_launch_command must pass no -PreLaunch switch whatsoever',
+  );
+});
+
+test('launchSession - passes -PreLaunch as ONE argument when configured', () => {
+  // One argument, not two: the value carries spaces by definition, and the
+  // `--name`/`--remote-control` history in launch-session.ps1 is what a split
+  // argument costs - a stray word arriving as something else entirely.
+  const { spawner, calls } = makeFakeSpawner();
+  launchSession({
+    spawner, baseDir: base, claudeConfigDir: null, preLaunchCommand: 'conda activate myenv', ...makeRegCtx(),
+  }, 'Video Editing');
+  const i = calls[0].args.indexOf('-PreLaunch');
+  assert.ok(i !== -1, 'a configured pre_launch_command must reach the launcher');
+  assert.equal(calls[0].args[i + 1], 'conda activate myenv');
+});
+
 test('launchSession - passes -ConfigDir when a profile IS configured (T56)', () => {
   const { spawner, calls } = makeFakeSpawner();
   const dir = path.join(base, 'some-profile');

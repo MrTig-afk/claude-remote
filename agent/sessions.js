@@ -5,7 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { getPidDirPath, getRegistryFilePath, resolveClaudeConfigDir } from './config.js';
+import { getPidDirPath, getRegistryFilePath, resolveClaudeConfigDir, resolvePreLaunchCommand } from './config.js';
 import {
   findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
   isPidAlive, claimDeskSession,
@@ -712,6 +712,11 @@ export function launchSession(ctx, project) {
     ? ctx.claudeConfigDir
     : resolveClaudeConfigDir(ctx.configPath);
 
+  // Same hasOwn seam as claudeConfigDir above, same reason.
+  const preLaunchCommand = Object.hasOwn(ctx, 'preLaunchCommand')
+    ? ctx.preLaunchCommand
+    : resolvePreLaunchCommand(ctx.configPath);
+
   // Production never created this directory - only tests did, which is why 98
   // green tests missed it. Without it, launch-session.ps1's Set-Content fails
   // with DirectoryNotFoundException, its catch{} swallows the error and
@@ -759,6 +764,11 @@ export function launchSession(ctx, project) {
     // would defeat that - PowerShell would bind it and the `if ($ConfigDir)`
     // guard is what turns it back into "absent".
     ...(claudeConfigDir ? ['-ConfigDir', claudeConfigDir] : []),
+    // Only when configured, for the same reason as -ConfigDir above: an absent
+    // key must pass NO -PreLaunch, so the launcher's `if ($PreLaunch)` falls to
+    // the venv auto-detect that has always run. An empty string would bind and
+    // defeat that.
+    ...(preLaunchCommand ? ['-PreLaunch', preLaunchCommand] : []),
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,
     // and powershell.exe 5.1 spawned that way exits 0 IMMEDIATELY WITHOUT

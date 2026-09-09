@@ -125,13 +125,31 @@ test('the header badge ships empty - no fifth copy of the version in markup', ()
     'the header badge must ship empty - a literal here is a fifth copy of the version');
 });
 
-test('boot() fills the header badge from SHELL_VERSION before the gate', () => {
+test('boot() fills the header badge from SHELL_VERSION between the cache reset and the gate', () => {
+  // BOTH bounds are defects that happened, not tidiness:
+  //  - after maybeResetCache, because `?reset-cache` is the documented escape
+  //    hatch and a client can hold OLD index.html (no id on the badge) against
+  //    NEW app.js; dereferencing first threw before the hatch could run.
+  //  - before showScreen('gate'), because the header shows behind the gate and
+  //    the passcode is asked on every open.
   const source = fs.readFileSync(APP_JS_PATH, 'utf8');
   const boot = source.slice(source.indexOf('async function boot()'));
-  const fill = boot.search(/getElementById\('hdr-ver'\)[\s\S]{0,40}SHELL_VERSION/);
+  const fill = boot.search(/getElementById\('hdr-ver'\)[\s\S]{0,160}SHELL_VERSION/);
+  const reset = boot.indexOf('maybeResetCache');
   const gate = boot.indexOf("showScreen('gate')");
   assert.ok(fill !== -1, 'boot() must fill #hdr-ver from SHELL_VERSION');
-  assert.ok(gate !== -1, 'boot() must reach showScreen(gate)');
+  assert.ok(reset !== -1 && gate !== -1, 'boot() must reach maybeResetCache and showScreen(gate)');
+  assert.ok(reset < fill,
+    'the badge fill must come AFTER maybeResetCache, or a stale-shell TypeError kills ?reset-cache');
   assert.ok(fill < gate,
     'the badge must be filled BEFORE the gate - the header is visible behind it on every launch');
+});
+
+test('the header badge fill is guarded, so a stale shell costs a badge and not the app', () => {
+  // The `if (badge)` is the difference between a blank badge and a blank page
+  // when old index.html meets new app.js. Optional chaining cannot be used on
+  // an assignment target, so the guard is the only form available.
+  const source = fs.readFileSync(APP_JS_PATH, 'utf8');
+  assert.match(source, /const badge = document\.getElementById\('hdr-ver'\);\s*\r?\n\s*if \(badge\)/,
+    'the #hdr-ver lookup must be null-guarded before assignment');
 });
