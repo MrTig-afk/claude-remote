@@ -284,7 +284,7 @@ function isInsideProject(projectPath, cwd) {
 }
 
 // PowerShell/URL-safe and collision-proof against a root project's own
-// name: 'f-dev-projects-repos/pull-requests/whatsapp-plugin', never just
+// name: 'f-dev-projects-workspace/pull-requests/whatsapp-plugin', never just
 // 'whatsapp-plugin' - deriveSessionName(cwd) alone could equal a REAL
 // top-level project's own session_name, and END for that real project would
 // then resolve to the wrong session entirely (a live danger: wrong kill

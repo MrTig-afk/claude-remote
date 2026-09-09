@@ -53,7 +53,7 @@ const PULL_REQUESTS_VERCEL = nameUnder(base, 'pull-requests', 'vercel');
 // What -SessionName carries: the Code-tab ROW name, which is the folder leaf.
 // It was the derived session name collapsed on '/' until 2026-09-04, when the
 // owner opened a session and found the row reading
-// `f-dev-projects-repos-02b052.email-lint` - a label the hand-off banner was
+// `f-dev-projects-workspace-8a320b.email-lint` - a label the hand-off banner was
 // telling him to look for and which does not exist.
 const argForm = (sessionName) => sessionName.replace(/\//g, '.');
 
@@ -202,14 +202,14 @@ test('deriveSessionName - naming contract', () => {
     ['Pull Requests', 'pull-requests'],
     ['Video Editing', 'video-editing'],
     ['email-lint', 'email-lint'],
-    ['F:\\Dev\\Projects\\Repos\\Pull Requests', 'pull-requests'],
-    ['F:\\Dev\\Projects\\Repos\\email-lint', 'email-lint'],
+    ['F:\\Dev\\Projects\\Workspace\\Pull Requests', 'pull-requests'],
+    ['F:\\Dev\\Projects\\Workspace\\email-lint', 'email-lint'],
     ['Backend Engineering', 'backend-engineering'],
     ['My.Project', 'my-project'],
     ['A  B', 'a-b'],
     ['Foo. .Bar', 'foo-bar'],
     ['Reactive-Resume', 'reactive-resume'],
-    ['F:\\Dev\\Projects\\Repos\\Video Editing\\', 'video-editing'],
+    ['F:\\Dev\\Projects\\Workspace\\Video Editing\\', 'video-editing'],
   ];
   for (const [input, expected] of rows) {
     assert.equal(deriveSessionName(input), expected, `input: ${input}`);
@@ -631,7 +631,7 @@ test('launchSession - passes -ConfigDir when a profile IS configured (T56)', () 
 });
 
 test('remoteControlName - a unique leaf is the whole name', () => {
-  // The daily case: `email-lint`, not `f-dev-projects-repos-02b052.email-lint`.
+  // The daily case: `email-lint`, not `f-dev-projects-workspace-8a320b.email-lint`.
   const paths = [path.join(base, 'email-lint'), path.join(base, 'Video Editing')];
   assert.equal(remoteControlName(path.join(base, 'email-lint'), paths), 'email-lint');
   assert.equal(remoteControlName(path.join(base, 'Video Editing'), paths), 'Video Editing',
@@ -643,14 +643,14 @@ test('remoteControlName - a collision qualifies BOTH sides, not just the second'
   // launched first, which is the kind of thing that is impossible to debug
   // months later. Format is the owner's, 2026-09-04: `email-lint (Work)`.
   const a = path.join(base, 'Work', 'email-lint');
-  const b = path.join(base, 'Repos', 'email-lint');
+  const b = path.join(base, 'Workspace', 'email-lint');
   assert.equal(remoteControlName(a, [a, b]), 'email-lint (Work)');
-  assert.equal(remoteControlName(b, [a, b]), 'email-lint (Repos)');
+  assert.equal(remoteControlName(b, [a, b]), 'email-lint (Workspace)');
 });
 
 test('remoteControlName - the comparison is case-insensitive, because Windows is', () => {
   const a = path.join(base, 'Work', 'Email-Lint');
-  const b = path.join(base, 'Repos', 'email-lint');
+  const b = path.join(base, 'Workspace', 'email-lint');
   assert.equal(remoteControlName(a, [a, b]), 'Email-Lint (Work)', 'a case-only difference is still a collision');
 });
 
@@ -1510,7 +1510,7 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   // --remote-control names the Code-tab row, NOT the terminal title: a
   // PWA-launched tab read "Claude Code" until --name was added (owner's
   // screenshot, 2026-08-27). The folder leaf, not $SessionName - the owner
-  // wants `MingleHub`, and $SessionName is the sanitized lowercase form.
+  // wants `Harbor`, and $SessionName is the sanitized lowercase form.
   // The inner backtick-quotes are load-bearing: Start-Process joins
   // ArgumentList with spaces and quotes nothing itself, so a project named
   // `Pull Requests` would arrive as `--name=Pull` plus a stray `Requests`
@@ -2416,14 +2416,14 @@ test('deriveSessionName - every real project name is unchanged by the allowlist'
   const rows = [
     ['claude-remote', 'claude-remote'],
     ['claude-master', 'claude-master'],
-    ['MingleHub', 'minglehub'],
+    ['Harbor', 'harbor'],
     ['Pull Requests', 'pull-requests'],
     ['Video Editing', 'video-editing'],
     ['Backend Engineering', 'backend-engineering'],
     ['Y Combinator-qm', 'y-combinator-qm'],
     ['Reactive-Resume', 'reactive-resume'],
     ['email-lint', 'email-lint'],
-    ['NutritionDE', 'nutritionde'],
+    ['Orchard', 'orchard'],
   ];
   for (const [input, expected] of rows) {
     assert.equal(deriveSessionName(input), expected, `input: ${input}`);
@@ -2488,13 +2488,13 @@ test('slugSegment - a name of only metacharacters cannot pass the launchability 
 // off the root prefix, or made a function of anything other than the full
 // path.
 test('R-1 - two sibling roots differing only by separator-vs-hyphen get different identities', () => {
-  const A = 'F:\\Dev\\Projects\\Repos';
-  const B = 'F:\\Dev\\Projects-Repos';
+  const A = 'F:\\Dev\\Projects\\Workspace';
+  const B = 'F:\\Dev\\Projects-Workspace';
   assert.notEqual(rootSlug(A), rootSlug(B));
   assert.notEqual(sessionNameFor(A, `${A}\\Vercel`), sessionNameFor(B, `${B}\\Vercel`));
   // The readable half is proven not to have been thrown away.
-  assert.ok(rootSlug(A).startsWith('f-dev-projects-repos'));
-  assert.ok(rootSlug(B).startsWith('f-dev-projects-repos'));
+  assert.ok(rootSlug(A).startsWith('f-dev-projects-workspace'));
+  assert.ok(rootSlug(B).startsWith('f-dev-projects-workspace'));
 });
 
 // R-2 - the rootSlug anchor: fixed literals, no helper, no temp dir - what
@@ -2505,7 +2505,7 @@ test('R-1 - two sibling roots differing only by separator-vs-hyphen get differen
 // handling, separator collapse, case-folding, digest input, digest length,
 // a leading or trailing dash).
 test('R-2 - rootSlug anchor: fixed literals including the digest, no helper', () => {
-  assert.equal(rootSlug('F:\\Dev\\Projects\\Repos'), 'f-dev-projects-repos-02b052');
+  assert.equal(rootSlug('F:\\Dev\\Projects\\Workspace'), 'f-dev-projects-workspace-8a320b');
   assert.equal(rootSlug('D:/Work'), 'd-work-d4b870');
 });
 
@@ -2515,7 +2515,7 @@ test('R-2 - rootSlug anchor: fixed literals including the digest, no helper', ()
 // config.json with different casing renames every live session and the
 // prune deletes them all on the next poll.
 test('R-3 - rootSlug is stable across case, separator and trailing-separator differences', () => {
-  assert.equal(rootSlug('F:\\Dev\\Projects\\Repos'), rootSlug('f:/dev/projects/repos/'));
+  assert.equal(rootSlug('F:\\Dev\\Projects\\Workspace'), rootSlug('f:/dev/projects/workspace/'));
 });
 
 // R-5 - the 518 raw cap. A fabricated 254-character root's slug plus a

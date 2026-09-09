@@ -579,14 +579,14 @@ function inFlightKey(ctx, sessionName) {
  *
  * The FOLDER LEAF, not the derived session name. The owner opened email-lint
  * on 2026-09-04 and found the row reading
- * `f-dev-projects-repos-02b052.email-lint` - so the hand-off banner, whose one
+ * `f-dev-projects-workspace-8a320b.email-lint` - so the hand-off banner, whose one
  * job is telling someone where their session is, was naming a label that does
  * not exist.
  *
  * Safe to change: NOTHING in the agent reads this value back. Launched
  * sessions are correlated by pid file and resolved path, and the registry key
  * keeps the root-qualified `sessionName` untouched (B2). `--name` has always
- * passed the raw leaf quoted - that is why the window title reads `MingleHub`
+ * passed the raw leaf quoted - that is why the window title reads `Harbor`
  * - so a leaf with spaces is already proven to survive the argument list.
  *
  * COLLISIONS. Two shared projects can share a leaf: `Work/email-lint` and

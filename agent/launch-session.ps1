@@ -41,13 +41,32 @@ Set-Location -LiteralPath $ProjectPath
 # a relative path resolves against the project. Why executing it is acceptable
 # is in the PSAvoidUsingInvokeExpression justification at the top of this file.
 if ($PreLaunch) {
-    # NOT OPTIONAL. $ErrorActionPreference is 'Stop', so a failure here aborts
-    # the script BEFORE Start-Process: no session, no pid file, and nothing
-    # visible - the agent still answers 202, stdio is ignored, and the tile
-    # ages into `failed`. Reachable from the docs' own examples (`conda
-    # activate` off PATH, a wrong Activate.ps1). A broken environment step must
-    # cost the environment, not the session.
-    try { Invoke-Expression $PreLaunch } catch { Write-Warning "pre_launch_command failed: $_" }
+    # THE catch IS NOT OPTIONAL. $ErrorActionPreference is 'Stop', so a failure
+    # here aborts the script BEFORE Start-Process: no session, no pid file, and
+    # nothing visible - the agent still answers 202 and the tile ages into
+    # `failed`. A broken environment step must cost the environment, not the
+    # session.
+    #
+    # THE .err FILE IS THE ONLY PLACE A FAILURE CAN BE SEEN. Write-Warning goes
+    # to a stream the agent spawns with stdio:'ignore', and this script is
+    # -NonInteractive, so without it a failed command is indistinguishable from
+    # success at the agent, in the PWA and in this terminal. Beside the pid
+    # file: that directory already exists by now and the agent already knows
+    # the path.
+    #
+    # WHAT IS STILL NOT GUARDED, stated because it bit the docs: a command that
+    # never RETURNS. There is no timeout here and there cannot easily be one -
+    # bounding it would mean a job, a job is a separate runspace, and a
+    # separate runspace cannot change THIS session's environment, which is the
+    # whole mechanism. A command that blocks (an interactive sub-shell, a
+    # prompt) hangs the launcher for ever. The docs carry that constraint.
+    try {
+        Invoke-Expression $PreLaunch
+    } catch {
+        if ($PidFile) {
+            try { Set-Content -LiteralPath "$PidFile.err" -Value "pre_launch_command failed: $_" -Encoding utf8 } catch { }
+        }
+    }
 } else {
     foreach ($dir in @('venv', '.venv')) {
         $activate = Join-Path $ProjectPath "$dir\Scripts\Activate.ps1"
@@ -119,11 +138,12 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     # PWA-launched tab read "Claude Code" until this was added, verified from
     # the owner's screenshot 2026-08-27. --name is the one that reaches the
     # title (its --help: "shown in the prompt box, /resume picker, and
-    # terminal title"). The FOLDER leaf, because the owner wants `MingleHub`.
+    # terminal title"). The FOLDER LEAF, because that is what the owner
+    # recognises in the picker - e.g. `Harbor`, not its full path.
     # CORRECTED 2026-09-04: this used to add "not $SessionName, which is the
     # sanitized lowercase-hyphen form" - true then, wrong now. $SessionName is
     # the folder leaf too since the Code-tab row was found reading
-    # `f-dev-projects-repos-02b052.email-lint`. The two carry the same value by
+    # `f-dev-projects-workspace-8a320b.email-lint`. The two carry the same value by
     # different routes; only the internal session name is still slugged.
     # The inner quotes are load-bearing - Start-Process joins ArgumentList
     # with spaces and adds no quoting of its own, so a project like

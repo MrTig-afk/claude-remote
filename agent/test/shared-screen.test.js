@@ -16,7 +16,7 @@ import {
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const read = (rel) => fs.readFileSync(path.join(PUBLIC_DIR, rel), 'utf8');
 
-const REPOS = 'F:\\Dev\\Projects\\Repos';
+const WORKSPACE = 'F:\\Dev\\Projects\\Workspace';
 const WORK = 'D:\\Work\\client-api';
 
 const container = (p) => ({ path: p, mode: 'container', excludes: [], new_folders: 'show' });
@@ -29,9 +29,9 @@ test('L1 - a container root reads "<parent> · N projects", counted from the pro
   // RED WHEN: the count is taken from anything but /api/projects. The
   // artifact's "3 of 14" needs a denominator no payload carries, so the
   // numerator has to be the real one or the line means nothing.
-  const rows = sharedFolderRows([container(REPOS)], projectsIn(REPOS, 3));
+  const rows = sharedFolderRows([container(WORKSPACE)], projectsIn(WORKSPACE, 3));
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].name, 'Repos');
+  assert.equal(rows[0].name, 'Workspace');
   assert.equal(rows[0].state, 'F:\\Dev\\Projects · 3 projects');
   assert.equal(rows[0].projectCount, 3);
   assert.equal(rows[0].missing, false);
@@ -41,8 +41,8 @@ test('L2 - the count is per root, never the whole project list', () => {
   // RED WHEN: every row shows the total number of projects, so two shared
   // folders both claim all of them.
   const rows = sharedFolderRows(
-    [container(REPOS), container('D:\\Work')],
-    [...projectsIn(REPOS, 3), ...projectsIn('D:\\Work', 6)],
+    [container(WORKSPACE), container('D:\\Work')],
+    [...projectsIn(WORKSPACE, 3), ...projectsIn('D:\\Work', 6)],
   );
   assert.equal(rows[0].projectCount, 3);
   assert.equal(rows[1].projectCount, 6);
@@ -52,12 +52,12 @@ test('L3 - the count is case- and trailing-separator tolerant, like every other 
   // RED WHEN: the count is keyed on a raw string. The agent reports config
   // paths verbatim and project roots canonicalised, so the two spellings meet
   // here and a plain === silently reports 0 projects for a shared folder.
-  const rows = sharedFolderRows([container('F:\\Dev\\Projects\\Repos\\')], projectsIn('f:\\dev\\projects\\repos', 2));
+  const rows = sharedFolderRows([container('F:\\Dev\\Projects\\Workspace\\')], projectsIn('f:\\dev\\projects\\workspace', 2));
   assert.equal(rows[0].projectCount, 2);
 });
 
 test('L4 - one project is singular', () => {
-  const rows = sharedFolderRows([container(REPOS)], projectsIn(REPOS, 1));
+  const rows = sharedFolderRows([container(WORKSPACE)], projectsIn(WORKSPACE, 1));
   assert.equal(rows[0].state, 'F:\\Dev\\Projects · 1 project');
 });
 
@@ -75,7 +75,7 @@ test('L6 - a missing root says "not found" and nothing else', () => {
   // RED WHEN: a folder that is not there reports "0 projects", which reads as
   // an empty folder rather than an absent one - the distinction Lane 4 is
   // entirely about.
-  const rows = sharedFolderRows([{ ...container(REPOS), missing: true }], []);
+  const rows = sharedFolderRows([{ ...container(WORKSPACE), missing: true }], []);
   assert.equal(rows[0].missing, true);
   assert.equal(rows[0].state, 'F:\\Dev\\Projects · not found');
 });
@@ -99,13 +99,13 @@ test('L8 - an unknown shared set is no rows, not an empty one', () => {
 test('L9 - the confirmation names the folder, what disappears, and what does not', () => {
   // RED WHEN: "Nothing on disk is touched" is dropped. It is the sentence
   // that makes a red button safe to press, and the artifact spells it out.
-  const [repos] = sharedFolderRows([container(REPOS)], projectsIn(REPOS, 3));
+  const [workspace] = sharedFolderRows([container(WORKSPACE)], projectsIn(WORKSPACE, 3));
   assert.equal(
-    stopSharingPrompt(repos),
-    'Stop sharing Repos? Its 3 projects disappear from the app. Nothing on disk is touched.',
+    stopSharingPrompt(workspace),
+    'Stop sharing Workspace? Its 3 projects disappear from the app. Nothing on disk is touched.',
   );
 
-  const [one] = sharedFolderRows([container(REPOS)], projectsIn(REPOS, 1));
+  const [one] = sharedFolderRows([container(WORKSPACE)], projectsIn(WORKSPACE, 1));
   assert.match(stopSharingPrompt(one), /Its 1 project disappears/);
 
   const [only] = sharedFolderRows([single(WORK)], []);
@@ -114,7 +114,7 @@ test('L9 - the confirmation names the folder, what disappears, and what does not
     'Stop sharing client-api? It disappears from the app. Nothing on disk is touched.',
   );
 
-  const [gone] = sharedFolderRows([{ ...container(REPOS), missing: true }], []);
+  const [gone] = sharedFolderRows([{ ...container(WORKSPACE), missing: true }], []);
   assert.match(stopSharingPrompt(gone), /already gone from the PC/);
 });
 
@@ -185,21 +185,21 @@ const rowsOf = (doc) => doc.getElementById('shared-rows').children;
 test('L10 - the screen draws one row per shared root, each carrying its own remove X', () => {
   // RED WHEN: the remove control goes missing, which is the only thing this
   // screen can DO to a root until Lane 3's "Editing one" is built.
-  const s = loadScreen({ shared: [container(REPOS), single(WORK)], projects: projectsIn(REPOS, 3) });
+  const s = loadScreen({ shared: [container(WORKSPACE), single(WORK)], projects: projectsIn(WORKSPACE, 3) });
   s.renderSharedScreen();
 
   const rows = rowsOf(s.doc);
   assert.equal(rows.length, 2);
   const removes = rows.map((r) => r.children.find((c) => c.dataset.sharedRemove));
-  assert.deepEqual(removes.map((r) => r.dataset.sharedRemove), [REPOS, WORK]);
-  assert.match(removes[0].attrs['aria-label'], /^Stop sharing Repos$/);
+  assert.deepEqual(removes.map((r) => r.dataset.sharedRemove), [WORKSPACE, WORK]);
+  assert.match(removes[0].attrs['aria-label'], /^Stop sharing Workspace$/);
 });
 
 test('L11 - no row carries a chevron, because the per-root edit screen is not built', () => {
   // RED WHEN: the artifact's chevron is copied across before Lane 3's
   // "Editing one" exists - a control that answers a tap with nothing, which
   // is exactly what buildSettingsRow's enterable/inert split forbids.
-  const s = loadScreen({ shared: [container(REPOS)], projects: [] });
+  const s = loadScreen({ shared: [container(WORKSPACE)], projects: [] });
   s.renderSharedScreen();
   const js = read('app.js');
   const fnSrc = js.slice(js.indexOf('function buildSharedRow('), js.indexOf('function renderRemovalConfirm('));
@@ -208,11 +208,11 @@ test('L11 - no row carries a chevron, because the per-root edit screen is not bu
 });
 
 test('L12 - the gone banner appears only when the agent reports a root missing', () => {
-  const fine = loadScreen({ shared: [container(REPOS)], projects: [] });
+  const fine = loadScreen({ shared: [container(WORKSPACE)], projects: [] });
   fine.renderSharedScreen();
   assert.equal(fine.doc.getElementById('shared-gone').hidden, true);
 
-  const bad = loadScreen({ shared: [{ ...container(REPOS), missing: true }], projects: [] });
+  const bad = loadScreen({ shared: [{ ...container(WORKSPACE), missing: true }], projects: [] });
   bad.renderSharedScreen();
   const banner = bad.doc.getElementById('shared-gone');
   assert.equal(banner.hidden, false);
@@ -223,13 +223,13 @@ test('L12 - the gone banner appears only when the agent reports a root missing',
 test('L13 - the X asks before it removes, and CANCEL writes nothing', () => {
   // RED WHEN: the X removes on the first tap. It is destructive and the
   // artifact is explicit that it asks.
-  const s = loadScreen({ shared: [container(REPOS)], projects: projectsIn(REPOS, 3) });
+  const s = loadScreen({ shared: [container(WORKSPACE)], projects: projectsIn(WORKSPACE, 3) });
   s.renderSharedScreen();
   assert.equal(s.doc.getElementById('shared-confirm').hidden, true, 'nothing is asked until the X is tapped');
 
-  s.askStopSharing(REPOS);
+  s.askStopSharing(WORKSPACE);
   assert.equal(s.doc.getElementById('shared-confirm').hidden, false);
-  assert.match(s.doc.getElementById('shared-confirm-text').textContent, /^Stop sharing Repos\?/);
+  assert.match(s.doc.getElementById('shared-confirm-text').textContent, /^Stop sharing Workspace\?/);
   assert.deepEqual(s.calls.removed, [], 'asking must not write');
 
   s.cancelStopSharing();
@@ -238,12 +238,12 @@ test('L13 - the X asks before it removes, and CANCEL writes nothing', () => {
 });
 
 test('L14 - confirming removes exactly that root and refreshes what depends on it', async () => {
-  const s = loadScreen({ shared: [container(REPOS), single(WORK)], projects: projectsIn(REPOS, 3) });
+  const s = loadScreen({ shared: [container(WORKSPACE), single(WORK)], projects: projectsIn(WORKSPACE, 3) });
   s.renderSharedScreen();
-  s.askStopSharing(REPOS);
+  s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
 
-  assert.deepEqual(s.calls.removed, [REPOS]);
+  assert.deepEqual(s.calls.removed, [WORKSPACE]);
   assert.equal(s.doc.getElementById('shared-confirm').hidden, true, 'the panel closes on success');
   assert.equal(s.calls.renderSettings, 1, "the settings root's own row carries the count");
   assert.equal(s.calls.load, 1, 'the project list loses that root\'s projects');
@@ -253,9 +253,9 @@ test('L15 - a refused removal keeps the root and says why ON THIS SCREEN', async
   // RED WHEN: the failure is reported through the project list's banner,
   // which is behind this screen and cannot be seen from it.
   const removeRoot = async () => ({ ok: false, status: 500, code: 'write_failed' });
-  const s = loadScreen({ shared: [container(REPOS)], projects: [], removeRoot });
+  const s = loadScreen({ shared: [container(WORKSPACE)], projects: [], removeRoot });
   s.renderSharedScreen();
-  s.askStopSharing(REPOS);
+  s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
 
   assert.equal(s.doc.getElementById('shared-msg').textContent, 'err:write_failed');
@@ -266,9 +266,9 @@ test('L16 - a 401 says nothing here: api.js has already re-locked the app', asyn
   // RED WHEN: an expired token paints an error on a screen that is being
   // replaced by the passcode gate in the same tick.
   const removeRoot = async () => ({ ok: false, status: 401, code: 'unauthorized' });
-  const s = loadScreen({ shared: [container(REPOS)], projects: [], removeRoot });
+  const s = loadScreen({ shared: [container(WORKSPACE)], projects: [], removeRoot });
   s.renderSharedScreen();
-  s.askStopSharing(REPOS);
+  s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
   assert.equal(s.doc.getElementById('shared-msg').textContent, '');
 });
@@ -276,9 +276,9 @@ test('L16 - a 401 says nothing here: api.js has already re-locked the app', asyn
 test('L17 - a second confirm while one write is in flight is ignored', async () => {
   // RED WHEN: removeRoot's in-flight guard is bypassed here. Two PUTs racing
   // the same config is how one of them wins with a stale set.
-  const s = loadScreen({ shared: [container(REPOS)], projects: [], removeRoot: async () => null });
+  const s = loadScreen({ shared: [container(WORKSPACE)], projects: [], removeRoot: async () => null });
   s.renderSharedScreen();
-  s.askStopSharing(REPOS);
+  s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
   // null means "already writing" - the screen must not treat it as success.
   assert.equal(s.doc.getElementById('shared-confirm').hidden, false);
@@ -290,11 +290,11 @@ test('L18 - removing a root preserves every other root byte for byte', () => {
   // a sibling's mode or drops its excludes - a data-loss bug wearing the
   // costume of a tidy-up.
   const shared = [
-    { path: REPOS, mode: 'container', excludes: ['Archive'], new_folders: 'hide' },
+    { path: WORKSPACE, mode: 'container', excludes: ['Archive'], new_folders: 'hide' },
     { path: WORK, mode: 'single', excludes: [], new_folders: 'show' },
   ];
   assert.deepEqual(withoutRoot(shared, WORK), {
-    shared_folders: [{ path: REPOS, mode: 'container', excludes: ['Archive'], new_folders: 'hide' }],
+    shared_folders: [{ path: WORKSPACE, mode: 'container', excludes: ['Archive'], new_folders: 'hide' }],
   });
 });
 
@@ -378,24 +378,24 @@ test('L24 - the focus ring moves to the drawn box, since the real one is invisib
 
 // --- Lane 3, step 2: editing one shared folder -----------------------------
 
-const folder = (name) => ({ name, path: `${REPOS}\\${name}`, readable: true });
+const folder = (name) => ({ name, path: `${WORKSPACE}\\${name}`, readable: true });
 
 test('L25 - the child list comes from the folder, so an EXCLUDED child is still shown, unticked', () => {
   // RED WHEN: the screen is built from state.projects. An excluded child is
   // filtered out server-side, so it would simply be missing - and the one
   // thing this screen exists for is switching it back on.
   const rows = rootEditRows(
-    [folder('claude-remote'), folder('email-lint'), folder('NutritionDE')],
-    ['NutritionDE'],
+    [folder('claude-remote'), folder('email-lint'), folder('Orchard')],
+    ['Orchard'],
     [],
   );
   assert.deepEqual(rows.map((r) => [r.name, r.ticked]), [
-    ['claude-remote', true], ['email-lint', true], ['NutritionDE', false],
+    ['claude-remote', true], ['email-lint', true], ['Orchard', false],
   ]);
 });
 
 test('L26 - excludes are matched without case, the way the agent stores and walks them', () => {
-  const rows = rootEditRows([folder('NutritionDE')], ['nutritionde'], []);
+  const rows = rootEditRows([folder('Orchard')], ['orchard'], []);
   assert.equal(rows[0].ticked, false);
 });
 
@@ -427,16 +427,16 @@ test('L29 - SAVE writes this root\'s excludes and leaves every sibling byte for 
   // RED WHEN: saving one folder rewrites another's mode or drops its
   // excludes - the same data-loss class withoutRoot exists to prevent.
   const shared = [
-    { path: REPOS, mode: 'container', excludes: ['old'], new_folders: 'show' },
+    { path: WORKSPACE, mode: 'container', excludes: ['old'], new_folders: 'show' },
     { path: WORK, mode: 'single', excludes: ['keep-me'], new_folders: 'hide' },
   ];
   const rows = rootEditRows([folder('a'), folder('b')], [], []);
   rows[1].ticked = false;
 
   assert.deepEqual(excludesFrom(rows), ['b']);
-  assert.deepEqual(withRootExcludes(shared, REPOS, excludesFrom(rows)), {
+  assert.deepEqual(withRootExcludes(shared, WORKSPACE, excludesFrom(rows)), {
     shared_folders: [
-      { path: REPOS, mode: 'container', excludes: ['b'], new_folders: 'show' },
+      { path: WORKSPACE, mode: 'container', excludes: ['b'], new_folders: 'show' },
       { path: WORK, mode: 'single', excludes: ['keep-me'], new_folders: 'hide' },
     ],
   });
@@ -452,14 +452,14 @@ test('L29 - SAVE writes this root\'s excludes and leaves every sibling byte for 
 // "Not found" and "done" must not look alike. The old test pinned the
 // behaviour, not a decision: it carried no rationale for preferring silence.
 test('L30 - a root this app does not hold returns NULL, so the caller cannot report a false save', () => {
-  const shared = [{ path: REPOS, mode: 'container', excludes: ['x'], new_folders: 'show' }];
+  const shared = [{ path: WORKSPACE, mode: 'container', excludes: ['x'], new_folders: 'show' }];
   assert.equal(withRootExcludes(shared, 'D:\\Nope', ['y']), null);
 });
 
 test('L30b - a root that IS held still edits normally, so the guard is not over-firing', () => {
-  const shared = [{ path: REPOS, mode: 'container', excludes: ['x'], new_folders: 'show' }];
-  assert.deepEqual(withRootExcludes(shared, REPOS, ['y']), {
-    shared_folders: [{ path: REPOS, mode: 'container', excludes: ['y'], new_folders: 'show' }],
+  const shared = [{ path: WORKSPACE, mode: 'container', excludes: ['x'], new_folders: 'show' }];
+  assert.deepEqual(withRootExcludes(shared, WORKSPACE, ['y']), {
+    shared_folders: [{ path: WORKSPACE, mode: 'container', excludes: ['y'], new_folders: 'show' }],
   });
 });
 
@@ -480,49 +480,49 @@ const proj = (name, root, rootName) => ({ name, root, rootName });
 
 test('L32 - one section per shared folder, named after the folder, in config order', () => {
   const sections = projectSections(
-    [proj('a', REPOS, 'Repos'), proj('b', 'D:\\Work', 'Work'), proj('c', REPOS, 'Repos')],
-    [container('D:\\Work'), container(REPOS)],
+    [proj('a', WORKSPACE, 'Workspace'), proj('b', 'D:\\Work', 'Work'), proj('c', WORKSPACE, 'Workspace')],
+    [container('D:\\Work'), container(WORKSPACE)],
     [],
     () => false,
   );
-  assert.deepEqual(sections.map((s) => s.name), ['Work', 'Repos'], 'config order, not project order');
+  assert.deepEqual(sections.map((s) => s.name), ['Work', 'Workspace'], 'config order, not project order');
   assert.deepEqual(sections.map((s) => s.total), [1, 2]);
 });
 
 test('L33 - a lone section is always open, so a single-folder install looks as it always did', () => {
   // RED WHEN: the collapse rule is applied uniformly and the owner's whole
   // list disappears behind one tap. That is the exact snag Lane 9 names.
-  const sections = projectSections([proj('a', REPOS, 'Repos')], [container(REPOS)], [], () => false);
+  const sections = projectSections([proj('a', WORKSPACE, 'Workspace')], [container(WORKSPACE)], [], () => false);
   assert.equal(sections.length, 1);
   assert.equal(sections[0].open, true, 'a single section ignores the open list entirely');
 });
 
 test('L34 - with two folders, only the ones asked for are open', () => {
-  const shared = [container(REPOS), container('D:\\Work')];
-  const projects = [proj('a', REPOS, 'Repos'), proj('b', 'D:\\Work', 'Work')];
+  const shared = [container(WORKSPACE), container('D:\\Work')];
+  const projects = [proj('a', WORKSPACE, 'Workspace'), proj('b', 'D:\\Work', 'Work')];
   const closed = projectSections(projects, shared, [], () => false);
   assert.deepEqual(closed.map((s) => s.open), [false, false]);
 
-  const one = projectSections(projects, shared, ['Repos'], () => false);
-  assert.deepEqual(one.map((s) => [s.name, s.open]), [['Repos', true], ['Work', false]]);
+  const one = projectSections(projects, shared, ['Workspace'], () => false);
+  assert.deepEqual(one.map((s) => [s.name, s.open]), [['Workspace', true], ['Work', false]]);
 });
 
 test('L35 - each header counts its OWN running sessions, never the whole app\'s', () => {
-  const shared = [container(REPOS), container('D:\\Work')];
-  const projects = [proj('a', REPOS, 'Repos'), proj('b', REPOS, 'Repos'), proj('c', 'D:\\Work', 'Work')];
+  const shared = [container(WORKSPACE), container('D:\\Work')];
+  const projects = [proj('a', WORKSPACE, 'Workspace'), proj('b', WORKSPACE, 'Workspace'), proj('c', 'D:\\Work', 'Work')];
   const sections = projectSections(projects, shared, [], (p) => p.name === 'a' || p.name === 'c');
-  assert.deepEqual(sections.map((s) => [s.name, s.running, s.total]), [['Repos', 1, 2], ['Work', 1, 1]]);
+  assert.deepEqual(sections.map((s) => [s.name, s.running, s.total]), [['Workspace', 1, 2], ['Work', 1, 1]]);
 });
 
 test('L36 - a shared folder with no projects still gets its section', () => {
   // RED WHEN: sections are derived from projects alone, and an empty shared
   // folder vanishes from the app with nothing to say it is still shared.
-  const sections = projectSections([], [container(REPOS)], [], () => false);
-  assert.deepEqual(sections.map((s) => [s.name, s.total]), [['Repos', 0]]);
+  const sections = projectSections([], [container(WORKSPACE)], [], () => false);
+  assert.deepEqual(sections.map((s) => [s.name, s.total]), [['Workspace', 0]]);
 });
 
 test('L37 - a missing root gets no section: its notice is the project list\'s job', () => {
-  const sections = projectSections([], [{ ...container(REPOS), missing: true }], [], () => false);
+  const sections = projectSections([], [{ ...container(WORKSPACE), missing: true }], [], () => false);
   assert.deepEqual(sections, []);
 });
 
@@ -542,11 +542,11 @@ test('L39 - a row with no root makes no section, nameless or otherwise', () => {
   // counts rows. They are already tiles in the running zone, so skipping
   // them here loses nothing.
   const sections = projectSections(
-    [proj('a', REPOS, 'Repos'), { name: 'Archive' }, { name: 'x', root: '' }],
-    [container(REPOS)],
+    [proj('a', WORKSPACE, 'Workspace'), { name: 'Archive' }, { name: 'x', root: '' }],
+    [container(WORKSPACE)],
     [],
     () => false,
   );
-  assert.deepEqual(sections.map((s) => s.name), ['Repos']);
+  assert.deepEqual(sections.map((s) => s.name), ['Workspace']);
   assert.equal(sections[0].total, 1, 'the rootless rows must not be counted into a real folder either');
 });

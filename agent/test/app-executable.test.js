@@ -108,7 +108,7 @@ function loadOpenRootEditor({ sharedAtOpen, nullDuringFetch = false, folders = [
      return { openRootEditor, rootEdit: () => rootEdit };`,
   );
   const mod = fn(
-    () => [{ path: 'F:/Dev/Projects/Repos', name: 'Repos' }],
+    () => [{ path: 'F:/Dev/Projects/Workspace', name: 'Workspace' }],
     state,
     (k) => calls.push(`openSettingsSub:${k}`),
     { getElementById: () => msg },
@@ -139,10 +139,10 @@ test('openRootEditor: a set that goes unknown mid-fetch leaves SAVE disabled ins
   // the THEN-current set, so it does not cover this door.
   // RED WHEN: the Array.isArray guard is removed or weakened back to `|| []`.
   const blip = loadOpenRootEditor({
-    sharedAtOpen: [{ path: 'F:/Dev/Projects/Repos', excludes: [] }],
+    sharedAtOpen: [{ path: 'F:/Dev/Projects/Workspace', excludes: [] }],
     nullDuringFetch: true,
   });
-  await blip.openRootEditor('F:/Dev/Projects/Repos');
+  await blip.openRootEditor('F:/Dev/Projects/Workspace');
   assert.equal(blip.rootEdit().rows, null, 'rows must stay null - renderRootEditor gates SAVE on it');
   assert.match(blip.msg.textContent, /^Lost track of your shared folders/);
   assert.ok(blip.calls.includes('renderRootEditor'),
@@ -150,8 +150,8 @@ test('openRootEditor: a set that goes unknown mid-fetch leaves SAVE disabled ins
 
   // POSITIVE CONTROL: with the set intact the same path DOES build rows, so the
   // assertion above is about the guard and not about a harness that never works.
-  const ok = loadOpenRootEditor({ sharedAtOpen: [{ path: 'F:/Dev/Projects/Repos', excludes: [] }] });
-  await ok.openRootEditor('F:/Dev/Projects/Repos');
+  const ok = loadOpenRootEditor({ sharedAtOpen: [{ path: 'F:/Dev/Projects/Workspace', excludes: [] }] });
+  await ok.openRootEditor('F:/Dev/Projects/Workspace');
   assert.equal(ok.rootEdit().rows.length, 2, 'a known set builds rows normally');
   assert.equal(ok.msg.textContent, '');
 });

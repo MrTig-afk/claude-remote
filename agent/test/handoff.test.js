@@ -78,7 +78,7 @@ test('the banner names the Claude app and the Code tab', () => {
 test('no copy promises that the Code-tab row carries the project name', () => {
   // The row is named by `--remote-control <SessionName>`, and SessionName is
   // deriveSessionName's root slug + hash + slugged segments - so it reads
-  // like `f-dev-projects-repos-a1b2c3/claude-remote`, never the display name.
+  // like `f-dev-projects-workspace-a1b2c3/claude-remote`, never the display name.
   // "tap <project>" would be the one instruction this lane exists to give,
   // pointing at a label that is not on screen.
   assert.doesNotMatch(handoffCopy('claude-remote').body, /tap claude-remote/);
@@ -87,7 +87,7 @@ test('no copy promises that the Code-tab row carries the project name', () => {
 
 test('the banner names the project that was launched', () => {
   assert.match(handoffCopy('email-lint').body, /email-lint/);
-  assert.match(handoffCopy('NutritionDE').body, /NutritionDE/);
+  assert.match(handoffCopy('Orchard').body, /Orchard/);
 });
 
 test('the sheet leads with the line the whole screen exists for', () => {

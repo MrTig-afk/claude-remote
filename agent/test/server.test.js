@@ -241,7 +241,7 @@ test('GET /api/status: no config file -> shared_count 0', async (t) => {
 });
 
 test('GET /api/status: default_base_folder only -> shared_count 1', async (t) => {
-  const { origin, token } = await startStatusServer(t, { config: { default_base_folder: 'F:\\Dev\\Projects\\Repos' } });
+  const { origin, token } = await startStatusServer(t, { config: { default_base_folder: 'F:\\Dev\\Projects\\Workspace' } });
   const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
   const body = await res.json();
   assert.equal(body.shared_count, 1);
@@ -255,7 +255,7 @@ test('GET /api/status: shared_folders with two entries -> shared_count 2', async
   const { origin, token } = await startStatusServer(t, {
     config: {
       shared_folders: [
-        { path: 'F:\\Dev\\Projects\\Repos', mode: 'container' },
+        { path: 'F:\\Dev\\Projects\\Workspace', mode: 'container' },
         { path: 'D:\\Work', mode: 'single' },
       ],
     },
@@ -273,7 +273,7 @@ test('GET /api/status: malformed shared_folders entries are NOT counted', async 
   // is normaliseSharedFolders' drop-the-bad-line-not-the-file rule showing
   // through to the status route.
   const { origin, token } = await startStatusServer(t, {
-    config: { shared_folders: ['a', 'b', { path: 'not-absolute' }, { path: 'F:\\Dev\\Projects\\Repos' }] },
+    config: { shared_folders: ['a', 'b', { path: 'not-absolute' }, { path: 'F:\\Dev\\Projects\\Workspace' }] },
   });
   const res = await fetch(`${origin}/api/status`, { headers: authHeaders(token) });
   const body = await res.json();

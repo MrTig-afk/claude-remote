@@ -127,7 +127,7 @@ test('P11 - applySaveResult on a successful SAVE resolves with no message and no
 // ============================================================
 
 const LIVE_ROOT = {
-  path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+  path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show', missing: false,
 };
 const GONE_ROOT = {
   path: 'F:\\Dev\\Old', mode: 'container', excludes: [], new_folders: 'show', missing: true,
@@ -219,7 +219,7 @@ test('S12 - sharedToTicks -> path, name = last segment, newFolders, mode, exclud
   const ticks = sharedToTicks([LIVE_ROOT, { ...GONE_ROOT, mode: 'single', excludes: ['x'], new_folders: 'hide' }]);
   assert.deepEqual(ticks, [
     {
-      path: 'F:\\Dev\\Projects\\Repos', name: 'Repos', newFolders: 'show', mode: 'container', excludes: [],
+      path: 'F:\\Dev\\Projects\\Workspace', name: 'Workspace', newFolders: 'show', mode: 'container', excludes: [],
     },
     {
       path: 'F:\\Dev\\Old', name: 'Old', newFolders: 'hide', mode: 'single', excludes: ['x'],
@@ -240,9 +240,9 @@ test('S13 - sharedBody carries a tick\'s mode/excludes through, defaults to cont
   });
 });
 
-test('S14 - emptyDayOneTitle(["Repos"]) names the folder; two names -> the generic line', () => {
-  assert.equal(emptyDayOneTitle(['Repos']), 'Nothing in Repos yet.');
-  assert.equal(emptyDayOneTitle(['Repos', 'Sherlock']), 'Nothing in your shared folders yet.');
+test('S14 - emptyDayOneTitle(["Workspace"]) names the folder; two names -> the generic line', () => {
+  assert.equal(emptyDayOneTitle(['Workspace']), 'Nothing in Workspace yet.');
+  assert.equal(emptyDayOneTitle(['Workspace', 'Beacon']), 'Nothing in your shared folders yet.');
 });
 
 // ============================================================

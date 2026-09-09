@@ -93,17 +93,32 @@ wrong environment - silently, with no sign of it from the phone. Set
 `pre_launch_command` in the config file for that case:
 
 ```json
-{ "pre_launch_command": "conda activate myenv" }
+{ "pre_launch_command": "& \"$env:USERPROFILE\\miniconda3\\shell\\condabin\\conda-hook.ps1\"; conda activate myenv" }
 ```
 
-Whatever they would type in PowerShell: `conda activate myenv`,
-`poetry shell`, `.\.venv\Scripts\Activate.ps1`, or several joined with `;`.
+THREE CONSTRAINTS. Say all three - each one produces a silent failure, and the
+first two make the obvious command the wrong one:
 
-Two things to tell them plainly:
+- **`-NoProfile`.** The launcher spawns PowerShell with `-NoProfile`, so
+  nothing `conda init` (or nvm, or their own profile) defines exists. A bare
+  `conda activate myenv` is NOT a command here - it falls through to
+  `conda.exe`, errors with "Run 'conda init' before 'conda activate'", and the
+  session lands in the base environment looking fine. Hence the hook above.
+- **It must RETURN.** No timeout, and it runs before Claude Code starts, so
+  anything that blocks hangs the launch and no session ever appears. Do NOT
+  suggest `poetry shell` - it opens a nested interactive shell and waits
+  forever. `poetry env activate` is the one that returns.
+- **ONE value for EVERY project**, and it REPLACES the auto-detect. Setting it
+  for a conda project stops every other project getting its `venv`/`.venv`
+  activated. If their projects differ, the command has to branch (on `$PWD`),
+  or leave it unset. There is no per-project setting yet.
 
-- Setting it REPLACES the `venv`/`.venv` auto-detect rather than adding to it,
-  so nothing is activated behind their back. Leave it out and today's
-  behaviour is unchanged.
+Tell them where failures show up, because nowhere else does: the launcher
+writes `<pid file>.err` beside the pid file in `session-pids\`.
+
+Also:
+
+- Leave it out and today's behaviour is unchanged.
 - The value is executed. Anyone who can edit that file can already run
   anything as this user, which is why the setting lives in the file and NOT in
   the app - no route can write it, and the phone must never be able to decide

@@ -147,12 +147,35 @@ sign of it. Set `pre_launch_command` in the config file
 (`%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\config.json`):
 
 ```json
-{ "pre_launch_command": "conda activate myenv" }
+{ "pre_launch_command": "& \"$env:USERPROFILE\\miniconda3\\shell\\condabin\\conda-hook.ps1\"; conda activate myenv" }
 ```
 
-Anything you would type in PowerShell works, including several commands joined
-with `;`. Setting it **replaces** the `venv`/`.venv` auto-detect rather than
-running in addition to it, so nothing is activated behind your back.
+Three constraints, and none of them is obvious. Read them before you set it.
+
+**It runs with `-NoProfile`, so your PowerShell profile does not exist.**
+Anything `conda init`, `nvm` or similar installed into your profile - including
+a bare `conda activate` - is simply undefined here. That is why the example
+above dot-sources the conda hook first. A bare `conda activate myenv` falls
+through to `conda.exe`, fails with "Run 'conda init' before 'conda activate'",
+and you get a session in the base environment with no sign of it.
+
+**The command must RETURN.** It runs inside the launcher, before Claude Code
+starts, and there is no timeout - so anything that blocks hangs the launch and
+no session ever appears. `poetry shell` is the trap here: it opens a nested
+interactive shell and waits for it to exit, which never happens. Use
+`poetry env activate` (or dot-source the activate script) instead.
+
+**It is ONE setting for EVERY project, and it replaces the auto-detect.** There
+is no per-project version yet. So if you set it for a conda project, every
+other project stops getting its `venv`/`.venv` activated automatically - the
+auto-detect no longer runs at all. If your projects need different
+environments, make the command handle that (branch on `$PWD`), or leave it
+unset and rely on the auto-detect.
+
+When it fails, the launcher writes the error to `<pid file>.err` in
+`%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\session-pids\`.
+That file is the only place a failure is visible - nothing surfaces on the
+phone.
 
 This setting is deliberately not in the app. The value is executed, so a text
 box reachable from your phone would turn the six-digit passcode into a way to

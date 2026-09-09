@@ -286,7 +286,7 @@ test('B10 - POST /api/acknowledge does not drop shared_folders (the HTTP twin of
   const seedCtx = makeAuthCtx();
   seedPasscode(seedCtx, '481902');
   const token = issueTestToken(seedCtx);
-  const seeded = [{ path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show' }];
+  const seeded = [{ path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show' }];
   writeConfig(seedCtx.configPath, { shared_folders: seeded });
 
   const server = fixtureServer(seedCtx);

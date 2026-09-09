@@ -75,7 +75,7 @@ export function handoffReady(session) {
  * "tap <project> to start typing", but the Code-tab row is named by
  * `--remote-control <SessionName>` (launch-session.ps1), and SessionName is
  * deriveSessionName's root slug + hash + slugged segments - so the row reads
- * something like `f-dev-projects-repos-a1b2c3/claude-remote`, never the
+ * something like `f-dev-projects-workspace-a1b2c3/claude-remote`, never the
  * display name. Telling someone to tap a label that is not there would break
  * the one instruction this whole lane exists to give. "Pick the session for
  * X" is true however the row is labelled. Making the row itself readable is

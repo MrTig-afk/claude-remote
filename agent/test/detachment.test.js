@@ -164,7 +164,13 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     // launcher BEFORE Start-Process: no session, no pid file, and nothing
     // visible from the phone. Pinning only the call would let the guard be
     // deleted with the suite green.
-    'try { Invoke-Expression $PreLaunch } catch',
+    'Invoke-Expression $PreLaunch',
+    // The .err file is the ONLY observable a failed pre_launch_command has.
+    // Write-Warning goes to a stream the agent spawns with stdio:'ignore' and
+    // the script is -NonInteractive, so deleting this line makes every
+    // failure - a typo, a missing conda hook, a wrong path - indistinguishable
+    // from success everywhere. Pinned because nothing else would notice.
+    'Set-Content -LiteralPath "$PidFile.err"',
     // The auto-detect must survive INSIDE that else. Pinned as the loop header
     // rather than the whole block so reformatting does not turn the suite red
     // for no regression.

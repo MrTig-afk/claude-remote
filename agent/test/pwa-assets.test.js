@@ -1298,11 +1298,11 @@ function spy() {
   return fn;
 }
 
-const PROJ = { projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }] };
+const PROJ = { projects: [{ name: 'Beacon', path: 'F:/p/Beacon' }] };
 
 test('clearSettledLaunchBanner does nothing when no launch banner is up', () => {
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, null)();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Beacon', status: 'running' }] }, null)();
   assert.equal(hide.calls.length, 0);
 });
 
@@ -1311,14 +1311,14 @@ test('clearSettledLaunchBanner keeps the banner while the launch has not landed 
   // "not landed yet" is represented by state.results STILL holding the launch
   // result. An empty results map with no entry means the opposite - it landed
   // and the session is gone - which is the desk-exit test further down.
-  const state = { ...PROJ, sessions: [], results: new Map([['Sherlock', { kind: 'started' }]]) };
-  makeClearSettled(hide, state, 'Sherlock')();
+  const state = { ...PROJ, sessions: [], results: new Map([['Beacon', { kind: 'started' }]]) };
+  makeClearSettled(hide, state, 'Beacon')();
   assert.equal(hide.calls.length, 0, 'the 202 fires before the entry exists - hiding here would blank it instantly');
 });
 
 test('clearSettledLaunchBanner keeps the banner while the session is still starting', () => {
   const hide = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'starting' }] }, 'Sherlock')();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Beacon', status: 'starting' }] }, 'Beacon')();
   assert.equal(hide.calls.length, 0);
 });
 
@@ -1331,7 +1331,7 @@ test('clearSettledLaunchBanner hands off as soon as the session is running', () 
   // only point where it has something useful to say.
   const hide = spy();
   const handoff = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'running' }] }, 'Sherlock', handoff)();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Beacon', status: 'running' }] }, 'Beacon', handoff)();
   assert.equal(handoff.calls.length, 1, 'a live launch must hand off');
   assert.equal(hide.calls.length, 0, 'and must not blank the banner on the way');
 });
@@ -1339,7 +1339,7 @@ test('clearSettledLaunchBanner hands off as soon as the session is running', () 
 test('clearSettledLaunchBanner drops the banner for a failed session too, so maybeFailedBanner can replace it', () => {
   const hide = spy();
   const handoff = spy();
-  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Sherlock', status: 'failed' }] }, 'Sherlock', handoff)();
+  makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Beacon', status: 'failed' }] }, 'Beacon', handoff)();
   assert.equal(hide.calls.length, 1);
   // Lane 10 / R1: a failed launch must NEVER hand off. Sending someone to the
   // Claude app to look for a session that did not start is worse than silence
@@ -1384,9 +1384,9 @@ function makeDropCovered(state) {
 
 test('dropCoveredResults keeps the launch result while the entry has not landed yet', () => {
   const state = {
-    projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }],
+    projects: [{ name: 'Beacon', path: 'F:/p/Beacon' }],
     sessions: [],
-    results: new Map([['Sherlock', { kind: 'started' }]]),
+    results: new Map([['Beacon', { kind: 'started' }]]),
   };
   makeDropCovered(state)();
   assert.equal(state.results.size, 1, 'the 202 fires before the entry exists - the tile needs this to say starting');
@@ -1394,9 +1394,9 @@ test('dropCoveredResults keeps the launch result while the entry has not landed 
 
 test('dropCoveredResults drops the result the moment the server has an entry', () => {
   const state = {
-    projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }],
-    sessions: [{ path: 'F:/p/Sherlock', status: 'starting' }],
-    results: new Map([['Sherlock', { kind: 'started' }]]),
+    projects: [{ name: 'Beacon', path: 'F:/p/Beacon' }],
+    sessions: [{ path: 'F:/p/Beacon', status: 'starting' }],
+    results: new Map([['Beacon', { kind: 'started' }]]),
   };
   makeDropCovered(state)();
   assert.equal(state.results.size, 0, 'the session now speaks for itself');
@@ -1407,9 +1407,9 @@ test('a session pruned after being seen leaves NO stale result to fall back to',
   // desk, entry pruned. Without the drop, rowState fell back to the result and
   // the tile sat on "starting..." until a manual refresh.
   const state = {
-    projects: [{ name: 'Sherlock', path: 'F:/p/Sherlock' }],
-    sessions: [{ path: 'F:/p/Sherlock', status: 'running' }],
-    results: new Map([['Sherlock', { kind: 'started' }]]),
+    projects: [{ name: 'Beacon', path: 'F:/p/Beacon' }],
+    sessions: [{ path: 'F:/p/Beacon', status: 'running' }],
+    results: new Map([['Beacon', { kind: 'started' }]]),
   };
   const drop = makeDropCovered(state);
   drop();                       // poll tick while it is running
@@ -1446,8 +1446,8 @@ test('both poll loops drop covered results as soon as sessions are refreshed', (
 
 test('the launch banner keeps waiting while the launch has not landed (result still held)', () => {
   const hide = spy();
-  const state = { ...PROJ, sessions: [], results: new Map([['Sherlock', { kind: 'started' }]]) };
-  makeClearSettled(hide, state, 'Sherlock')();
+  const state = { ...PROJ, sessions: [], results: new Map([['Beacon', { kind: 'started' }]]) };
+  makeClearSettled(hide, state, 'Beacon')();
   assert.equal(hide.calls.length, 0, 'no entry yet AND the result is still there - the 202 has not landed');
 });
 
@@ -1458,7 +1458,7 @@ test('the launch banner clears when a session that HAD landed disappears (desk e
   // is what tells the two cases apart.
   const hide = spy();
   const state = { ...PROJ, sessions: [], results: new Map() };
-  makeClearSettled(hide, state, 'Sherlock')();
+  makeClearSettled(hide, state, 'Beacon')();
   assert.equal(hide.calls.length, 1, 'this is the bug: the banner sat on "start requested" forever');
 });
 
@@ -1566,10 +1566,10 @@ test('buildRow gives a folder row no dot and a chevron, and data-folder not data
 
 test('an ordinary row still gets its dot and data-project', () => {
   const buildRow = makeBuildRow();
-  const btn = buildRow({ name: 'Sherlock' }, { zone: 'list', dot: 'dim', status: 'no session', implicit: true });
+  const btn = buildRow({ name: 'Beacon' }, { zone: 'list', dot: 'dim', status: 'no session', implicit: true });
   assert.equal(btn.className, 'row');
   assert.equal(btn.children[0].tag, 'DOT');
-  assert.equal(btn.dataset.project, 'Sherlock');
+  assert.equal(btn.dataset.project, 'Beacon');
   assert.equal(btn.dataset.folder, undefined);
   assert.ok(!btn.children.some((c) => c.className === 'folder-chev'));
 });
@@ -1870,12 +1870,12 @@ test('renderProjects: with a folder open, only that folder\'s children render an
   const state = {
     projects: [
       { name: 'Pull Requests', container: true, children: [{ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }] },
-      { name: 'Sherlock', path: 'F:/p/Sherlock' },
+      { name: 'Beacon', path: 'F:/p/Beacon' },
     ],
     openFolder: 'Pull Requests',
     sessions: [
       { project: 'Pull Requests/Vercel', path: 'F:/p/Pull Requests/Vercel', source: 'launched', status: 'running', activity: 'busy' },
-      { project: 'Sherlock', path: 'F:/p/Sherlock', source: 'launched', status: 'running', activity: 'busy' },
+      { project: 'Beacon', path: 'F:/p/Beacon', source: 'launched', status: 'running', activity: 'busy' },
     ],
     launching: new Set(), stopping: new Set(), results: new Map(), confirmName: null, focusName: null,
   };
@@ -1891,8 +1891,8 @@ test('renderProjects: with a folder open, only that folder\'s children render an
   renderProjects();
 
   assert.deepEqual(rowsSeen, [], 'the only child, Vercel, is a running session so it is a tile, not a list row');
-  assert.deepEqual(tilesSeen, ['Pull Requests/Vercel'], 'the unrelated top-level Sherlock session must not reach the RUNNING zone while the folder is open');
-  assert.ok(!rowsSeen.includes('Sherlock') && !tilesSeen.includes('Sherlock'), 'a top-level project must never appear while a folder is open');
+  assert.deepEqual(tilesSeen, ['Pull Requests/Vercel'], 'the unrelated top-level Beacon session must not reach the RUNNING zone while the folder is open');
+  assert.ok(!rowsSeen.includes('Beacon') && !tilesSeen.includes('Beacon'), 'a top-level project must never appear while a folder is open');
   assert.ok(!rowsSeen.includes('Pull Requests'), 'the container must never appear as a row inside its own screen');
 });
 
@@ -2095,9 +2095,9 @@ test('the eyebrow marks a nested session by both routes and never a top-level pr
 
   // Top-level project: a top-level tile must be unchanged - no eyebrow, no
   // shifted name.
-  const topLevel = tileParts({ name: 'Sherlock', path: 'F:/p/Sherlock' });
+  const topLevel = tileParts({ name: 'Beacon', path: 'F:/p/Beacon' });
   assert.equal(topLevel.eyebrow, undefined);
-  assert.equal(topLevel.name.textContent, 'Sherlock');
+  assert.equal(topLevel.name.textContent, 'Beacon');
 });
 
 test('parentFolderName reads the containing folder from either separator', () => {
@@ -2109,14 +2109,14 @@ test('parentFolderName reads the containing folder from either separator', () =>
   // It answers about the path and not the project list, which is why only
   // the synthetic-row loop calls it - a top-level project's path also has a
   // containing segment.
-  assert.equal(parentFolderName('F:/p/Sherlock'), 'p');
+  assert.equal(parentFolderName('F:/p/Beacon'), 'p');
   assert.equal(parentFolderName(null), null);
 });
 
 test('renderProjects gives a synthetic row its parent and a listed project none', () => {
   const state = {
     projects: [
-      { name: 'Sherlock', path: 'F:/p/Sherlock' },
+      { name: 'Beacon', path: 'F:/p/Beacon' },
       { name: 'Pull Requests', container: true, children: [{ name: 'Vercel', path: 'F:/p/Pull Requests/Vercel' }] },
     ],
     openFolder: null,
@@ -2124,7 +2124,7 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
     focusName: null,
     sessions: [
       { project: 'Vercel', path: 'F:/p/Pull Requests/Vercel', source: 'desk', status: 'running', activity: 'busy' },
-      { project: 'Sherlock', path: 'F:/p/Sherlock', source: 'launched', status: 'running', activity: 'busy' },
+      { project: 'Beacon', path: 'F:/p/Beacon', source: 'launched', status: 'running', activity: 'busy' },
     ],
     launching: new Set(), stopping: new Set(), results: new Map(),
   };
@@ -2139,9 +2139,9 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
   renderProjects();
 
   const vercel = seen.find((p) => p.name === 'Vercel');
-  const sherlock = seen.find((p) => p.name === 'Sherlock');
+  const beacon = seen.find((p) => p.name === 'Beacon');
   assert.equal(vercel.parent, 'Pull Requests', 'the parent is attached where the row is built, because that is the only place that knows the row is not a listed project');
-  assert.equal(sherlock.parent, undefined);
+  assert.equal(beacon.parent, undefined);
 });
 
 // --- T100: the empty/broken project list ------------------------------
@@ -2268,7 +2268,7 @@ test("D2 - state 4 also renders [data-choose], and its title text differs from s
   }
   const state1 = run([]);
   const state4 = run([{
-    path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+    path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show', missing: false,
   }]);
 
   assert.equal(countByDataset(state1, 'choose'), 1);
@@ -2369,7 +2369,7 @@ test('D6 - renderBackBar receives canCreate=false for nothing-shared and true fo
 
   assert.equal(canCreateFor([]), false, "'nothing-shared' - + can only fail with no usable root");
   assert.equal(canCreateFor([{
-    path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show', missing: false,
+    path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show', missing: false,
   }]), true, "'empty-day-one' - a live root exists to create into");
 });
 
@@ -3247,7 +3247,7 @@ test('D8 - the cap note sits above the first row, not below it', async () => {
 
 test('D9 - showFolders(initial) opens with the roots already picked, no ticking needed', async () => {
   const picker = loadPicker({});
-  picker.showFolders([{ path: 'F:\\Dev\\Projects\\Repos', name: 'Repos', newFolders: 'show' }]);
+  picker.showFolders([{ path: 'F:\\Dev\\Projects\\Workspace', name: 'Workspace', newFolders: 'show' }]);
   await flush();
   assert.equal(picker.document.getElementById('share-picked-count').textContent, '1');
   assert.equal(picker.document.getElementById('share-save').disabled, false);
@@ -3354,7 +3354,7 @@ test('F4 - SAVE writes the right PUT body, and the list reload runs only after t
   // excludes; or the app never reloads and the list keeps showing the old
   // root's children.
   const getFolders = async (p) => (p === 'F:\\Dev\\Projects'
-    ? { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Repos', readable: true }], total: 1 } }
+    ? { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Workspace', readable: true }], total: 1 } }
     : { ok: true, status: 200, data: { path: p, parent: null, folders: [], total: 0 } });
   let resolvePut;
   const putShared = () => new Promise((resolve) => { resolvePut = () => resolve({ ok: true, status: 200, data: {} }); });
@@ -3373,7 +3373,7 @@ test('F4 - SAVE writes the right PUT body, and the list reload runs only after t
   door.onSharePickedClick({ target: untick });
 
   const tick = findByDataset(door.document.getElementById('share-list'), 'tick');
-  assert.ok(tick, 'the folder listing must carry Repos\'s checkbox');
+  assert.ok(tick, 'the folder listing must carry Workspace\'s checkbox');
   tick.checked = true;
   door.onShareListChange({ target: tick });
 
@@ -3382,7 +3382,7 @@ test('F4 - SAVE writes the right PUT body, and the list reload runs only after t
 
   assert.deepEqual(door.puts.at(-1), {
     shared_folders: [{
-      path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show',
+      path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show',
     }],
   });
   assert.equal(door.loadCalls, 0, 'the reload must not run before the PUT resolves');
@@ -3484,20 +3484,20 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
   const getFolders = async (p) => {
     if (p === 'F:\\') return { ok: true, status: 200, data: { path: 'F:\\', parent: null, folders: [{ name: 'Dev', readable: true }], total: 1 } };
     if (p === 'F:\\Dev') return { ok: true, status: 200, data: { path: 'F:\\Dev', parent: 'F:\\', folders: [{ name: 'Projects', readable: true }], total: 1 } };
-    if (p === 'F:\\Dev\\Projects') return { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Repos', readable: true }], total: 1 } };
+    if (p === 'F:\\Dev\\Projects') return { ok: true, status: 200, data: { path: 'F:\\Dev\\Projects', parent: 'F:\\Dev', folders: [{ name: 'Workspace', readable: true }], total: 1 } };
     return { ok: true, status: 200, data: { path: p, parent: null, folders: [], total: 0 } };
   };
   const putShared = async () => ({ ok: true, status: 200, data: {} });
-  const reposChildren = [
-    { name: 'Vercel', path: 'F:\\Dev\\Projects\\Repos\\Vercel' },
-    { name: 'Sherlock', path: 'F:\\Dev\\Projects\\Repos\\Sherlock' },
+  const workspaceChildren = [
+    { name: 'Vercel', path: 'F:\\Dev\\Projects\\Workspace\\Vercel' },
+    { name: 'Beacon', path: 'F:\\Dev\\Projects\\Workspace\\Beacon' },
   ];
   let projectsFromAgent = null;
   const door = loadDoor({
     getDrives,
     getFolders,
     putShared,
-    load: async () => { projectsFromAgent = reposChildren; },
+    load: async () => { projectsFromAgent = workspaceChildren; },
   });
   door.state.shared = [{
     path: 'F:\\Dev\\Projects', mode: 'container', excludes: [], new_folders: 'show',
@@ -3511,7 +3511,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
   await door.openPath('F:\\', { push: true });
   await door.openPath('F:\\Dev', { push: true });
   await door.openPath('F:\\Dev\\Projects', { push: true });
-  door.toggleTick('F:\\Dev\\Projects\\Repos', true); // tick the right one
+  door.toggleTick('F:\\Dev\\Projects\\Workspace', true); // tick the right one
 
   door.document.getElementById('share-save').fire('click');
   await flush();
@@ -3519,9 +3519,9 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
 
   assert.deepEqual(door.puts.at(-1), {
     shared_folders: [{
-      path: 'F:\\Dev\\Projects\\Repos', mode: 'container', excludes: [], new_folders: 'show',
+      path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show',
     }],
-  }, 'the PUT body must name only Repos');
+  }, 'the PUT body must name only Workspace');
   assert.equal(door.loadCalls, 1);
   assert.ok(projectsFromAgent, 'load must have run and fetched the new root\'s children');
 
@@ -3562,7 +3562,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
   });
   renderProjects();
 
-  assert.deepEqual(rowsSeen.sort(), ['Sherlock', 'Vercel'], 'the reloaded list must show Repos\'s children, not the old root\'s');
+  assert.deepEqual(rowsSeen.sort(), ['Beacon', 'Vercel'], 'the reloaded list must show Workspace\'s children, not the old root\'s');
 });
 
 test('#accept-go ships disabled, and only the checkbox change handler clears it', () => {

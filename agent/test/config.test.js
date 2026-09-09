@@ -52,22 +52,22 @@ test('resolveSharedFolders migrates a lone default_base_folder to one container 
 test('resolveSharedFolders passes shared_folders through, normalised', () => {
   const configPath = writeConfig('shared-passthrough.json', JSON.stringify({
     shared_folders: [
-      { path: 'F:\\Dev\\Projects\\Repos', mode: 'single', excludes: ['Archive', '', 7, 'old-stuff'], new_folders: 'hide', colour: 'red' },
+      { path: 'F:\\Dev\\Projects\\Workspace', mode: 'single', excludes: ['Archive', '', 7, 'old-stuff'], new_folders: 'hide', colour: 'red' },
     ],
   }));
   assert.deepEqual(resolveSharedFolders(configPath), [
-    { path: path.resolve('F:\\Dev\\Projects\\Repos'), mode: 'single', excludes: ['Archive', 'old-stuff'], new_folders: 'hide' },
+    { path: path.resolve('F:\\Dev\\Projects\\Workspace'), mode: 'single', excludes: ['Archive', 'old-stuff'], new_folders: 'hide' },
   ]);
 });
 
 test('resolveSharedFolders: shared_folders wins over default_base_folder when both are present', () => {
   const configPath = writeConfig('shared-wins.json', JSON.stringify({
     default_base_folder: 'D:\\Ignored\\Path',
-    shared_folders: [{ path: 'F:\\Dev\\Projects\\Repos' }],
+    shared_folders: [{ path: 'F:\\Dev\\Projects\\Workspace' }],
   }));
   const result = resolveSharedFolders(configPath);
   assert.equal(result.length, 1);
-  assert.equal(result[0].path, path.resolve('F:\\Dev\\Projects\\Repos'));
+  assert.equal(result[0].path, path.resolve('F:\\Dev\\Projects\\Workspace'));
   const ignoredPath = path.resolve('D:\\Ignored\\Path');
   assert.ok(!result.some((entry) => entry.path === ignoredPath));
 });
@@ -92,11 +92,11 @@ test('resolveSharedFolders: a non-array shared_folders yields [] with a warn, ev
 
 test('resolveSharedFolders drops a garbage entry beside a good one, with a warn, and does not throw', () => {
   const configPath = writeConfig('shared-garbage.json', JSON.stringify({
-    shared_folders: ['nope', { path: 'Some\\Relative\\Path' }, { path: 'F:\\Dev\\Projects\\Repos' }, null, 42, {}],
+    shared_folders: ['nope', { path: 'Some\\Relative\\Path' }, { path: 'F:\\Dev\\Projects\\Workspace' }, null, 42, {}],
   }));
   const { result, lines } = captureWarnings(() => resolveSharedFolders(configPath));
   assert.equal(result.length, 1);
-  assert.equal(result[0].path, path.resolve('F:\\Dev\\Projects\\Repos'));
+  assert.equal(result[0].path, path.resolve('F:\\Dev\\Projects\\Workspace'));
   assert.equal(result[0].mode, 'container');
   assert.ok(lines.length >= 1);
 });
@@ -108,10 +108,10 @@ test('resolveSharedFolders throws, and the message names the config file path, w
 
 test('resolveSharedFolders preserves the path exactly as the owner wrote it, case included', () => {
   const configPath = writeConfig('shared-case.json', JSON.stringify({
-    shared_folders: [{ path: 'F:\\Dev\\PROJECTS\\Repos' }],
+    shared_folders: [{ path: 'F:\\Dev\\PROJECTS\\Workspace' }],
   }));
   assert.deepEqual(resolveSharedFolders(configPath), [
-    { path: 'F:\\Dev\\PROJECTS\\Repos', mode: 'container', excludes: [], new_folders: 'show' },
+    { path: 'F:\\Dev\\PROJECTS\\Workspace', mode: 'container', excludes: [], new_folders: 'show' },
   ]);
 });
 
