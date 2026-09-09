@@ -621,6 +621,25 @@ test('launchSession - passes -PreLaunch as ONE argument when configured', () => 
   assert.equal(calls[0].args[i + 1], 'conda activate myenv');
 });
 
+test('launchSession - no -NoOpeningReport when the report is on (the default)', () => {
+  const { spawner, calls } = makeFakeSpawner();
+  launchSession({
+    spawner, baseDir: base, claudeConfigDir: null, preLaunchCommand: null, openingReport: true, ...makeRegCtx(),
+  }, 'Video Editing');
+  assert.ok(
+    !calls[0].args.includes('-NoOpeningReport'),
+    'the switch must be ABSENT in the normal case - it only ever suppresses',
+  );
+});
+
+test('launchSession - passes -NoOpeningReport when the owner switched the report off', () => {
+  const { spawner, calls } = makeFakeSpawner();
+  launchSession({
+    spawner, baseDir: base, claudeConfigDir: null, preLaunchCommand: null, openingReport: false, ...makeRegCtx(),
+  }, 'Video Editing');
+  assert.ok(calls[0].args.includes('-NoOpeningReport'));
+});
+
 test('launchSession - passes -ConfigDir when a profile IS configured (T56)', () => {
   const { spawner, calls } = makeFakeSpawner();
   const dir = path.join(base, 'some-profile');

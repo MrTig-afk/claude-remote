@@ -107,11 +107,14 @@ first two make the obvious command the wrong one:
 - **It must RETURN.** No timeout, and it runs before Claude Code starts, so
   anything that blocks hangs the launch and no session ever appears. Do NOT
   suggest `poetry shell` - it opens a nested interactive shell and waits
-  forever. `poetry env activate` is the one that returns.
-- **ONE value for EVERY project**, and it REPLACES the auto-detect. Setting it
-  for a conda project stops every other project getting its `venv`/`.venv`
-  activated. If their projects differ, the command has to branch (on `$PWD`),
-  or leave it unset. There is no per-project setting yet.
+  forever. `Invoke-Expression (poetry env activate)` is the one that both returns AND
+  actually activates - bare `poetry env activate` only PRINTS the line.
+- **It REPLACES the auto-detect** for any project it applies to - `venv`/
+  `.venv` is not tried as well. `pre_launch_command` is the fallback for every
+  project; `pre_launch_commands` is a map keyed by project path that overrides
+  it for one. Projects in neither keep the auto-detect. If their projects need
+  different environments, that map is the answer - not a command that branches
+  on `$PWD`.
 
 Tell them where failures show up, because nowhere else does: the launcher
 writes `<pid file>.err` beside the pid file in `session-pids\`.

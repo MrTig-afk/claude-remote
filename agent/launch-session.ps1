@@ -6,10 +6,20 @@ param(
     [Parameter(Mandatory)][string]$SessionName,
     [string]$PidFile,                    # optional ON PURPOSE - see below
     [string]$ConfigDir,                  # optional: absent = Claude Code's own default
-    [string]$PreLaunch                   # optional: absent = auto-detect venv/.venv
+    [string]$PreLaunch,                  # optional: absent = auto-detect venv/.venv
+    [switch]$NoOpeningReport             # optional: absent = report when HANDOFF.md exists
 )
 
 $ErrorActionPreference = 'Stop'
+
+# CLEAR LAST LAUNCH'S FAILURE FIRST. The .err file below is the only place a
+# failed pre_launch_command is visible, and nothing else ever deletes it -
+# clearPidFile (registry.js) unlinks the .pid and knows nothing about this.
+# Without this line a fixed config still shows the old failure for ever, and a
+# second failure after a good run is indistinguishable from the first. Cleared
+# unconditionally rather than inside the -PreLaunch branch, so a stale file
+# does not survive by the owner simply removing the setting.
+if ($PidFile) { Remove-Item -LiteralPath "$PidFile.err" -ErrorAction SilentlyContinue }
 
 # T56. This used to join $HOME to one specific personal profile name, hardcoded.
 # A stranger got every session launched against a profile directory that does
@@ -62,9 +72,15 @@ if ($PreLaunch) {
     # prompt) hangs the launcher for ever. The docs carry that constraint.
     try {
         Invoke-Expression $PreLaunch
-    } catch {
+    } catch { $preLaunchFailure = $_
+        # The capture sits ON the catch line deliberately. The recipe test pins
+        # this whole line, and it is the only form that works: `'} catch {'`
+        # alone also matched the inner catch below, and pinning the assignment
+        # on its own line survived a catch->finally mutation. Both were tried
+        # and both stayed green. It also keeps the message the OUTER error if
+        # the inner catch ever grows a body.
         if ($PidFile) {
-            try { Set-Content -LiteralPath "$PidFile.err" -Value "pre_launch_command failed: $_" -Encoding utf8 } catch { }
+            try { Set-Content -LiteralPath "$PidFile.err" -Value "pre_launch_command failed: $preLaunchFailure" -Encoding utf8 } catch { }
         }
     }
 } else {
@@ -101,8 +117,10 @@ if ($PreLaunch) {
 # the --channels failure left the session working perfectly and removed only the
 # row, so "it launched fine" is not evidence. It took a person looking at the
 # app. If a positional is ever changed here, that check is owed again.
+# A switch that only ever SUPPRESSES; absent means report. The default and why
+# it fails in that direction live on resolveOpeningReport in config.js.
 $openingReport = @()
-if (Test-Path -LiteralPath (Join-Path $ProjectPath 'HANDOFF.md')) {
+if (-not $NoOpeningReport -and (Test-Path -LiteralPath (Join-Path $ProjectPath 'HANDOFF.md'))) {
     $openingReport = @('"Read HANDOFF.md and give the opening report."')
 }
 

@@ -5,7 +5,10 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-import { getPidDirPath, getRegistryFilePath, resolveClaudeConfigDir, resolvePreLaunchCommand } from './config.js';
+import {
+  getPidDirPath, getRegistryFilePath, resolveClaudeConfigDir,
+  resolvePreLaunchCommand, resolveOpeningReport,
+} from './config.js';
 import {
   findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
   isPidAlive, claimDeskSession,
@@ -712,10 +715,16 @@ export function launchSession(ctx, project) {
     ? ctx.claudeConfigDir
     : resolveClaudeConfigDir(ctx.configPath);
 
-  // Same hasOwn seam as claudeConfigDir above, same reason.
+  // Same hasOwn seam as claudeConfigDir above, same reason. r.path is passed
+  // so a per-project entry can win over the global one.
   const preLaunchCommand = Object.hasOwn(ctx, 'preLaunchCommand')
     ? ctx.preLaunchCommand
-    : resolvePreLaunchCommand(ctx.configPath);
+    : resolvePreLaunchCommand(ctx.configPath, r.path);
+
+  // Same seam again.
+  const openingReport = Object.hasOwn(ctx, 'openingReport')
+    ? ctx.openingReport
+    : resolveOpeningReport(ctx.configPath);
 
   // Production never created this directory - only tests did, which is why 98
   // green tests missed it. Without it, launch-session.ps1's Set-Content fails
@@ -769,6 +778,8 @@ export function launchSession(ctx, project) {
     // the venv auto-detect that has always run. An empty string would bind and
     // defeat that.
     ...(preLaunchCommand ? ['-PreLaunch', preLaunchCommand] : []),
+    // Passed ONLY to suppress - see resolveOpeningReport for why.
+    ...(openingReport ? [] : ['-NoOpeningReport']),
   ], {
     // NO `detached: true`. On Windows it maps to libuv's DETACHED_PROCESS,
     // and powershell.exe 5.1 spawned that way exits 0 IMMEDIATELY WITHOUT

@@ -74,27 +74,77 @@ export function resolveClaudeConfigDir(configPath = getConfigFilePath()) {
  * same as claude_config_dir above: an unset key means "do what you already
  * do", never "run something we guessed".
  *
+ * `pre_launch_commands` (keyed by project path) wins, then `pre_launch_command`
+ * (one string) for everything else. The map exists because the global alone
+ * silently disabled venv activation for every OTHER project once set (F6-003).
+ *
  * THIS IS ARBITRARY CODE EXECUTION BY DESIGN - launch-session.ps1 runs the
  * value through Invoke-Expression. Acceptable ONLY because setting it requires
  * desk access to config.json, and anyone with that can already run anything as
  * this user. It must therefore NEVER become settable over the API, which
  * `accept.test.js` pins behaviourally.
  */
-let warnedBadPreLaunch = false;
-export function resolvePreLaunchCommand(configPath = getConfigFilePath()) {
-  const value = readConfig(configPath).pre_launch_command;
+// ONCE PER KEY, not once overall. A single boolean here meant the first
+// malformed key silenced every other one for the life of the process - and the
+// agent is a long-lived scheduled task, so "for the life of the process" is
+// until reboot. A bad per-project entry would hide a bad global, and both route
+// to the same silently-no-environment-step outcome this feature exists to stop.
+const warnedBadCommands = new Set();
+function usableCommand(value, configPath, where) {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string' || value.trim() === '') {
-    // ONCE, for the same reason the config-dir warns once: this is reached
-    // from the launch path, not a 5s poll, but a misconfigured key would
-    // otherwise print on every single launch and bury anything worth reading.
-    if (!warnedBadPreLaunch) {
-      warnedBadPreLaunch = true;
-      console.warn(`claude-remote agent: config '${configPath}' has a pre_launch_command that is not a non-empty string; ignoring it`);
+    // Still throttled: this is on the launch path, and an unguarded warn would
+    // print on every launch and bury anything worth reading.
+    if (!warnedBadCommands.has(where)) {
+      warnedBadCommands.add(where);
+      console.warn(`claude-remote agent: config '${configPath}' has a ${where} that is not a non-empty string; ignoring it`);
     }
     return null;
   }
   return value;
+}
+
+/**
+ * Its own path normaliser rather than shared.js's `pathKey`. NOT an oversight:
+ * shared.js imports this module (writeConfig), so importing back would be a
+ * cycle. Two lines duplicated across that boundary is the cheaper of the two
+ * problems - keep them in step by hand if either changes.
+ */
+const projectKey = (p) => path.resolve(p).replace(/[\\/]+$/, '').toUpperCase();
+
+export function resolvePreLaunchCommand(configPath = getConfigFilePath(), projectPath = null) {
+  const config = readConfig(configPath);
+
+  // PER-PROJECT WINS, and it is looked up before the global is even read.
+  // Owner decision 2026-09-09 (T120): keyed by project path in the central
+  // config, NOT a file inside the project. A file that travels with a repo
+  // would let a cloned project execute a command the moment its tile is
+  // tapped - the direnv problem - and this setting reaches Invoke-Expression.
+  // Central config cannot be written by any API route, so no repo can inject.
+  const byProject = config.pre_launch_commands;
+  if (projectPath && byProject && typeof byProject === 'object' && !Array.isArray(byProject)) {
+    const want = projectKey(projectPath);
+    const hit = Object.entries(byProject).find(([configured]) => projectKey(configured) === want);
+    if (hit) {
+      // A present-but-unusable entry falls through to the global rather than to
+      // nothing: running NO environment step for the one project the owner
+      // explicitly configured is the failure this feature exists to stop.
+      const usable = usableCommand(hit[1], configPath, `pre_launch_commands entry for '${hit[0]}'`);
+      if (usable) return usable;
+    }
+  }
+
+  return usableCommand(config.pre_launch_command, configPath, 'pre_launch_command');
+}
+
+/**
+ * Whether a PWA-launched session opens by reporting where the work stands.
+ * ONLY an explicit `false` switches it off - a missing, null or malformed key
+ * leaves it ON, because the failure it guards is a silent phone-launched
+ * session, which gives the owner nothing to diagnose.
+ */
+export function resolveOpeningReport(configPath = getConfigFilePath()) {
+  return readConfig(configPath).opening_report !== false;
 }
 
 /** Claude Code profile session directories to scan. Only <pid>.json is ever

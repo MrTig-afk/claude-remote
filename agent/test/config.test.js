@@ -7,6 +7,7 @@ import { test, after } from 'node:test';
 import {
   getConfigFilePath, readConfig, resolveSharedFolders,
   resolveClaudeConfigDir, getSessionDirPaths, resolvePreLaunchCommand,
+  resolveOpeningReport,
 } from '../config.js';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-config-'));
@@ -244,6 +245,79 @@ test('pre_launch_command ignores a non-string or blank value rather than running
       JSON.stringify({ pre_launch_command: bad }));
     assert.equal(resolvePreLaunchCommand(configPath), null, `${JSON.stringify(bad)} must be ignored`);
   }
+});
+
+// --- T120: per-project beats global -----------------------------------------
+// The global-only version silently disabled venv activation for every OTHER
+// project the moment it was set (F6-003), which is what this map exists to fix.
+
+test('pre_launch_commands: a per-project entry wins over the global one', () => {
+  const configPath = writeConfig('prelaunch-perproject.json', JSON.stringify({
+    pre_launch_command: 'conda activate global',
+    pre_launch_commands: { 'F:\\Dev\\Projects\\Workspace\\email-lint': 'poetry env activate' },
+  }));
+  assert.equal(
+    resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\Workspace\\email-lint'),
+    'poetry env activate',
+  );
+  // Any other project still gets the global one, which is the whole point.
+  assert.equal(
+    resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\Workspace\\other'),
+    'conda activate global',
+  );
+});
+
+test('pre_launch_commands: paths match case-insensitively and ignore a trailing separator', () => {
+  // Windows paths are case-insensitive and the owner hand-edits this file, so
+  // a key that differs only in case or a trailing slash must still match -
+  // otherwise the entry silently does nothing and the global runs instead.
+  const configPath = writeConfig('prelaunch-pathcase.json', JSON.stringify({
+    pre_launch_commands: { 'f:\\dev\\projects\\workspace\\email-lint\\': 'poetry env activate' },
+  }));
+  assert.equal(
+    resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\Workspace\\email-lint'),
+    'poetry env activate',
+  );
+});
+
+test('pre_launch_commands: an unusable per-project entry falls through to the global', () => {
+  // Deliberate: the alternative is running NO environment step for the one
+  // project the owner explicitly configured - the exact silent-wrong-env
+  // failure this feature exists to stop.
+  const configPath = writeConfig('prelaunch-badentry.json', JSON.stringify({
+    pre_launch_command: 'conda activate global',
+    pre_launch_commands: { 'F:\\Dev\\Projects\\Workspace\\email-lint': 42 },
+  }));
+  const { result } = captureWarnings(() => resolvePreLaunchCommand(
+    configPath, 'F:\\Dev\\Projects\\Workspace\\email-lint',
+  ));
+  assert.equal(result, 'conda activate global');
+});
+
+test('pre_launch_commands: a non-object map is ignored rather than thrown on', () => {
+  const configPath = writeConfig('prelaunch-badmap.json', JSON.stringify({
+    pre_launch_command: 'conda activate global',
+    pre_launch_commands: ['not', 'an', 'object'],
+  }));
+  assert.equal(resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\Workspace\\x'), 'conda activate global');
+});
+
+// --- T108: the opening report is on unless explicitly switched off ----------
+
+test('resolveOpeningReport is TRUE by default and on anything that is not exactly false', () => {
+  // The default has to fail in this direction: a silent session started from a
+  // phone gives the owner nothing to diagnose. Only an explicit false counts.
+  assert.equal(resolveOpeningReport(writeConfig('or-absent.json', '{}')), true);
+  assert.equal(resolveOpeningReport(writeConfig('or-missing-file.json')), true);
+  for (const junk of ['false', 0, null, 'no', {}]) {
+    const configPath = writeConfig(`or-junk-${JSON.stringify(junk)}.json`.replace(/[^\w.-]/g, '_'),
+      JSON.stringify({ opening_report: junk }));
+    assert.equal(resolveOpeningReport(configPath), true, `${JSON.stringify(junk)} must not switch it off`);
+  }
+});
+
+test('resolveOpeningReport is FALSE only for a literal false', () => {
+  assert.equal(resolveOpeningReport(writeConfig('or-off.json', '{"opening_report":false}')), false);
 });
 
 test('a profile relocated behind a junction or symlink is still discovered', () => {

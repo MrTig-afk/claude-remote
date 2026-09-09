@@ -163,14 +163,27 @@ and you get a session in the base environment with no sign of it.
 starts, and there is no timeout - so anything that blocks hangs the launch and
 no session ever appears. `poetry shell` is the trap here: it opens a nested
 interactive shell and waits for it to exit, which never happens. Use
-`poetry env activate` (or dot-source the activate script) instead.
+`Invoke-Expression (poetry env activate)` instead - note the wrapper, because
+`poetry env activate` only PRINTS the activation line, it does not run it.
 
-**It is ONE setting for EVERY project, and it replaces the auto-detect.** There
-is no per-project version yet. So if you set it for a conda project, every
-other project stops getting its `venv`/`.venv` activated automatically - the
-auto-detect no longer runs at all. If your projects need different
-environments, make the command handle that (branch on `$PWD`), or leave it
-unset and rely on the auto-detect.
+**Whichever command applies, it replaces the auto-detect for that project** -
+`venv`/`.venv` is not tried as well. `pre_launch_command` is the fallback for
+every project; set `pre_launch_commands` to override it for one:
+
+```json
+{
+  "pre_launch_command": "& \"$env:USERPROFILE\\miniconda3\\shell\\condabin\\conda-hook.ps1\"; conda activate default",
+  "pre_launch_commands": {
+    "F:\\Dev\\Projects\\email-lint": "Invoke-Expression (poetry env activate)"
+  }
+}
+```
+
+Projects with no entry fall back to the single `pre_launch_command`, and
+projects with neither keep the `venv`/`.venv` auto-detect. Paths are matched
+case-insensitively and a trailing slash does not matter. If you set only the
+global one, remember it applies everywhere - that is what the per-project map
+is for.
 
 When it fails, the launcher writes the error to `<pid file>.err` in
 `%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\session-pids\`.
@@ -182,6 +195,21 @@ box reachable from your phone would turn the six-digit passcode into a way to
 run anything on your PC - the exact threat described at the top of this file.
 Editing the config file requires access to the machine, and anyone with that
 can already run anything as you.
+
+## The opening report
+
+A session you start from the phone opens by telling you where the work stands,
+rather than sitting silent until you type something. The launcher does this by
+submitting one prompt for you - "Read HANDOFF.md and give the opening report."
+- and only when the project actually contains a `HANDOFF.md`. A project without
+one starts silent, exactly as before.
+
+It exists because the PWA is a start button: nobody is at the keyboard to type
+the first message, so a session that opens silently has wasted the launch.
+
+Turn it off with `"opening_report": false` in the config file. Only a literal
+`false` counts - anything else leaves it on, deliberately, because a silent
+session started from a phone gives you nothing to diagnose.
 
 ## Daily use
 
