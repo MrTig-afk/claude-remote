@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
+    <img src="docs/hero-light.png" alt="claude-remote" width="720">
+  </picture>
+</p>
+
 # Claude Remote
 
 Start, watch, and stop a Claude Code session on your Windows PC from your phone,
@@ -9,6 +16,19 @@ for next time.
 It is a **remote start button, not a terminal.** There is no live console output
 and no way to answer an interactive prompt from the phone; the actual
 conversation happens in the Claude Code app. That is deliberate.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screens/list.png" alt="Project list with one session running"></td>
+<td width="50%"><img src="docs/screens/running.png" alt="Two sessions running"></td>
+</tr>
+<tr>
+<td align="center"><sub>One session running</sub></td>
+<td align="center"><sub>Two, side by side</sub></td>
+</tr>
+</table>
+
+<sub>Project names in the screenshots are invented.</sub>
 
 ---
 
@@ -180,10 +200,19 @@ every project; set `pre_launch_commands` to override it for one:
 ```
 
 Projects with no entry fall back to the single `pre_launch_command`, and
-projects with neither keep the `venv`/`.venv` auto-detect. Paths are matched
-case-insensitively and a trailing slash does not matter. If you set only the
-global one, remember it applies everywhere - that is what the per-project map
-is for.
+projects with neither keep the `venv`/`.venv` auto-detect. Keys need a **drive
+letter** (`F:\...`): a `~` is never expanded, and anything else - including
+`/Dev/Projects/web` - resolves against whatever directory the agent was started
+in, so it usually matches nothing and whether it matches at all depends on how
+the agent was launched. The agent warns about such a key, but only in its own
+terminal. Matching is case-insensitive and a trailing slash does not matter.
+
+To say **"this project needs nothing"** and keep the plain auto-detect even
+though a global is set, map it to `null`:
+
+```json
+{ "pre_launch_commands": { "F:\\Dev\\Projects\\web": null } }
+```
 
 When it fails, the launcher writes the error to `<pid file>.err` in
 `%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\session-pids\`.

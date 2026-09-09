@@ -294,6 +294,54 @@ test('pre_launch_commands: an unusable per-project entry falls through to the gl
   assert.equal(result, 'conda activate global');
 });
 
+test('pre_launch_commands: null or blank is an explicit OPT-OUT, not a fall-through', () => {
+  // Without this there is no way to say "this project needs nothing": an owner
+  // with a global conda command and one plain Node project would get conda run
+  // there anyway. That is the silent-wrong-environment outcome the feature
+  // exists to stop, reached by configuring it correctly.
+  const configPath = writeConfig('prelaunch-optout.json', JSON.stringify({
+    pre_launch_command: 'conda activate global',
+    pre_launch_commands: {
+      'F:\\Dev\\Projects\\web': null,
+      'F:\\Dev\\Projects\\api': '   ',
+    },
+  }));
+  assert.equal(resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\web'), null,
+    'null must mean "nothing here", not "use the global"');
+  // A BLANK IS NOT AN OPT-OUT. It is far more likely a half-finished edit, it
+  // is an undocumented second spelling, and silently honouring it would drop
+  // the environment step where the previous build warned. It stays malformed:
+  // warn, then the global.
+  const { result } = captureWarnings(() => resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\api'));
+  assert.equal(result, 'conda activate global', 'a blank entry must warn and fall through, not opt out');
+  // and the global still applies everywhere else
+  assert.equal(resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\other'), 'conda activate global');
+});
+
+test('pre_launch_commands: a drive-relative key warns - path.isAbsolute says true for it on win32', () => {
+  // `/Dev/Projects/web` is the natural thing to type and path.isAbsolute
+  // returns TRUE for it on win32, so the first version of this guard let it
+  // through. It then resolves against the agent's cwd, which means whether it
+  // matches depends on how the agent was launched.
+  const configPath = writeConfig('prelaunch-driverel.json', JSON.stringify({
+    pre_launch_commands: { '/Dev/Projects/web': 'poetry env activate' },
+  }));
+  const { lines } = captureWarnings(() => resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\web'));
+  assert.ok(lines.some((l) => l.includes('no drive letter')),
+    `a drive-relative key must warn, got ${JSON.stringify(lines)}`);
+});
+
+test('pre_launch_commands: a key that can never match warns rather than failing silently', () => {
+  // `~` is not expanded by node and a relative key resolves against the AGENT's
+  // directory, so both match nothing. The owner would see only the wrong
+  // interpreter inside a session on his phone.
+  const configPath = writeConfig('prelaunch-unmatchable.json', JSON.stringify({
+    pre_launch_commands: { '~/Dev/Projects/web': 'poetry env activate' },
+  }));
+  const { lines } = captureWarnings(() => resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\web'));
+  assert.ok(lines.some((l) => l.includes('no drive letter')), `expected an unmatchable-key warn, got ${JSON.stringify(lines)}`);
+});
+
 test('pre_launch_commands: a non-object map is ignored rather than thrown on', () => {
   const configPath = writeConfig('prelaunch-badmap.json', JSON.stringify({
     pre_launch_command: 'conda activate global',

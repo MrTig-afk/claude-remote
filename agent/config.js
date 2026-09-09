@@ -112,6 +112,32 @@ function usableCommand(value, configPath, where) {
  */
 const projectKey = (p) => path.resolve(p).replace(/[\\/]+$/, '').toUpperCase();
 
+/**
+ * A key that names a project without depending on where the agent was started:
+ * a drive-qualified path or a UNC path. NOT `path.isAbsolute`, which returns
+ * TRUE on win32 for a drive-RELATIVE root like `/Dev/x` - the natural thing to
+ * type, and the very form the docs warn about. That key then resolves against
+ * the agent's cwd, so whether it matches flips with how the agent was launched.
+ */
+const DRIVE_QUALIFIED = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+
+/**
+ * Warns once per `pre_launch_commands` key that is not drive-qualified. Such a
+ * key resolves against the agent's working directory, so it USUALLY matches
+ * nothing and the owner sees only the wrong interpreter inside a session on his
+ * phone - but "usually", not "never": start the agent inside the projects root
+ * and a relative key does match. The warning says that, because a diagnostic
+ * that overstates its case teaches the reader to distrust it.
+ */
+const warnedUnmatchableKeys = new Set();
+function warnUnmatchableKeys(byProject, configPath) {
+  for (const key of Object.keys(byProject)) {
+    if (DRIVE_QUALIFIED.test(key) || warnedUnmatchableKeys.has(key)) continue;
+    warnedUnmatchableKeys.add(key);
+    console.warn(`claude-remote agent: config '${configPath}' has a pre_launch_commands key '${key}' with no drive letter, so it resolves against the agent's working directory and will usually match no project ('~' is never expanded)`);
+  }
+}
+
 export function resolvePreLaunchCommand(configPath = getConfigFilePath(), projectPath = null) {
   const config = readConfig(configPath);
 
@@ -123,13 +149,23 @@ export function resolvePreLaunchCommand(configPath = getConfigFilePath(), projec
   // Central config cannot be written by any API route, so no repo can inject.
   const byProject = config.pre_launch_commands;
   if (projectPath && byProject && typeof byProject === 'object' && !Array.isArray(byProject)) {
+    warnUnmatchableKeys(byProject, configPath);
     const want = projectKey(projectPath);
     const hit = Object.entries(byProject).find(([configured]) => projectKey(configured) === want);
     if (hit) {
-      // A present-but-unusable entry falls through to the global rather than to
-      // nothing: running NO environment step for the one project the owner
-      // explicitly configured is the failure this feature exists to stop.
-      const usable = usableCommand(hit[1], configPath, `pre_launch_commands entry for '${hit[0]}'`);
+      const [key, command] = hit;
+      // EXPLICIT OPT-OUT: literal `null` only, and it must come before the
+      // usable check. It means "this project needs nothing" - keep the venv
+      // auto-detect, do NOT fall through to the global. Without it there is no
+      // way to say that at all.
+      // NOT a blank string. A blank is far more likely a half-finished edit
+      // than a stated intention, it is an undocumented second spelling, and
+      // treating it as opt-out silently drops the environment step where the
+      // previous build warned. Blank stays MALFORMED below: warn, then the
+      // global, which is the better guess when the owner clearly meant to type
+      // something.
+      if (command === null) return null;
+      const usable = usableCommand(command, configPath, `pre_launch_commands entry for '${key}'`);
       if (usable) return usable;
     }
   }

@@ -114,7 +114,11 @@ first two make the obvious command the wrong one:
   project; `pre_launch_commands` is a map keyed by project path that overrides
   it for one. Projects in neither keep the auto-detect. If their projects need
   different environments, that map is the answer - not a command that branches
-  on `$PWD`.
+  on `$PWD`. Map a project to `null` - and only `null` - to say "this one needs
+  nothing" and keep the auto-detect despite a global. Keys need a DRIVE LETTER
+  (`F:\...`): a `~` is never expanded, and anything else, `/Dev/x` included,
+  resolves against whatever directory the agent was started in, so it usually
+  matches nothing. The agent warns, but only in its own terminal.
 
 Tell them where failures show up, because nowhere else does: the launcher
 writes `<pid file>.err` beside the pid file in `session-pids\`.
