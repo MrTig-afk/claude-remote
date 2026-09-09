@@ -56,7 +56,15 @@ Note `claude.cmd`, not `claude`. On Windows the bare name resolves to
 
 ## 3. Start the agent, and make it start itself
 
-From the repo root:
+From the repo root. Every relative path in this skill is relative to it.
+
+A marketplace install does not give you a stable one. `claude plugin list
+--json` reports its `installPath` (`claude plugin details` does NOT print a
+path - measured), but that path is VERSION-SCOPED,
+`...\cache\<marketplace>\<plugin>\<version>\`, and moves on every `claude
+plugin update`. A scheduled task registered from it would silently point at a
+directory that no longer exists. So for the agent: `git clone` the repo to a
+path you choose, and run it from there.
 
 ```powershell
 node agent/server.js

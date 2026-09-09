@@ -24,7 +24,7 @@ import {
 // The version baked into whatever copy of the shell the phone has cached.
 // Keep it a plain single-quoted literal: the version test reads it out of
 // this source file, because a browser module cannot be imported under node.
-export const SHELL_VERSION = '0.1.0';
+export const SHELL_VERSION = '1.0.0';
 
 // Single module-level state. 15 rows today - full rebuild on every render(),
 // no diffing, no framework, no template engine.
@@ -4149,6 +4149,13 @@ async function maybeResetCache() {
 }
 
 async function boot() {
+  // FIRST, before any await. The header sits outside the screen <main>s and
+  // has no hide rule, so it is visible behind the gate and accept screens -
+  // and the passcode is asked on every open. Filling it inside wireEvents(),
+  // which runs after both awaits, left the badge blank for the whole locked
+  // period of every launch, and blank for the life of the page if either
+  // await rejected.
+  document.getElementById('hdr-ver').textContent = `v${SHELL_VERSION}`;
   if (await maybeResetCache()) return;
   registerServiceWorker(); // above the gate: the PWA must stay installable
                             // from the lock screen

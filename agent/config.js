@@ -107,7 +107,13 @@ export function getSessionDirPaths(configPath = getConfigFilePath(), homeDir = o
   let discovered = [];
   try {
     discovered = fs.readdirSync(homeDir, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && e.name.startsWith('.claude-'))
+      // `!isFile()`, NOT `isDirectory()`: readdir does not follow links, so a
+      // profile relocated to another drive by a junction or symlink - a normal
+      // move on a disk-tight machine - reports isSymbolicLink() and would be
+      // dropped, which is exactly the coverage gap this discovery exists to
+      // close. The `sessions` check below DOES follow links and is what
+      // actually decides, so relaxing this loses no exclusion.
+      .filter((e) => !e.isFile() && e.name.startsWith('.claude-'))
       .map((e) => path.join(homeDir, e.name))
       .filter((d) => fs.existsSync(path.join(d, 'sessions')));
   } catch { /* unreadable home - configured + default still apply */ }

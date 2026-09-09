@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-remote",
+  "description": "Start and stop Claude Code sessions on your Windows PC from your phone, over Tailscale.",
+  "owner": {
+    "name": "Kaushik Narumanchi",
+    "url": "https://github.com/MrTig-afk"
+  },
+  "plugins": [
+    {
+      "name": "claude-remote",
+      "description": "A local agent and installable PWA that starts a Claude Code session on your PC from your phone. The session appears in the Claude app's Code tab; the phone is a start button, not a terminal.",
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

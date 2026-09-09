@@ -1,5 +1,15 @@
 [
   {
+    "version": "1.0.0",
+    "date": "2026-09-09",
+    "notes": [
+      "First public release. Everything below already worked for one machine; this version is about it working on yours.",
+      "A session you start from the phone now opens by telling you where the work stands, instead of sitting silent until you type something.",
+      "Sessions you started at the desk are found whichever Claude profile you use, not just the default one.",
+      "Setup no longer asks you to install anything the app does not use. The guide is five steps, and it explains why the order matters."
+    ]
+  },
+  {
     "version": "0.1.0",
     "date": "2026-08-29",
     "notes": [

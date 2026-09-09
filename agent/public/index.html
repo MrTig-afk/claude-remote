@@ -84,7 +84,10 @@
           <svg class="mark" width="22" height="22" aria-hidden="true"><use href="#mark"/></svg>
           <span class="title">claude‑remote</span>
         </button>
-        <div class="ver">v0.1</div>
+        <!-- Ships EMPTY; boot() fills it from SHELL_VERSION before the gate.
+             A literal here would be a fifth copy the drift test does not know
+             about, and it is visible behind the passcode screen. -->
+        <div class="ver" id="hdr-ver"></div>
         <!-- Lane 5, step 1: the update marker. A plain dot on the gear, and
              the artifact is explicit that it does NOT animate - "a pulsing dot
              is a nag, and you picked the quiet option". It ships hidden; only

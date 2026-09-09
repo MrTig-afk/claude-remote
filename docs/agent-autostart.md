@@ -1,10 +1,12 @@
 # Starting the Local Agent automatically at logon
 
-Status: written and validated tonight, NOT applied. `register-task.ps1
--RenderOnly` was run (renders + schema-validates, registers nothing) and its
-output is quoted below. No `Register-ScheduledTask`, no `schtasks /Create`, no
-Scheduled Task of any kind exists on this machine as a result of this work.
-`Get-ScheduledTask -TaskName 'Claude Remote Agent'` returns nothing, verified.
+This is the procedure for registering the agent as a logon-triggered scheduled
+task, plus the ACL hardening it needs. The `-RenderOnly` output quoted below is
+a real dry run (renders and schema-validates, registers nothing) - run it
+yourself before registering anything.
+
+Check whether the task already exists on your machine with
+`Get-ScheduledTask -TaskName 'Claude Remote Agent'`.
 
 ## The problem, in two sentences
 
@@ -220,11 +222,13 @@ prompt". Worth closing:
 **Read the whole of this before running any of it — the obvious version of
 these commands locks you out of your own repo.**
 
-There is no explicit ACE for your account anywhere on `F:\`. `BUILTIN\Users`
-grants only `(RX)`, and `BUILTIN\Administrators` is deny-only in a normal
-non-elevated token. So `Authenticated Users:(M)` is the ONLY thing granting
-you write access here. Remove it without granting yourself first and you can
-no longer write to your own repo.
+On a secondary data drive there is typically no explicit ACE for your own
+account anywhere on the volume. `BUILTIN\Users` grants only `(RX)`, and
+`BUILTIN\Administrators` is deny-only in a normal non-elevated token, so
+`Authenticated Users:(M)` is often the ONLY thing granting you write access.
+Remove it without granting yourself first and you can no longer write to your
+own repo. Run the `icacls` inspection above on YOUR drive before assuming your
+ACLs match.
 
 Scope matters too: hardening `agent\autostart` alone is not enough, because
 the shim executes `agent\server.js`, which carries the same ACE.
@@ -232,7 +236,7 @@ the shim executes `agent\server.js`, which carries the same ACE.
 Grant first, then remove, at the repo root:
 
 ```powershell
-$repo = 'F:\Dev\Projects\Repos\claude-remote'
+$repo = 'C:\path\to\claude-remote'   # your clone, not the plugin cache
 
 # 1. Explicit ACE for yourself FIRST. Without this, step 3 removes your
 #    only write access to the repo.

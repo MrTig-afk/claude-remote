@@ -1,6 +1,6 @@
 {
   "name": "claude-remote-agent",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Local Agent for claude-remote: serves the PWA's project list and session launcher.",
   "type": "module",

@@ -111,3 +111,27 @@ test('readAgentVersion returns "unknown" when the file is not valid JSON', () =>
   fs.writeFileSync(badPath, '{ not valid json');
   assert.equal(readAgentVersion(badPath), 'unknown');
 });
+
+// The header badge is NOT a fifth copy: index.html ships the node empty and
+// boot() fills it from SHELL_VERSION. Three things are pinned - no literal in
+// the markup, a fill that exists, and a fill that runs BEFORE the gate. The
+// third is not pedantry: filling it in wireEvents(), after two awaits, left
+// the badge blank behind the passcode screen on every single launch.
+test('the header badge ships empty - no fifth copy of the version in markup', () => {
+  const html = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+  const badge = html.match(/<div class="ver"[^>]*>([\s\S]*?)<\/div>/);
+  assert.ok(badge, 'index.html must carry the header badge div');
+  assert.equal(badge[1].trim(), '',
+    'the header badge must ship empty - a literal here is a fifth copy of the version');
+});
+
+test('boot() fills the header badge from SHELL_VERSION before the gate', () => {
+  const source = fs.readFileSync(APP_JS_PATH, 'utf8');
+  const boot = source.slice(source.indexOf('async function boot()'));
+  const fill = boot.search(/getElementById\('hdr-ver'\)[\s\S]{0,40}SHELL_VERSION/);
+  const gate = boot.indexOf("showScreen('gate')");
+  assert.ok(fill !== -1, 'boot() must fill #hdr-ver from SHELL_VERSION');
+  assert.ok(gate !== -1, 'boot() must reach showScreen(gate)');
+  assert.ok(fill < gate,
+    'the badge must be filled BEFORE the gate - the header is visible behind it on every launch');
+});

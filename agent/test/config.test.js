@@ -219,6 +219,33 @@ test('getSessionDirPaths - any ~/.claude-* profile holding sessions/ is DISCOVER
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+test('a profile relocated behind a junction or symlink is still discovered', () => {
+  // readdir does NOT follow links, so a linked profile reports isSymbolicLink()
+  // rather than isDirectory(). Relocating a profile to another drive is a
+  // normal move on a disk-tight machine, and the isDirectory() predicate this
+  // replaces dropped it silently - the exact regression discovery exists to
+  // prevent. 'junction' is used because it needs no elevation on Windows.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-home-link-'));
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-elsewhere-'));
+  fs.mkdirSync(path.join(elsewhere, 'sessions'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.claude', 'sessions'), { recursive: true });
+  try {
+    fs.symlinkSync(elsewhere, path.join(home, '.claude-linked'), 'junction');
+  } catch (err) {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+    assert.fail(`could not create a junction, so this guard is unproven: ${err.code || err.message}`);
+  }
+  const dirs = getSessionDirPaths(writeConfig('discover-link.json'), home);
+  assert.ok(
+    dirs.includes(path.join(home, '.claude-linked', 'sessions')),
+    'a linked profile holding sessions/ must be discovered, not skipped for not being a real directory',
+  );
+  fs.rmSync(path.join(home, '.claude-linked'), { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(elsewhere, { recursive: true, force: true });
+});
+
 test('getSessionDirPaths - an unreadable home costs the discovery ONLY', () => {
   // The configured dir and the default must survive, for the same reason the
   // corrupt-config case below survives: this list degrades, it never collapses.
