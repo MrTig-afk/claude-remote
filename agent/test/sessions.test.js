@@ -1492,6 +1492,38 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
     script.includes('"--name=`"$(Split-Path -Leaf $ProjectPath)`""'),
     'the launch must name the session after its FOLDER, quoted for spaces',
   );
+  // THE OPENING REPORT. The PWA is a START BUTTON, so nobody types the first
+  // message - and a SessionStart hook can only add CONTEXT, never produce a
+  // turn, because a turn exists only when there is a prompt. A trailing
+  // positional IS the initial prompt: the same mechanism the two flags above
+  // are pinned to the `=` form to prevent happening BY ACCIDENT. This is the
+  // deliberate version of it.
+  // CHECKED AGAINST THE CODE, NOT THE RAW FILE. A whole-file includes() is
+  // satisfied by a comment, and this change ships a 13-line comment block on
+  // exactly this subject - so the assertions below could have passed while the
+  // launcher had lost the behaviour entirely. detachment.test.js already
+  // documents that failure for real: the `.claude-max` token once survived only
+  // inside the comment explaining its own removal.
+  // ponytail: second local copy of this one-line strip (detachment.test.js has
+  // the other). Not extracted, deliberately - a shared PowerShell stripper is a
+  // third file in a diff that has already been reviewed, and codeOnly() in
+  // helper-source.js strips `//`, which is the wrong comment syntax. Upgrade
+  // path: fold both into helper-source.js as its own task.
+  const code = script.replace(/^\s*#.*$/gm, '');
+  assert.ok(
+    code.includes("Join-Path $ProjectPath 'HANDOFF.md'"),
+    'the opening report must be guarded on the project HAVING a HANDOFF.md, or projects without one get a prompt about a file that is not there',
+  );
+  assert.ok(
+    code.includes('Read HANDOFF.md and give the opening report.'),
+    'the PWA launch must pass the opening-report prompt, or a phone-started session sits silent forever - the hook cannot speak on its own',
+  );
+  // The one that actually bites: building the array and never passing it looks
+  // right in review and does nothing at all. Pin the APPEND, not the variable.
+  assert.ok(
+    code.includes(') + $openingReport)'),
+    'the opening report must be APPENDED to ArgumentList, or it is built and thrown away',
+  );
   assert.ok(script.includes('Activate.ps1'));
   assert.ok(script.includes('Start-Process'));
   assert.ok(script.includes('-LiteralPath'));

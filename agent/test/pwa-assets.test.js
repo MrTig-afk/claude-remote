@@ -58,8 +58,11 @@ function loadServiceWorker(overrides = {}) {
     },
     async keys() { return [...caches.keys()]; },
     async delete() { return true; },
-    async match(req) {
-      return overrides.cacheMatch ? overrides.cacheMatch(req) : undefined;
+    // opts is threaded through DELIBERATELY. sw.js passes { cacheName: CACHE }
+    // and the whole point of that argument is which caches get searched, so a
+    // fake that swallowed it could not tell the scoped call from the bare one.
+    async match(req, opts) {
+      return overrides.cacheMatch ? overrides.cacheMatch(req, opts) : undefined;
     },
   };
 
@@ -109,6 +112,98 @@ test('sw.js DOES intercept a same-origin GET asset request', async () => {
   listeners.fetch(event);
   await new Promise((r) => setImmediate(r));
   assert.equal(responded, true);
+});
+
+// --- Both cache lookups are SCOPED to this worker's own cache ---
+//
+// Bare caches.match searches EVERY cache in the origin, oldest first. activate()
+// does delete the old ones, but its Promise.all sits in a waitUntil whose
+// rejection is swallowed, so ONE failed delete - quota, storage pressure, an
+// eviction race - leaves a stale cache in place. It then shadows the new shell
+// on every launch, permanently, because install's addAll and the revalidate
+// write both target CACHE only and nothing ever refreshes the old one. Settings
+// > Reset is the only escape.
+//
+// Written after a mutation audit: both `{ cacheName: CACHE }` arguments could be
+// deleted and all 1027 tests stayed green. `grep cacheName` over this file
+// returned nothing, in a file that DOES execute sw.js - a file being executed is
+// not the same as a fix being covered.
+
+/**
+ * A caches.match with the real multi-cache semantics: a named lookup searches
+ * that cache alone, an unnamed one searches every cache in the origin, oldest
+ * first. Insertion order into the Map IS the age order.
+ */
+function matchAcross(stores) {
+  return (req, opts) => {
+    const key = typeof req === 'string' ? `http://127.0.0.1:8790${req}` : req.url;
+    if (opts && opts.cacheName) {
+      const store = stores.get(opts.cacheName);
+      return store ? store.get(key) : undefined;
+    }
+    for (const store of stores.values()) {
+      const hit = store.get(key);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+}
+
+/** sw.js's own CACHE name, read from the source rather than restated here.
+ *  Read once: nothing varies between calls, and `read` is a hoisted function
+ *  declaration, so evaluating this at module scope is safe. */
+const CURRENT_CACHE = (() => {
+  const m = read('sw.js').match(/const CACHE = '([^']+)';/);
+  assert.ok(m, "sw.js's CACHE literal not found - this test cannot be trusted without it");
+  return m[1];
+})();
+
+/** Drives one GET through the fetch listener and returns what it answered. */
+async function servedFor(listeners, url, mode) {
+  let served;
+  listeners.fetch({
+    request: { url, method: 'GET', mode },
+    respondWith(p) { served = p; },
+  });
+  assert.ok(served !== undefined, `${url} was not intercepted`);
+  return served;
+}
+
+test('a stale cache that outlived its delete cannot shadow the current shell', async () => {
+  // RED WHEN: `{ cacheName: CACHE }` is dropped from the asset lookup. The bare
+  // call then finds the OLD cache first and serves the old app.js for ever.
+  const stores = new Map([
+    ['claude-remote-shell-stale', new Map([['http://127.0.0.1:8790/app.js', 'OLD SHELL']])],
+    [CURRENT_CACHE, new Map([['http://127.0.0.1:8790/app.js', 'CURRENT SHELL']])],
+  ]);
+  const listeners = loadServiceWorker({
+    cacheMatch: matchAcross(stores),
+    fetch: async () => { throw new Error('agent not up'); },
+  });
+  assert.equal(
+    await servedFor(listeners, 'http://127.0.0.1:8790/app.js', 'same-origin'),
+    'CURRENT SHELL',
+  );
+});
+
+test('the offline navigate fallback reads /index.html from THIS cache, not the oldest one', async () => {
+  // RED WHEN: `{ cacheName: CACHE }` is dropped from the '/index.html' lookup.
+  // A separate assertion from the one above because it is a separate call site:
+  // reached only when the network is down AND the request itself is uncached,
+  // which is the offline cold-open path. The requested URL is deliberately
+  // absent from both stores so the fallback is what answers.
+  const stores = new Map([
+    ['claude-remote-shell-stale', new Map([['http://127.0.0.1:8790/index.html', 'OLD INDEX']])],
+    [CURRENT_CACHE, new Map([['http://127.0.0.1:8790/index.html', 'CURRENT INDEX']])],
+  ]);
+  const listeners = loadServiceWorker({
+    cacheMatch: matchAcross(stores),
+    fetch: async () => { throw new Error('agent not up'); },
+  });
+  assert.equal(
+    await servedFor(listeners, 'http://127.0.0.1:8790/deep/link', 'navigate'),
+    'CURRENT INDEX',
+  );
 });
 
 test('PRECACHE contains no entry beginning /api', () => {

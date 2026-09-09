@@ -117,6 +117,20 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     'utf8',
   );
 
+  // COMMENTS ARE STRIPPED BEFORE EVERY TOKEN CHECK BELOW, and the reason is
+  // recorded two entries down: the `.claude-max` token once survived ONLY
+  // inside the comment explaining its own removal, so a raw includes() passed
+  // while the CODE had lost it - an assertion quietly requiring the opposite of
+  // the truth. That is not hypothetical for the tokens added here: the
+  // opening-report change ships a 13-line comment block on the same subject.
+  // ONE definition, reused by the token checks, the --channels assertion AND
+  // the proofs at the end. They used to each re-implement it, which made the
+  // proofs worthless: review demonstrated it by replacing only the real check's
+  // strip with one that can never fail, and the "proofs" still reported 2/2
+  // pass. A proof that does not exercise the thing it proves is decoration.
+  const stripPsComments = (src) => src.replace(/^\s*#.*$/gm, '');
+  const carriesChannels = (src) => /--channels/.test(stripPsComments(src));
+
   const requiredTokens = [
     'CLAUDE_CONFIG_DIR',
     // NOT `.claude-max`. That entry lived here until T56 (2026-09-05) and had
@@ -143,6 +157,12 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     // guards and the mutation test below stayed green. A name with a space
     // then splits in two, and the leftover word is typed into the session.
     '"--remote-control=`"$SessionName`""',
+    // The opening report, and specifically its APPEND. A phone-launched session
+    // has nobody to type the first message, and a SessionStart hook can only
+    // add context - never a turn. Pinning the append rather than the variable:
+    // building the array and not passing it is the silent-failure shape.
+    'Read HANDOFF.md and give the opening report.',
+    ') + $openingReport)',
     'Activate.ps1',
     'Start-Process',
     '-LiteralPath',
@@ -151,8 +171,10 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   ];
 
   // The real file passes every check - baseline sanity before mutating.
+  // Against the CODE, never the raw file: see the note above requiredTokens.
+  const realCode = stripPsComments(real);
   for (const token of requiredTokens) {
-    assert.ok(real.includes(token), `real recipe should contain ${token}`);
+    assert.ok(realCode.includes(token), `real recipe should contain ${token} IN CODE, not only in a comment`);
   }
   assert.ok(!/--rc/.test(real), 'real recipe should not contain --rc');
   // The channels flag stops Remote Control connecting (measured 2026-09-05:
@@ -160,27 +182,36 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
   // never reaches the Code tab; without it, nothing else changed, it connects
   // quickly). requiredTokens above cannot express "must be ABSENT", which is
   // why this sits beside it. Comments stripped first - the script's own
-  // comment explains this rule and has to name the flag to do so.
-  // ONE definition, reused by the assertion AND by the proofs below. They used
-  // to each re-implement this expression, which made the proofs worthless:
-  // review demonstrated it by replacing only the real check's strip with one
-  // that can never fail, and the "proofs" still reported 2/2 pass. A proof that
-  // does not exercise the thing it proves is decoration.
-  const stripPsComments = (src) => src.replace(/^\s*#.*$/gm, '');
-  const carriesChannels = (src) => /--channels/.test(stripPsComments(src));
+  // comment explains this rule and has to name the flag to do so. The strip
+  // itself is defined above requiredTokens, because every token check now uses
+  // it too.
   assert.ok(
     !carriesChannels(real),
     'the PWA recipe must not pass --channels - it prevents the Code-tab row appearing',
   );
 
-  // Each mutated copy - one required token stripped - must fail the check
-  // that token guards. Proves the assertions are not tautologies.
+  // THE MUTATION THAT CAN ACTUALLY FAIL. The loop that stood here deleted the
+  // token outright - `real.split(token).join('')` - and then asserted the token
+  // was absent, which is true BY CONSTRUCTION for any implementation of the
+  // check, including one that never strips anything. It called itself proof
+  // that "the assertions are not tautologies" while being exactly that, and it
+  // survived a remediation pass that touched the line and called it
+  // strengthened. Found by review, 2026-09-09; the entry two blocks up records
+  // review catching the same class of decoration in this very test once before.
+  //
+  // COMMENTING THE TOKEN OUT is a real mutation, because it changes only
+  // whether the token is CODE. It proves both halves at once, for every token:
+  // the token genuinely lives in code rather than prose, AND stripPsComments
+  // actually removes commented lines. Replace the strip with `(s) => s` and
+  // every iteration goes red, which is what the old loop could never do.
   for (const token of requiredTokens) {
-    const mutated = real.split(token).join('');
+    const commentedOut = real.split('\n')
+      .map((line) => (line.includes(token) ? `# ${line}` : line))
+      .join('\n');
     assert.equal(
-      mutated.includes(token),
+      stripPsComments(commentedOut).includes(token),
       false,
-      `mutated copy with '${token}' removed should fail the includes() check`,
+      `commenting out every line holding '${token}' must fail its check - if this passes, either the token is not really required in code or the strip is a no-op`,
     );
   }
 

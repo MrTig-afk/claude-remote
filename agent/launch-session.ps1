@@ -9,9 +9,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# T56. This was `Join-Path $HOME '.claude-max'` - the owner's personal profile,
-# hardcoded. A stranger got every session launched against a profile directory
-# that does not exist on their machine.
+# T56. This used to join $HOME to one specific personal profile name, hardcoded.
+# A stranger got every session launched against a profile directory that does
+# not exist on their machine.
 # ABSENT BY DEFAULT is the whole point: when no -ConfigDir is passed this leaves
 # CLAUDE_CONFIG_DIR unset and Claude Code picks its own default (~/.claude).
 # Do not reintroduce a fallback guess here - an unset variable is the correct
@@ -40,6 +40,35 @@ foreach ($dir in @('venv', '.venv')) {
     }
 }
 
+# THE OPENING REPORT. A SessionStart hook can only put text into the model's
+# CONTEXT; it cannot make the model SPEAK, because a turn exists only when there
+# is a prompt. A trailing positional IS the initial prompt - the very mechanism
+# the --name and --remote-control notes below exist to stop happening BY
+# ACCIDENT. Here it is deliberate, and it is the only way the report reaches the
+# phone: the PWA is a start button, so nobody types the first message.
+#
+# The inner quotes are load-bearing for the same reason they are on those two
+# flags: Start-Process joins ArgumentList with spaces and quotes nothing itself,
+# so an unquoted sentence arrives as eight stray arguments.
+#
+# Guarded on the project HAVING a HANDOFF.md, so a project without one launches
+# silent exactly as before. Empty array = nothing appended.
+#
+# MEASURED 2026-09-09, BOTH HALVES, and recorded here because the --channels
+# note below is this file's record of what an unmeasured argument costs.
+#   1. The prompt is delivered and processed - the session it launches opens by
+#      reporting where the work stands.
+#   2. REMOTE CONTROL STILL CONNECTS: the Code-tab row appears. Owner-confirmed
+#      on his own device against a real PWA launch.
+# Half two is the one that mattered and the one a passing test cannot give you:
+# the --channels failure left the session working perfectly and removed only the
+# row, so "it launched fine" is not evidence. It took a person looking at the
+# app. If a positional is ever changed here, that check is owed again.
+$openingReport = @()
+if (Test-Path -LiteralPath (Join-Path $ProjectPath 'HANDOFF.md')) {
+    $openingReport = @('"Read HANDOFF.md and give the opening report."')
+}
+
 # 'claude.cmd', NOT 'claude'. On this host the bare name resolves to
 # claude.ps1 (npm ships claude, claude.cmd and claude.ps1 side by side),
 # and PATHEXT contains no .PS1 - so Start-Process ShellExecutes the .ps1
@@ -47,7 +76,7 @@ foreach ($dir in @('venv', '.venv')) {
 # It fails SILENTLY: no error is raised even under ErrorActionPreference
 # 'Stop', so with stdio:'ignore' the agent reports 202 "starting" and
 # nothing ever starts. Verified on this machine 2026-08-25.
-$proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -PassThru -ArgumentList @(
+$proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -PassThru -ArgumentList (@(
     # NO --channels HERE, and that is a deliberate reversal. Measured
     # 2026-09-05: with `--channels=plugin:whatsapp-channel@whatsapp-claude-plugin`
     # a PWA-launched session starts fine - correct window title, TUI drawn - and
@@ -102,7 +131,7 @@ $proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -Pas
     # in detachment.test.js's requiredTokens - it was the bare flag until
     # 2026-09-04, which is how a change here passed 992 green tests.
     "--remote-control=`"$SessionName`""
-)
+) + $openingReport)
 
 # Liveness for the agent's session registry. The pid the agent's own
 # spawn() returns is this PowerShell host, which exits in seconds - useless.

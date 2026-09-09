@@ -267,6 +267,43 @@ test('listSessions - pid file holds a dead pid -> pruned, pid file removed', () 
   assert.equal(fs.existsSync(pidFilePath), false);
 });
 
+test('listSessions - a FAILED registry write leaves the pid file alone', () => {
+  // RED WHEN: the pid-file flush stops being gated on writeRegistry's return
+  // value, or clearPidFile moves back inside the prune loop.
+  //
+  // writeRegistry returns false rather than throwing, and that return was
+  // ignored - so the IRREVERSIBLE half (unlinking the pid file) could happen
+  // while the DURABLE half (sessions.json) had not. The entry then survived
+  // with no pid file, the next poll aged it past the grace window, and the
+  // phone reported `failed` - "launch unconfirmed" - for a session that had
+  // run and exited cleanly, for the full 24h retention.
+  //
+  // The write is forced to fail by making its TEMP path a directory:
+  // writeFileSync to a directory throws EISDIR, while sessions.json itself
+  // stays a readable file - so the prune runs exactly as normal and only the
+  // write fails, which is the state being tested. A console warning from
+  // writeRegistry is expected here and is not a failure.
+  //
+  // Written after a mutation audit found this fix had no executable coverage.
+  const ctx = makeCtx({ livePids: new Set() });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests')]);
+  fs.mkdirSync(`${ctx.registryPath}.tmp`, { recursive: true });
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  const pidFilePath = path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS));
+  fs.writeFileSync(pidFilePath, '4242', 'ascii');
+
+  assert.deepEqual(listSessions(ctx), [], 'the view is unchanged - this is about disk, not the answer');
+  assert.equal(
+    fs.existsSync(pidFilePath), true,
+    'the pid file must survive a failed registry write, or the surviving entry has no evidence left',
+  );
+  const onDisk = JSON.parse(fs.readFileSync(ctx.registryPath, 'utf8'));
+  assert.equal(
+    onDisk.sessions.length, 1,
+    'the entry is still on disk, which is precisely why its pid file must be too',
+  );
+});
+
 test('listSessions - no pid file, started_at 5s ago -> starting, pid null', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
