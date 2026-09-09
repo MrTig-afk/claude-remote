@@ -5,7 +5,7 @@ import path from 'node:path';
 import { test, after } from 'node:test';
 
 import {
-  FALLBACK_BASE_DIR, getConfigFilePath, resolveBaseDir, readConfig, resolveSharedFolders,
+  getConfigFilePath, readConfig, resolveSharedFolders,
   resolveClaudeConfigDir, getSessionDirPaths,
 } from '../config.js';
 
@@ -22,41 +22,6 @@ function writeConfig(name, contents) {
   }
   return configPath;
 }
-
-test('falls back to F:\\Dev\\Projects\\Repos when the config file does not exist', () => {
-  const configPath = writeConfig('missing.json');
-  assert.equal(resolveBaseDir(configPath), FALLBACK_BASE_DIR);
-});
-
-test('falls back when the file is empty/whitespace', () => {
-  const configPath = writeConfig('empty.json', '   \n  ');
-  assert.equal(resolveBaseDir(configPath), FALLBACK_BASE_DIR);
-});
-
-test('falls back when default_base_folder is missing from the JSON', () => {
-  const configPath = writeConfig('no-key.json', '{}');
-  assert.equal(resolveBaseDir(configPath), FALLBACK_BASE_DIR);
-});
-
-test('falls back when default_base_folder is an empty or whitespace string', () => {
-  const configPath = writeConfig('blank-value.json', JSON.stringify({ default_base_folder: '   ' }));
-  assert.equal(resolveBaseDir(configPath), FALLBACK_BASE_DIR);
-});
-
-test('falls back when default_base_folder is a relative path', () => {
-  const configPath = writeConfig('relative.json', JSON.stringify({ default_base_folder: 'Some\\Relative\\Path' }));
-  assert.equal(resolveBaseDir(configPath), FALLBACK_BASE_DIR);
-});
-
-test('returns the configured absolute path when one is set', () => {
-  const configPath = writeConfig('absolute.json', JSON.stringify({ default_base_folder: 'D:\\Some Where\\Projects' }));
-  assert.equal(resolveBaseDir(configPath), path.resolve('D:\\Some Where\\Projects'));
-});
-
-test('throws, and the message names the config file path, when the file is not valid JSON', () => {
-  const configPath = writeConfig('invalid.json', '{ not valid json');
-  assert.throws(() => resolveBaseDir(configPath), (err) => err.message.includes(configPath));
-});
 
 test('getConfigFilePath ends with the shared claude-remote config path', () => {
   const configPath = getConfigFilePath();
@@ -224,6 +189,42 @@ test('getSessionDirPaths - a configured profile is scanned first, and never twic
   const dirs = getSessionDirPaths(writeConfig('t56-first.json', JSON.stringify({ claude_config_dir: want })));
   assert.equal(dirs[0], path.join(path.resolve(want), 'sessions'));
   assert.equal(new Set(dirs).size, dirs.length, 'no directory may be scanned twice');
+});
+
+test('getSessionDirPaths - any ~/.claude-* profile holding sessions/ is DISCOVERED', () => {
+  // RED WHEN: the discovery is removed and the list goes back to two fixed
+  // entries. That removal is not cosmetic - desk-session discovery
+  // (readSessionFiles -> discoverDeskSessions) is the only source of the
+  // "desktop" tiles, so a desk session under any non-default profile stops
+  // appearing in the picker and cannot be stopped from the phone.
+  // A fake home, so this asserts the RULE rather than whatever profiles happen
+  // to exist on the machine running the suite.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-home-'));
+  for (const p of ['.claude', '.claude-work', '.claude-other']) {
+    fs.mkdirSync(path.join(home, p, 'sessions'), { recursive: true });
+  }
+  fs.mkdirSync(path.join(home, '.claude-hooks'), { recursive: true });   // no sessions/
+  fs.mkdirSync(path.join(home, 'Documents'), { recursive: true });       // not a profile
+  const dirs = getSessionDirPaths(writeConfig('discover.json'), home);
+
+  assert.ok(dirs.includes(path.join(home, '.claude-work', 'sessions')));
+  assert.ok(dirs.includes(path.join(home, '.claude-other', 'sessions')));
+  assert.ok(dirs.includes(path.join(home, '.claude', 'sessions')), 'the default is always scanned');
+  assert.ok(
+    !dirs.some((d) => d.includes('.claude-hooks')),
+    'a sibling with no sessions/ is not a profile - this is what keeps .claude-hooks out',
+  );
+  assert.ok(!dirs.some((d) => d.includes('Documents')), 'a non-.claude directory is never scanned');
+  assert.equal(new Set(dirs).size, dirs.length, 'no directory may be scanned twice');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('getSessionDirPaths - an unreadable home costs the discovery ONLY', () => {
+  // The configured dir and the default must survive, for the same reason the
+  // corrupt-config case below survives: this list degrades, it never collapses.
+  const missing = path.join(os.tmpdir(), 'claude-remote-no-such-home-9c3f1a');
+  const dirs = getSessionDirPaths(writeConfig('nohome.json'), missing);
+  assert.deepEqual(dirs, [path.join(missing, '.claude', 'sessions')]);
 });
 
 test('getSessionDirPaths - a corrupt config costs the configured dir, NOT the session list', () => {

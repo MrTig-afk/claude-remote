@@ -2,8 +2,6 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const FALLBACK_BASE_DIR = 'F:\\Dev\\Projects\\Repos';
-
 /**
  * Absolute path of the claude-remote config file. It used to be shared with a
  * PowerShell reader (Get-ConfigFilePath); that path was deleted by T53 on
@@ -28,7 +26,7 @@ export function getPidDirPath() {
  * The Claude Code profile directory launched sessions should use, or null to
  * leave it alone and let Claude Code pick its own default (`~/.claude`).
  *
- * T56: this used to be the owner's `.claude-max` hardcoded into
+ * T56: this used to be one specific personal profile directory, hardcoded into
  * launch-session.ps1. A stranger got every session launched against a profile
  * directory that does not exist on their machine. ABSENT BY DEFAULT is the
  * point - an unset config means "do not set CLAUDE_CONFIG_DIR at all", not
@@ -73,11 +71,13 @@ export function resolveClaudeConfigDir(configPath = getConfigFilePath()) {
 /** Claude Code profile session directories to scan. Only <pid>.json is ever
  *  opened from them, so listing a directory that does not exist costs nothing
  *  and every entry here is a candidate rather than a requirement.
- *  A configured profile is scanned first; the default `~/.claude` is included
- *  for anyone who never configured one (T56 - it was missing entirely, so a
- *  stranger's sessions were launched into a profile nothing then looked in),
- *  and the owner's two named profiles stay because this machine runs both. */
-export function getSessionDirPaths(configPath = getConfigFilePath()) {
+ *  A configured profile is scanned first; the default `~/.claude` is always
+ *  included (T56 - it was missing entirely, so a stranger's sessions were
+ *  launched into a profile nothing then looked in); and any other
+ *  `~/.claude-*` profile that actually holds a `sessions` directory is
+ *  DISCOVERED, never hardcoded - see the note in the body for why that
+ *  matters. `homeDir` is a test seam and nothing in production passes it. */
+export function getSessionDirPaths(configPath = getConfigFilePath(), homeDir = os.homedir()) {
   // Swallows a corrupt config ON PURPOSE, and only here. readSessionFiles
   // (registry.js) documents "Never throws" and degrades to fewer records on
   // every other fault; a config this function cannot parse must therefore cost
@@ -88,11 +88,33 @@ export function getSessionDirPaths(configPath = getConfigFilePath()) {
   try {
     configured = resolveClaudeConfigDir(configPath);
   } catch { /* fall through to the default profiles below */ }
+  // DISCOVERED, NOT HARDCODED, AND NOT DROPPED EITHER.
+  // Two named profiles (one owner's) were hardcoded here. T65 removed them as
+  // personal strings, and that removal was WRONG ON ITS OWN: desk-session
+  // discovery (readSessionFiles -> discoverDeskSessions) is the only source of
+  // the "desktop" tiles, so a desk session started under any non-default
+  // profile silently stopped appearing in the picker and could not be stopped
+  // from the phone. `claude_config_dir` is NOT an equivalent mitigation: it
+  // also drives the LAUNCH path (-ConfigDir), so it cannot be used to merely
+  // ADD a directory to scan, and it holds ONE value, so two desk profiles can
+  // never both be covered.
+  // Discovery fixes both halves at once - no personal name in the source, and
+  // wider coverage than the hardcoded list ever had, since it finds a profile
+  // this project has never heard of. Gated on the profile actually holding a
+  // `sessions` directory, which is what keeps siblings like `.claude-hooks`
+  // out. A home directory that cannot be read costs the discovery only: the
+  // configured dir and the default below still stand.
+  let discovered = [];
+  try {
+    discovered = fs.readdirSync(homeDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name.startsWith('.claude-'))
+      .map((e) => path.join(homeDir, e.name))
+      .filter((d) => fs.existsSync(path.join(d, 'sessions')));
+  } catch { /* unreadable home - configured + default still apply */ }
   const dirs = [
     ...(configured ? [configured] : []),
-    path.join(os.homedir(), '.claude'),
-    path.join(os.homedir(), '.claude-max'),
-    path.join(os.homedir(), '.claude-pro'),
+    path.join(homeDir, '.claude'),
+    ...discovered,
   ];
   return [...new Set(dirs)].map((d) => path.join(d, 'sessions'));
 }
@@ -108,52 +130,10 @@ export function getAttemptsFilePath() {
 }
 
 /**
- * Resolves the base project directory from the claude-remote config file,
- * falling back to FALLBACK_BASE_DIR whenever the config is absent, empty or
- * invalid. It used to mirror a PowerShell Get-DefaultBaseFolder; that reader
- * was deleted by T53, so there is no second implementation to stay in step
- * with any more. (T54 still wants the fallback itself replaced by a refusal.)
- */
-export function resolveBaseDir(configPath = getConfigFilePath()) {
-  let raw;
-  try {
-    raw = fs.readFileSync(configPath, 'utf8');
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      console.warn(`claude-remote agent: could not read config '${configPath}': ${err.code || err.message}`);
-    }
-    return FALLBACK_BASE_DIR;
-  }
-
-  if (raw.trim() === '') {
-    return FALLBACK_BASE_DIR;
-  }
-
-  let config;
-  try {
-    config = JSON.parse(raw);
-  } catch {
-    throw new Error(`claude-remote config '${configPath}' is not valid JSON`);
-  }
-
-  const value = config && config.default_base_folder;
-  if (typeof value !== 'string' || value.trim() === '') {
-    return FALLBACK_BASE_DIR;
-  }
-
-  if (!path.isAbsolute(value)) {
-    console.warn(`claude-remote agent: config '${configPath}' has a relative default_base_folder; ignoring it`);
-    return FALLBACK_BASE_DIR;
-  }
-
-  return path.resolve(value);
-}
-
-/**
  * Reads and parses the claude-remote config file with no schema opinions -
  * the shared read/parse T87, T91 and T94 all need, so a corrupt config is
- * one real fault (thrown, same contract as resolveBaseDir) rather than three
- * slightly different silent failures. Returns a plain object; callers that
+ * one real fault - INVALID JSON THROWS, naming the config path - rather than
+ * three slightly different silent failures. Returns a plain object; callers that
  * need to merge a write into the existing file (T94) get every unrelated
  * key back untouched.
  */
@@ -213,7 +193,9 @@ export function writeConfig(configPath, config) {
  * dropping anything malformed with a warn rather than aborting the whole
  * array - this file is hand-editable, so one bad line must not cost every
  * good one. Never sanitizes a bad path; only resolve()'s an already-valid
- * absolute one, same posture as resolveBaseDir.
+ * absolute one: a relative path is WARNED AND DROPPED, never resolved against
+ * the agent's cwd, which would silently share whatever directory the agent
+ * happened to start in.
  */
 function normaliseSharedFolders(entries, configPath) {
   const result = [];
@@ -245,10 +227,11 @@ function normaliseSharedFolders(entries, configPath) {
 /**
  * Silently migrates an old default_base_folder into one container root -
  * no prompt, no screen, and this never writes the migration back. A value
- * that is not a usable absolute path is a warn, not a fallback: unlike
- * resolveBaseDir, there is nothing that must always be listed here, and
- * defaulting to FALLBACK_BASE_DIR would silently share a folder the owner
- * never ticked.
+ * that is not a usable absolute path is a warn, not a fallback. There is
+ * nothing that must always be listed here, so an unusable value yields NO
+ * root: defaulting to some guessed directory would silently share a folder
+ * the owner never ticked, which is the one outcome this whole screen exists
+ * to prevent.
  */
 function migrateDefaultBaseFolder(config, configPath) {
   const value = config.default_base_folder;

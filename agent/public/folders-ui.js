@@ -453,7 +453,7 @@ export function orphanWarning(rows) {
 
 /**
  * The words on the remove confirmation (Lane 8's X-as-remove), from the
- * artifact: "Stop sharing Repos? Its 3 projects disappear from the app.
+ * artifact: "Stop sharing Projects? Its 3 projects disappear from the app.
  * Nothing on disk is touched."
  *
  * Pure, so the copy is testable without a DOM. The middle sentence is built

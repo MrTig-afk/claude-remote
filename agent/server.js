@@ -6,10 +6,9 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
-// resolveBaseDir is deliberately NOT imported any more: M9 replaced the single
-// default_base_folder with the shared_folders set, and resolveSharedFolders is
-// the only reader of record. It still exists in config.js for the silent
-// migration path.
+// The single default_base_folder was replaced by the shared_folders set at M9;
+// resolveSharedFolders is the only reader. T54 then deleted resolveBaseDir
+// outright - it had no production caller.
 import {
   resolveSharedFolders, isAcknowledged, acknowledge, readStatusFacts,
 } from './config.js';

@@ -247,12 +247,14 @@ export function listProjects(rootsOrBaseDir) {
   return projects;
 }
 
-// Base dir 'F:\Dev\Projects\Repos\' is 21 chars; Windows' 260-char MAX_PATH
-// still binds for tools that live inside a project (git, node, python).
-// 21 + 64 = 85 leaves ~175 chars of headroom for the tree inside the project
-// - node_modules paths routinely eat 150+. Deliberately tighter than
-// resolveProjectPath's 255 (sessions.js): that guards a READ of something
-// that already exists, this guards what the owner is about to be stuck with.
+// Windows' 260-char MAX_PATH still binds for tools that live inside a project
+// (git, node, python), so this cap must leave room for the TREE INSIDE it, not
+// just the name - node_modules paths routinely eat 150+.
+// The real budget is 260 - len(root) - 1 - len(name), and the root is whatever
+// the user shared, so 64 is a DELIBERATE FIXED CAP, not a computed one. Under a
+// long root the tree runs out first, which no name cap can repair.
+// Tighter than resolveProjectPath's 255 (sessions.js) on purpose: that guards a
+// READ of something that exists, this guards what the user is stuck with.
 export const MAX_PROJECT_NAME_LENGTH = 64;
 
 // Equivalent to /[\u0000-\u001f\u007f]/ (control chars incl. \t \n ESC DEL) -

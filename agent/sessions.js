@@ -108,7 +108,7 @@ const ROOT_SLUG_HASH_CHARS = 6;
 /**
  * The root's own segment of every session name under it: slugSegment applied
  * to the root's WHOLE resolved path, plus a short digest OF that path.
- * 'F:\Dev\Projects\Repos' -> 'f-dev-projects-repos-9c3f1a'.
+ * 'D:\Work\Projects' -> 'd-work-projects-9c3f1a' (digest illustrative).
  *
  * Owner decision 1, 2026-08-29: ALWAYS prefixed, from one root onward - never
  * "only when there are two". A name that depends on HOW MANY roots exist is
@@ -118,9 +118,9 @@ const ROOT_SLUG_HASH_CHARS = 6;
  *
  * THE DIGEST IS WHY DECISION 1 ACTUALLY WORKS. slugSegment collapses every run
  * of non-alphanumerics to one '-', so a path SEPARATOR and a literal HYPHEN are
- * indistinguishable after slugging: 'F:\Dev\Projects\Repos' and
- * 'F:\Dev\Projects-Repos' are two different, non-overlapping folders that both
- * slugged to 'f-dev-projects-repos'. The overlap check accepts that pair (they
+ * indistinguishable after slugging: 'D:\Work\Projects' and
+ * 'D:\Work-Projects' are two different, non-overlapping folders that both
+ * slugged to 'd-work-projects'. The overlap check accepts that pair (they
  * do not overlap) and usableRoots keeps both, so the two roots would share one
  * session-name namespace: STOP would end the other root's session and the
  * handoff would write HANDOFF.md into the wrong project. Reproduced, not
@@ -590,7 +590,7 @@ function inFlightKey(ctx, sessionName) {
  * - so a leaf with spaces is already proven to survive the argument list.
  *
  * COLLISIONS. Two shared projects can share a leaf: `Work/email-lint` and
- * `Repos/email-lint`. The Code tab has no room for the dim parent eyebrow the
+ * `Personal/email-lint`. The Code tab has no room for the dim parent eyebrow the
  * project list uses, so the name carries it: `email-lint (Work)`. BOTH sides
  * are qualified, never just the second one - otherwise a row's name would
  * depend on which was launched first, which is exactly the kind of thing that
@@ -636,9 +636,13 @@ export function launchSession(ctx, project) {
   // ones the client asked for. Launching both would collide on the same
   // --remote-control name in the Code tab anyway, so sharing is the honest
   // behaviour. This now applies PER SEGMENT: 'Pull Requests/Vercel' and
-  // 'Pull.Requests/Vercel' collide the same way, one level down. No folder
-  // under Repos collides today. Upgrade path if one ever does: key by
-  // resolved path and return a 409 on the name collision.
+  // 'Pull.Requests/Vercel' collide the same way, one level down. WHETHER ANY
+  // TWO FOLDERS ACTUALLY COLLIDE IS A PROPERTY OF THE OWNER'S LAYOUT, not of
+  // this code: the note that stood here asserted that no folder under the
+  // author's own root collided today - true of one machine, and unknowable
+  // for anybody else.
+  // Upgrade path if one ever does: key by resolved path and return a 409 on
+  // the name collision.
   const existing = findLiveSession(ctx, sessionName);
   if (existing) {
     return { ok: true, reused: true, session: existing };

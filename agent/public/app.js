@@ -170,7 +170,7 @@ const NEW_PROJECT_ERROR_COPY = {
   name_illegal_char: 'Windows folder names can’t contain < > : " | ? *.',
   name_edge_whitespace: 'Remove the space at the start or end.',
   name_percent_encoded: '% isn’t allowed in a project name.',
-  name_has_separator: 'No \\ or / – projects are created directly in Repos.',
+  name_has_separator: 'No \\ or / – a project is created directly in the folder, not inside a subfolder.',
   name_absolute: 'Enter a name, not a path.',
   name_has_traversal: "That isn't a name.",
   name_dot_prefixed: "Names can't start with a dot (it would be hidden).",
@@ -1560,10 +1560,11 @@ function childProject(container, child) {
 function renderBackBar(open, canCreate = true) {
   document.getElementById('backbar').hidden = open === null;
   // The + creates a TOP-LEVEL project only - the agent's create route is one
-  // level deep, which is what the "No \ or / - projects are created directly
-  // in Repos" copy already says - so inside a folder it has nothing true to
-  // offer. Also hidden at the top level when there is no usable root to
-  // create into - a control that can only fail is not an affordance.
+  // level deep, which is what the "a project is created directly in the
+  // folder, not inside a subfolder" copy already says - so inside a folder it
+  // has nothing true to offer. Also hidden at the top level when there is no
+  // usable root to create into - a control that can only fail is not an
+  // affordance.
   document.getElementById('newproj').hidden = open !== null || !canCreate;
   if (open === null) return;
   document.getElementById('backbar-name').textContent = open.name;
