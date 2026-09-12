@@ -10,7 +10,7 @@ import {
   resolvePreLaunchCommand, resolveOpeningReport,
 } from './config.js';
 import {
-  findLiveSession, clearPidFile, recordLaunch, markSessionState, dropSession,
+  findLiveSession, clearPidFile, clearPidFileOnly, recordLaunch, markSessionState, dropSession,
   isPidAlive, claimDeskSession,
   pidFileNameFor,
 } from './registry.js';
@@ -897,9 +897,14 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   const isDesk = existing !== null && existing.source === 'desk';
 
   if (!existing) {
-    // listSessions has already pruned the dead entry and unlinked its pid
-    // file as part of that read; this is a belt-and-braces no-op.
-    clearPidFile(ctx, sessionName);
+    // listSessions has already pruned the dead entry and taken its pid file as
+    // part of that read, so this is very nearly a no-op - but NOT the
+    // both-files clearPidFile, which would make it a destructive one. The prune
+    // goes out of its way to KEEP the .err (clearPidFileOnly, registry.js), and
+    // a STOP tapped on a tile the prune has already removed lands exactly here:
+    // using the teardown form would delete the reason by way of the one tap the
+    // owner makes when a launch has visibly gone wrong.
+    clearPidFileOnly(ctx, sessionName);
     return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
   }
 
@@ -949,7 +954,8 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   // process.kill(pid, 0) on OUR OWN pid always succeeds, so that case must
   // be refused explicitly - it is never the session's cmd.exe wrapper.
   if (pid === process.pid) {
-    clearPidFile(ctx, sessionName);
+    // Already gone, not torn down - keep the .err, same as the prune.
+    clearPidFileOnly(ctx, sessionName);
     // Drop rather than revert: there is no process behind this entry (it
     // was never the agent's own pid to begin with), so leaving it
     // status-less would just have listSessions age it into a false `failed`
@@ -975,8 +981,9 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
     // Not the process this source expects (or the lookup failed) - treat as
     // already dead. Clear the stale pid file: unlike kill_failed below,
     // there is no real process here whose truth the entry should keep
-    // deriving. Drop rather than revert, same reasoning as above.
-    clearPidFile(ctx, sessionName);
+    // deriving. Drop rather than revert, same reasoning as above. Already gone
+    // rather than torn down, so the .err stays - same as the prune.
+    clearPidFileOnly(ctx, sessionName);
     dropSession(ctx, sessionName, 'ending');
     return { ok: true, status: 200, body: { result: 'already_ended', project, session_name: sessionName } };
   }
@@ -1000,9 +1007,26 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
     return { ok: true, status: 200, body: { result: 'kill_failed', project, session_name: sessionName } };
   }
 
-  // For a desk session there is no pid file to begin with - this is a
-  // documented no-op (clearPidFile never throws), not branched around.
-  clearPidFile(ctx, sessionName);
+  // THE TEARDOWN CLEAR, AND IT HAS TO BRANCH ON isDesk NOW.
+  //
+  // For a desk session there is no pid file to begin with, so that half stays a
+  // documented no-op either way. The .err is NOT a no-op, and that is the trap:
+  // deriveSessionName and deriveDeskSessionName MUST return the same string for
+  // the same folder (sessions.js:80, and listSessions' discovery merge depends
+  // on it), so both resolve to the same .pid/.err pair. Sequence: a phone
+  // launch of X fails its pre_launch_command and writes <X>.err, the session
+  // exits, the prune drops the entry and deliberately KEEPS the reason; the
+  // owner then starts Claude at the desk in X, taps STOP, and the teardown form
+  // here would delete a launch failure written by a DIFFERENT session that this
+  // one never had anything to do with.
+  //
+  // Only a LAUNCHED teardown owns that file, because only a launch can write
+  // one.
+  if (isDesk) {
+    clearPidFileOnly(ctx, sessionName);
+  } else {
+    clearPidFile(ctx, sessionName);
+  }
   // Registry is already at `status: 'ending'` from the claim above - no
   // second write needed here.
 

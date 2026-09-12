@@ -1977,6 +1977,110 @@ test('HTTP - POST /api/sessions/end on a starting session (no pid file) -> 409, 
   }
 });
 
+// --- endSession must not destroy a launch failure it never showed (F9) -----
+//
+// The prune goes out of its way to KEEP <pidfile>.err when it drops a dead
+// entry, because nobody has read why the launch went wrong yet. Every
+// endSession path that discovers the process was ALREADY GONE lands on the same
+// state, and using the teardown form there deletes the reason by way of the one
+// tap the owner makes when a launch has visibly failed. Three paths, one rule.
+
+test('endSession - STOP on an already-pruned session keeps the .err it never got to show', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => false });
+  // No registry entry at all: exactly what the owner's tap hits after
+  // listSessions has pruned the tile they are still looking at.
+  const sessionName = deriveSessionName(path.resolve(base, 'Pull Requests'), base);
+  fs.mkdirSync(regCtx.pidDir, { recursive: true });
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
+  // BOTH files. Written with only the .err first, and that version could not
+  // fail: with no .pid on disk, clearPidFileOnly's single side effect was
+  // unexercised and deleting the call outright still passed. The rule has two
+  // halves and a test named for it has to pin both.
+  fs.writeFileSync(pidFilePath, '4242', 'ascii');
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+  const { spawner: killSpawner, calls: killCalls } = makeFakeSpawner();
+
+  const result = await endSession({ baseDir: base, killSpawner, ...regCtx }, 'Pull Requests');
+
+  assert.equal(result.body.result, 'already_ended');
+  assert.equal(killCalls.length, 0);
+  assert.equal(fs.existsSync(pidFilePath), false, 'it still takes the pid file');
+  assert.equal(
+    fs.existsSync(`${pidFilePath}.err`), true,
+    'the reason must survive a STOP on a session that had already gone',
+  );
+});
+
+// The desk half of the same rule. A desk session and a launched one derive the
+// SAME name for the same folder, so a desk teardown reaches the same .err - one
+// it never wrote and does not own.
+test('endSession - tearing down a DESK session leaves a launched session\'s .err alone', async () => {
+  const killer = makeKillingSpawner(7795);
+  const regCtx = makeRegCtx({ isPidAlive: killer.isPidAlive, pidImageName: () => 'claude.exe' });
+  const projectPath = path.resolve(base, 'Pull Requests');
+  const sessionName = deriveSessionName(projectPath, base);
+  writeDeskSessionFile(regCtx, { pid: 7795, sessionId: 'desk-err-1', cwd: projectPath });
+  fs.mkdirSync(regCtx.pidDir, { recursive: true });
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
+  // Left behind by an EARLIER phone launch of the same folder that blew up.
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+
+  const result = await endSession({ baseDir: base, killSpawner: killer.spawner, ...regCtx }, 'Pull Requests');
+
+  assert.equal(result.ok, true);
+  assert.equal(
+    fs.existsSync(`${pidFilePath}.err`), true,
+    'a desk teardown must not delete a launch failure it never wrote',
+  );
+});
+
+test('endSession - the agent\'s own pid (reuse guard) keeps the .err too', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: (pid) => pid === process.pid });
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', process.pid);
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+  const { spawner: killSpawner } = makeFakeSpawner();
+
+  await endSession({ baseDir: base, killSpawner, ...regCtx }, 'Pull Requests');
+
+  assert.equal(fs.existsSync(pidFilePath), false, 'the stale pid file still goes');
+  assert.equal(fs.existsSync(`${pidFilePath}.err`), true, 'the reason still stays');
+});
+
+test('endSession - a reused pid whose image is not ours keeps the .err too', async () => {
+  const regCtx = makeRegCtx({ isPidAlive: () => true, pidImageName: () => 'notepad.exe' });
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 9991);
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+  const { spawner: killSpawner } = makeFakeSpawner();
+
+  await endSession({ baseDir: base, killSpawner, ...regCtx }, 'Pull Requests');
+
+  assert.equal(fs.existsSync(pidFilePath), false, 'the stale pid file still goes');
+  assert.equal(fs.existsSync(`${pidFilePath}.err`), true, 'the reason still stays');
+});
+
+// The negative control for all three: a DELIBERATE teardown of a live session
+// is not the same event, and there the .err goes with the launch it belonged
+// to. Without this, clearPidFileOnly everywhere would pass the three above.
+test('endSession - a real kill DOES take the .err, because that is a teardown', async () => {
+  // makeKillingSpawner, NOT makeFakeSpawner: the fake one never lets the pid
+  // die, so endSession takes the kill_failed branch, which deliberately keeps
+  // the pid file and never reaches the teardown clear. Written with the fake
+  // first, and this control caught it.
+  const killer = makeKillingSpawner(9992);
+  const regCtx = makeRegCtx({ isPidAlive: killer.isPidAlive, pidImageName: () => 'cmd.exe' });
+  const { sessionName } = makeRunningEntry(regCtx, 'Pull Requests', 9992);
+  const pidFilePath = path.join(regCtx.pidDir, pidFileNameFor(sessionName));
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+
+  const result = await endSession({ baseDir: base, killSpawner: killer.spawner, ...regCtx }, 'Pull Requests');
+
+  assert.equal(result.ok, true);
+  assert.equal(result.body.result, 'ended', 'the kill must actually have succeeded, or this proves nothing');
+  assert.equal(fs.existsSync(`${pidFilePath}.err`), false, 'a torn-down launch takes its reason with it');
+});
+
 // --- endSession - F1 (pid reuse) and F2 (concurrent STOP/START) guards -----
 
 test('endSession - pid equals the agent\'s own process.pid -> already_ended, no taskkill, entry dropped entirely', async () => {

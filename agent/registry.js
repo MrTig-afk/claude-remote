@@ -210,19 +210,23 @@ export function clearPidFile(ctx, sessionName) {
 }
 
 /**
- * The PRUNE's cleanup: takes the pid file and DELIBERATELY KEEPS the .err.
+ * Takes the pid file and DELIBERATELY KEEPS any .err beside it.
  *
- * A dead pid is dropped by listSessions without anyone having read the reason
- * the launch went wrong - and a broken environment is a plausible cause of a
- * session exiting inside one 5s poll window. Deleting the .err there destroys
- * the only record of exactly the failure this feature exists to report, and
- * leaves the owner with a tile back at `no session` and nothing on the PC to
- * look at either. The file is not leaked by keeping it: the next launch of
- * that project clears it twice over, at launch-session.ps1's first statement
- * and at launchSession's pre-spawn clearPidFile.
+ * THE CLEANUP FOR A SESSION THAT WAS ALREADY GONE, as opposed to one being torn
+ * down. Four callers, one reason: listSessions' prune, and the three endSession
+ * paths that discover the process had already left (no registry entry, a reused
+ * pid, a pid whose image is not ours). None of them has read why the launch
+ * went wrong, and a broken environment is a plausible cause of a session
+ * exiting inside one 5s poll window - so deleting the .err there destroys the
+ * only record of exactly the failure T121 exists to report, and leaves the
+ * owner with a tile back at `no session` and nothing on the PC either.
+ *
+ * Nothing leaks by keeping it: the next launch of that project clears it twice
+ * over, at launch-session.ps1's first statement and at launchSession's
+ * pre-spawn clearPidFile.
  */
-function clearPrunedPidFile(pidDir, sessionName) {
-  const pidFilePath = pidFilePathFor(pidDir, sessionName);
+export function clearPidFileOnly(ctx, sessionName) {
+  const pidFilePath = pidFilePathFor(ctx.pidDir || getPidDirPath(), sessionName);
   if (pidFilePath !== null) unlinkQuietly(pidFilePath);
 }
 
@@ -806,7 +810,7 @@ export function listSessions(ctx) {
     // sessions.json, so their pid files must still be there to match, and the
     // next poll re-derives the same truth instead of inventing a `failed`.
     if (writeRegistry(registryPath, survivors)) {
-      for (const name of pidFilesToClear) clearPrunedPidFile(pidDir, name);
+      for (const name of pidFilesToClear) clearPidFileOnly({ pidDir }, name);
     }
   }
 
