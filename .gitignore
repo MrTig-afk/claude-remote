@@ -29,6 +29,8 @@ social-media/
 portfolio/
 project_summary.txt
 docs/internal/
+Laptop.md
+Laptop.md.bak
 
 # local state this tool generates at runtime lives outside the repo entirely,
 # under ~/.claude/plugins/data/{plugin-id}/ (Claude Code's own plugin-data

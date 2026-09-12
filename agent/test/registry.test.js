@@ -9,6 +9,7 @@ import {
   STARTING_GRACE_MS,
   FAILED_RETENTION_MS,
   CLAIM_STALE_MS,
+  ERR_MAX_CHARS,
   REGISTRY_VERSION,
   isPidAlive,
   listSessions,
@@ -471,6 +472,191 @@ test('listSessions - a BOM-prefixed pid file is parsed correctly', () => {
   assert.equal(views[0].pid, 1234);
 });
 
+// --- T121: the .err file beside the pid file ----------------------------------
+// launch-session.ps1 writes <pidfile>.err, and ONLY when a pre_launch_command
+// threw. Before T121 nothing read it: the owner watched a row age into `failed`
+// with the reason sitting on disk two feet away and no way to see it from a
+// phone. These pin the read, the cases that must NOT read it, and the shaping.
+
+/** Writes <pidDir>/<sessionName>.pid.err. Mirrors how launch-session.ps1 lands it. */
+function writeErrFile(ctx, sessionName, contents) {
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, `${pidFileNameFor(sessionName)}.err`), contents, 'utf8');
+}
+
+test('listSessions - a failed entry surfaces its .err first line as `error`', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  writeErrFile(ctx, PULL_REQUESTS, "pre_launch_command failed: The term 'conda' is not recognized.");
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'failed');
+  assert.equal(views[0].env_error, "pre_launch_command failed: The term 'conda' is not recognized.");
+});
+
+// The positive control for the test above. Identical fixture, identical age,
+// one difference - no .err on disk - so the two assertions differ in exactly
+// the thing being tested. Without this a readErrFile() that returned a
+// constant would pass the test above.
+test('listSessions - a failed entry with no .err file carries no `error` key at all', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'failed');
+  assert.equal('env_error' in views[0], false, 'omitted, not set to null - the shell tests for presence');
+});
+
+// THE CASE THE FEATURE IS ACTUALLY FOR, and the one the first cut of T121 got
+// wrong by reading the .err only on the `failed` branch. launch-session.ps1's
+// catch has no throw: it writes the .err and CARRIES ON to Start-Process, so a
+// blown pre_launch_command normally produces a live session with a broken
+// environment. If this pins nothing, the feature reports the rare case and
+// stays silent on the common one.
+test('listSessions - a RUNNING session still surfaces a failed pre_launch_command', () => {
+  const livePids = new Set([4242]);
+  const ctx = makeCtx({ livePids });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests')]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '4242', 'ascii');
+  writeErrFile(ctx, PULL_REQUESTS, 'pre_launch_command failed: boom');
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'running', 'the session launched - the environment step is what broke');
+  assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
+});
+
+test('listSessions - a `starting` entry carries the reason too', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 5000).toISOString())]);
+  writeErrFile(ctx, PULL_REQUESTS, 'pre_launch_command failed: boom');
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'starting');
+  assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
+});
+
+// The negative control for the three above: a live session with NO .err must
+// carry no key, or `error` would be a constant rather than a reading.
+test('listSessions - a RUNNING session with no .err carries no `error` key', () => {
+  const livePids = new Set([4242]);
+  const ctx = makeCtx({ livePids });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests')]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  fs.writeFileSync(path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS)), '4242', 'ascii');
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'running');
+  assert.equal('env_error' in views[0], false);
+});
+
+test('listSessions - only the FIRST line of a .err file reaches the view', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  // The shape PowerShell actually writes: the message, then positional noise
+  // that means nothing on a phone.
+  writeErrFile(
+    ctx,
+    PULL_REQUESTS,
+    'pre_launch_command failed: boom\r\nAt line:1 char:1\r\n+ CategoryInfo : NotSpecified\r\n',
+  );
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
+});
+
+test('listSessions - a BOM-prefixed .err file does not leak the BOM into the view', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  // Set-Content -Encoding utf8 on Windows PowerShell 5.1 writes one. Asserted
+  // on the leading character specifically: a bare equality against the whole
+  // string also passes when the BOM is merely moved, and the failure mode is
+  // an invisible character, so the assertion has to name it.
+  writeErrFile(ctx, PULL_REQUESTS, '\uFEFFpre_launch_command failed: boom');
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].env_error.charCodeAt(0), 'p'.charCodeAt(0));
+  assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
+});
+
+test('listSessions - an over-long .err line is elided at ERR_MAX_CHARS', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  writeErrFile(ctx, PULL_REQUESTS, `${'x'.repeat(ERR_MAX_CHARS + 50)}TAIL`);
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].env_error.length, ERR_MAX_CHARS, 'the cap is the cap, ellipsis included');
+  assert.equal(views[0].env_error.endsWith('\u2026'), true);
+  assert.equal(views[0].env_error.includes('TAIL'), false, 'elided at the TAIL - a PS message names what broke up front');
+});
+
+test('listSessions - an elision never ends on half an astral character', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  // Land a 2-code-unit emoji straddling the cut at ERR_MAX_CHARS - 1, so a
+  // naive slice keeps its high surrogate and drops its low one.
+  writeErrFile(ctx, PULL_REQUESTS, `${'z'.repeat(ERR_MAX_CHARS - 2)}\u{1F600}${'z'.repeat(40)}`);
+
+  const out = listSessions(ctx)[0].env_error;
+  // A lone surrogate is the defect; it renders as U+FFFD and serialises as an
+  // orphan. Asserted on the CODE UNIT, because the string still "looks" fine.
+  for (let i = 0; i < out.length; i++) {
+    const c = out.charCodeAt(i);
+    if (c >= 0xD800 && c <= 0xDBFF) {
+      const next = out.charCodeAt(i + 1);
+      assert.ok(next >= 0xDC00 && next <= 0xDFFF, `lone high surrogate at ${i}`);
+    }
+  }
+  assert.equal(out.endsWith('\u2026'), true);
+});
+
+test('listSessions - a pathological .err is not read whole', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  // 8MB on one line. readFileSync would pull all of it into memory every poll;
+  // the bounded read takes ERR_READ_BYTES and stops. Asserted on the OUTPUT
+  // being correct at this size rather than on the syscall, because the visible
+  // failure of an unbounded read on this host is memory, not a wrong answer.
+  writeErrFile(ctx, PULL_REQUESTS, `pre_launch_command failed: ${'q'.repeat(8 * 1024 * 1024)}`);
+
+  const out = listSessions(ctx)[0].env_error;
+  assert.equal(out.length, ERR_MAX_CHARS);
+  assert.equal(out.startsWith('pre_launch_command failed: q'), true);
+});
+
+test('listSessions - a .err line exactly at ERR_MAX_CHARS is passed through whole', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+  const exact = 'y'.repeat(ERR_MAX_CHARS);
+  writeErrFile(ctx, PULL_REQUESTS, exact);
+
+  // The off-by-one guard on the boundary itself: `>` not `>=`, so a message
+  // that just fits is never given an ellipsis it does not need.
+  assert.equal(listSessions(ctx)[0].env_error, exact);
+});
+
+test('listSessions - an empty or whitespace-only .err file carries no `error` key', () => {
+  const now = Date.now();
+  for (const contents of ['', '   ', '\r\n', '\uFEFF']) {
+    const ctx = makeCtx({ now: () => now });
+    writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - PAST_GRACE_MS).toISOString())]);
+    writeErrFile(ctx, PULL_REQUESTS, contents);
+
+    const views = listSessions(ctx);
+    assert.equal(views[0].status, 'failed');
+    assert.equal('env_error' in views[0], false, `contents: ${JSON.stringify(contents)}`);
+  }
+});
+
 // --- findLiveSession -------------------------------------------------------------
 
 test('findLiveSession - returns the matching live SessionView', () => {
@@ -549,6 +735,54 @@ test('clearPidFile - removes an existing file', () => {
 test('clearPidFile - silent no-op when the file is absent', () => {
   const ctx = makeCtx();
   assert.doesNotThrow(() => clearPidFile(ctx, 'pull-requests'));
+});
+
+test('clearPidFile - takes the .err beside the pid file with it', () => {
+  const ctx = makeCtx();
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  const pidFilePath = path.join(ctx.pidDir, 'pull-requests.pid');
+  fs.writeFileSync(pidFilePath, '4242', 'ascii');
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+
+  clearPidFile(ctx, 'pull-requests');
+
+  // Both, because they are one record. Only launch-session.ps1 otherwise
+  // clears the .err, and it only runs when that project is launched again -
+  // so a pruned entry's reason would outlive it indefinitely.
+  assert.equal(fs.existsSync(pidFilePath), false);
+  assert.equal(fs.existsSync(`${pidFilePath}.err`), false);
+});
+
+// ROUND 2, FINDING 3. The drop path is NOT the teardown path, and conflating
+// them destroys the only record of the failure this whole feature reports: a
+// broken environment is a plausible reason for a session to exit inside one 5s
+// poll window, and the prune then fires with nobody having read the reason.
+test('listSessions - pruning a dead pid takes the pid file but KEEPS the .err', () => {
+  const ctx = makeCtx();                       // livePids empty -> 4242 is dead
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests')]);
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  const pidFilePath = path.join(ctx.pidDir, pidFileNameFor(PULL_REQUESTS));
+  fs.writeFileSync(pidFilePath, '4242', 'ascii');
+  fs.writeFileSync(`${pidFilePath}.err`, 'pre_launch_command failed: boom', 'utf8');
+
+  assert.deepEqual(listSessions(ctx), [], 'a dead pid is dropped, not reported');
+  assert.equal(fs.existsSync(pidFilePath), false, 'the pid file goes');
+  assert.equal(
+    fs.existsSync(`${pidFilePath}.err`), true,
+    'the reason stays on disk for the next launch to clear',
+  );
+});
+
+test('clearPidFile - still removes the pid file when there is no .err', () => {
+  const ctx = makeCtx();
+  fs.mkdirSync(ctx.pidDir, { recursive: true });
+  const pidFilePath = path.join(ctx.pidDir, 'pull-requests.pid');
+  fs.writeFileSync(pidFilePath, '4242', 'ascii');
+
+  // The loop must not stop at the first ENOENT, and must not let a missing
+  // .err abort the unlink that matters.
+  assert.doesNotThrow(() => clearPidFile(ctx, 'pull-requests'));
+  assert.equal(fs.existsSync(pidFilePath), false);
 });
 
 // --- containment of the pid-file path -----------------------------------------

@@ -21,6 +21,18 @@ import { listProjects, rootsFrom } from './projects.js';
 // agent/public/app.js is anchored to this - its last gap must land PAST this
 // window or a genuine failure never gets its banner.
 export const STARTING_GRACE_MS = 120_000;
+
+// How much of a launch failure's first line reaches the phone. A PowerShell
+// error message is a sentence or two; this is the ceiling that stops a
+// pathological one (a dumped object, a 4KB path list) from pushing every other
+// project off the screen. Elided at the TAIL, because the start of a
+// PowerShell message is the half that names what broke.
+export const ERR_MAX_CHARS = 200;
+
+// How much of the .err file is pulled off disk to find that first line. Well
+// clear of ERR_MAX_CHARS even at four bytes per character, so the cap above is
+// always reachable, while a pathological file is never read whole.
+const ERR_READ_BYTES = 4096;
 export const REGISTRY_VERSION = 1;
 
 // A launch whose pid file never landed is kept as `failed` this long so the
@@ -113,16 +125,105 @@ function readPidFile(pidDir, sessionName) {
   return n;
 }
 
-/** Best-effort unlink of <pidDir>/<sessionName>.pid. Never throws. */
-export function clearPidFile(ctx, sessionName) {
-  const pidDir = ctx.pidDir || getPidDirPath();
+/**
+ * The first line of <pidDir>/<sessionName>.pid.err, or null.
+ *
+ * That file is written by launch-session.ps1 and ONLY when a
+ * pre_launch_command threw. It is the sole observable a failed environment
+ * step has: the launcher is spawned -NonInteractive with its stdio ignored, so
+ * its Write-Warning goes nowhere and the agent still answers 202. Without this
+ * read the owner watches a row age into `failed` carrying no reason and no way
+ * to get one from a phone.
+ *
+ * FIRST LINE ONLY, AND CAPPED. A PowerShell error record's later lines are
+ * positional noise (`At line:1 char:1`, `+ CategoryInfo ...`) that says nothing
+ * to someone holding a phone. The first line is the message. The cap is on the
+ * text a phone will eventually be asked to draw - no shell reads this field
+ * yet, see T121's UI half, so it is a budget rather than a measured fit.
+ *
+ * NO EXPLICIT BOM STRIP. `Set-Content -Encoding utf8` on Windows PowerShell
+ * 5.1 writes one and Node's decoder keeps it, but U+FEFF is WhiteSpace in
+ * ES2015+ so trim() already takes it. readPidFile needs its own strip only
+ * because it does not trim before Number().
+ */
+function readErrFile(pidDir, sessionName) {
   const pidFilePath = pidFilePathFor(pidDir, sessionName);
-  if (pidFilePath === null) return;
+  if (pidFilePath === null) return null;
+
+  // A BOUNDED READ, not readFileSync. ERR_MAX_CHARS caps what is SHOWN; this
+  // caps what is pulled into memory, and without it the two disagree - the
+  // very "dumped object" that constant exists to guard against would be read
+  // whole, on every poll, on a host this project's CLAUDE.md records as
+  // commonly having ~1GB free. The first line cannot need more than this, and
+  // a multi-byte character torn at the buffer edge lands thousands of
+  // characters past the cap, so the slice below always discards it.
+  let raw;
+  let fd;
   try {
-    fs.unlinkSync(pidFilePath);
+    fd = fs.openSync(`${pidFilePath}.err`, 'r');
+    const buf = Buffer.allocUnsafe(ERR_READ_BYTES);
+    raw = buf.toString('utf8', 0, fs.readSync(fd, buf, 0, ERR_READ_BYTES, 0));
+  } catch {
+    return null;                 // absent is the normal case, not a failure
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* best effort; never throw from a read */ }
+    }
+  }
+
+  // split('\n') not /\r?\n/: trim() takes the trailing CR off anyway, and the
+  // one-argument split limit already stops at the first line. trim() also
+  // carries the BOM and any padding, so it is load-bearing.
+  const line = raw.split('\n', 1)[0].trim();
+  if (line === '') return null;
+  if (line.length <= ERR_MAX_CHARS) return line;
+
+  // slice() cuts at a UTF-16 CODE UNIT, so a project path carrying an astral
+  // character (an emoji) can be split down the middle, leaving a lone high
+  // surrogate that renders as U+FFFD and serialises as an orphan. Drop it.
+  const cut = line.slice(0, ERR_MAX_CHARS - 1);
+  return `${/[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut}\u2026`;
+}
+
+/** Unlink, swallowing ENOENT and everything else. Never throws. */
+function unlinkQuietly(target) {
+  try {
+    fs.unlinkSync(target);
   } catch {
     // ENOENT (already gone) or anything else - best effort, never throw.
   }
+}
+
+/**
+ * Best-effort unlink of <pidDir>/<sessionName>.pid AND its .err. Never throws.
+ *
+ * BOTH, because this is the teardown of a whole launch: a deliberate stop, or
+ * the pre-spawn clear that stops a stale pid file being adopted by the next
+ * one. The .err belongs to the launch being torn down and must not outlive it
+ * into a later session's view.
+ */
+export function clearPidFile(ctx, sessionName) {
+  const pidFilePath = pidFilePathFor(ctx.pidDir || getPidDirPath(), sessionName);
+  if (pidFilePath === null) return;
+  unlinkQuietly(pidFilePath);
+  unlinkQuietly(`${pidFilePath}.err`);
+}
+
+/**
+ * The PRUNE's cleanup: takes the pid file and DELIBERATELY KEEPS the .err.
+ *
+ * A dead pid is dropped by listSessions without anyone having read the reason
+ * the launch went wrong - and a broken environment is a plausible cause of a
+ * session exiting inside one 5s poll window. Deleting the .err there destroys
+ * the only record of exactly the failure this feature exists to report, and
+ * leaves the owner with a tile back at `no session` and nothing on the PC to
+ * look at either. The file is not leaked by keeping it: the next launch of
+ * that project clears it twice over, at launch-session.ps1's first statement
+ * and at launchSession's pre-spawn clearPidFile.
+ */
+function clearPrunedPidFile(pidDir, sessionName) {
+  const pidFilePath = pidFilePathFor(pidDir, sessionName);
+  if (pidFilePath !== null) unlinkQuietly(pidFilePath);
 }
 
 /** Reads sessions[] from registryPath, or [] on missing/corrupt/wrong-shape. Never throws. */
@@ -618,6 +719,18 @@ export function listSessions(ctx) {
 
     const pid = readPidFile(pidDir, sessionName);
     let status;
+    // READ FOR EVERY STATUS, AND THE REASON IS THE WHOLE POINT OF T121.
+    // The obvious-looking place for this is the `failed` branch below, and it
+    // is WRONG: the catch in launch-session.ps1 has no throw, no exit and no
+    // return, so a pre_launch_command that blew up writes its .err and then
+    // execution falls straight through to Start-Process (ps1 L134) and the pid
+    // write (ps1 L199). A broken environment step costs the environment, not
+    // the session - deliberately, and the ps1 says so. So the NORMAL outcome
+    // of the failure this feature exists to report is a session sitting there
+    // `running` with the wrong environment, which the `failed` branch never
+    // sees. Read it off the FILE's existence, which is what actually means
+    // "the environment step failed", and never off the status.
+    const failureReason = readErrFile(pidDir, sessionName);
     if (pid !== null) {
       if (isAlive(pid)) {
         status = 'running';
@@ -674,6 +787,14 @@ export function listSessions(ctx) {
       source: 'launched',
       session_id: null,
       ...(activity ? { activity } : {}),
+      // `env_error`, NOT `error`. This view is returned as the WHOLE 200 body
+      // by POST /api/sessions on the reused-session path (server.js), and a
+      // top-level `error` is this codebase's FAILURE ENVELOPE - api.js reads
+      // `data.error` as the machine-readable code and app.js uses the
+      // `!res.ok || res.data.error` idiom. A successful launch answering with
+      // an `error` key is a trap set for the next caller that adopts it.
+      // Omitted rather than null when absent, the same shape as `activity`.
+      ...(failureReason ? { env_error: failureReason } : {}),
     });
   }
 
@@ -685,7 +806,7 @@ export function listSessions(ctx) {
     // sessions.json, so their pid files must still be there to match, and the
     // next poll re-derives the same truth instead of inventing a `failed`.
     if (writeRegistry(registryPath, survivors)) {
-      for (const name of pidFilesToClear) clearPidFile({ pidDir }, name);
+      for (const name of pidFilesToClear) clearPrunedPidFile(pidDir, name);
     }
   }
 
