@@ -12,6 +12,7 @@ import {
   ERR_MAX_CHARS,
   REGISTRY_VERSION,
   isPidAlive,
+  clearPidFileOnly,
   listSessions,
   findLiveSession,
   recordLaunch,
@@ -793,6 +794,43 @@ test('clearPidFile - still removes the pid file when there is no .err', () => {
 // equality check runs. A tampered registry file is therefore attacker-
 // influenced input into a path join.
 
+// NAMED FOR WHAT IT PINS. Two earlier drafts were named for readErrFile and
+// both were wrong about it: the first looped over views that did not exist, and
+// the second asserted a victim file outside pidDir was untouched, which no
+// input in this test could ever have reached - pidFileNameFor collapses '/' to
+// '.' BEFORE the join, so '../victim.pid' becomes '...victim.pid.pid' and stays
+// inside pidDir. Only a BACKSLASH escapes on Windows, which is what the
+// clearPidFile test below actually uses.
+//
+// What holds on this path is the derived-name check: the entry is dropped
+// before readErrFile is ever called. That is falsifiable and is what is
+// asserted. readErrFile's own confinement sits behind it and is unreachable
+// from out here.
+test('listSessions - a traversing session_name is dropped, so nothing reads its .err', () => {
+  const now = Date.now();
+  const { registryPath, pidDir } = makeDataDirs();
+  fs.mkdirSync(pidDir, { recursive: true });
+
+  const ctx = {
+    baseDir: base, registryPath, pidDir,
+    sessionDirs: testSessionDirs(path.dirname(registryPath)),
+    isPidAlive: () => false, now: () => now,
+  };
+  // The registry is the attacker-influenced door: listSessions reads
+  // session_name straight out of the file and passes it on.
+  writeSessions(registryPath, [{
+    session_name: '..\\victim.pid',
+    project: 'Pull Requests',
+    original_path: path.resolve(base, 'Pull Requests'),
+    started_at: new Date(now - PAST_GRACE_MS).toISOString(),
+  }]);
+
+  assert.deepEqual(
+    listSessions(ctx), [],
+    'a traversing session_name must produce no view at all, so nothing reads its .err',
+  );
+});
+
 test('clearPidFile - a traversing session_name cannot delete a file outside pidDir', () => {
   const { registryPath, pidDir } = makeDataDirs();
   fs.mkdirSync(pidDir, { recursive: true });
@@ -804,15 +842,37 @@ test('clearPidFile - a traversing session_name cannot delete a file outside pidD
 
   const ctx = { registryPath, pidDir, sessionDirs: testSessionDirs(path.dirname(registryPath)), isPidAlive: () => false, now: () => Date.now() };
 
+  // THIS TEST ONLY HAS TEETH ON WINDOWS, and that is now asserted rather than
+  // left to look like coverage. pidFileNameFor collapses '/' to '.', so a
+  // forward-slash name can never escape on ANY platform; what escapes is a
+  // BACKSLASH, and only where it is a separator. On POSIX all four names below
+  // are inert filenames and this test would pass with pidFilePathFor's
+  // containment deleted outright. The project is Windows-only, so the guard is
+  // live where it ships - but a green run on a contributor's Linux box proves
+  // nothing about it, and this control says so instead of implying otherwise.
+  if (process.platform === 'win32') {
+    const naive = path.join(path.resolve(pidDir), pidFileNameFor('..\\victim'));
+    assert.notEqual(
+      path.dirname(naive), path.resolve(pidDir),
+      'the evil name must actually resolve outside pidDir, or this test proves nothing',
+    );
+  }
+
   for (const evil of ['../victim', '..\\victim', '../../victim', 'sub/../../victim']) {
     clearPidFile(ctx, evil);
+    // EVERY function that joins a session_name onto pidDir, not just the one
+    // that existed when this test was written. clearPidFileOnly is reachable
+    // from exactly the same two places - the prune passes the registry file's
+    // RAW session_name, and endSession passes one the client can supply - so a
+    // guard that covers only clearPidFile covers a third of the surface.
+    clearPidFileOnly(ctx, evil);
   }
 
   assert.equal(
     fs.existsSync(victim),
     true,
     'a session_name containing traversal must not reach outside pidDir - '
-    + 'pidFilePathFor must return null and clearPidFile must no-op',
+    + 'pidFilePathFor must return null and every caller must no-op',
   );
 });
 

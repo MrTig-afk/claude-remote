@@ -212,14 +212,22 @@ export function clearPidFile(ctx, sessionName) {
 /**
  * Takes the pid file and DELIBERATELY KEEPS any .err beside it.
  *
- * THE CLEANUP FOR A SESSION THAT WAS ALREADY GONE, as opposed to one being torn
- * down. Four callers, one reason: listSessions' prune, and the three endSession
- * paths that discover the process had already left (no registry entry, a reused
- * pid, a pid whose image is not ours). None of them has read why the launch
- * went wrong, and a broken environment is a plausible cause of a session
- * exiting inside one 5s poll window - so deleting the .err there destroys the
- * only record of exactly the failure T121 exists to report, and leaves the
- * owner with a tile back at `no session` and nothing on the PC either.
+ * FIVE CALLERS, TWO REASONS. Do not collapse them into one - an earlier version
+ * of this comment said "four callers, one reason" and the counterexample was in
+ * the same commit.
+ *
+ * REASON 1, a session that was ALREADY GONE rather than torn down: listSessions'
+ * prune, and the three endSession paths that discover the process had already
+ * left (no registry entry, a reused pid, a pid whose image is not ours). None
+ * has read why the launch went wrong, and a broken environment is a plausible
+ * cause of a session exiting inside one 5s poll window - so deleting the .err
+ * there destroys the only record of exactly the failure T121 exists to report.
+ *
+ * REASON 2, a DELIBERATE teardown of a DESK session: deriveSessionName and
+ * deriveDeskSessionName return the same string for the same folder, so the .err
+ * a desk teardown would reach was written by a different, launched session and
+ * is not its to delete. That call is not an already-gone path; it is here for
+ * the name collision.
  *
  * Nothing leaks by keeping it: the next launch of that project clears it twice
  * over, at launch-session.ps1's first statement and at launchSession's
