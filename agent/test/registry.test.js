@@ -529,15 +529,35 @@ test('listSessions - a RUNNING session still surfaces a failed pre_launch_comman
   assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
 });
 
-test('listSessions - a `starting` entry carries the reason too', () => {
+// R12.1 REVERSED THIS ONE. It used to assert that an entry inside the grace
+// window with a .err stays `starting` - correct while the launcher wrote the
+// file and CARRIED ON to Start-Process, because the session really might still
+// be coming. The launcher now exits instead, so a .err beside a missing pid
+// file means nothing was started and nothing is coming. Reporting `starting`
+// for two minutes would be waiting for something that cannot arrive.
+test('listSessions - a reason inside the grace window is FAILED AT ONCE, not `starting`', () => {
   const now = Date.now();
   const ctx = makeCtx({ now: () => now });
+  // Five seconds in. Well inside STARTING_GRACE_MS.
   writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 5000).toISOString())]);
   writeErrFile(ctx, PULL_REQUESTS, 'pre_launch_command failed: boom');
 
   const views = listSessions(ctx);
-  assert.equal(views[0].status, 'starting');
+  assert.equal(views[0].status, 'failed', 'the verdict is already on disk - do not make the owner wait it out');
   assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
+});
+
+// THE POSITIVE CONTROL, and the pair only means something together: the SAME
+// age with NO .err must still be `starting`. Without this, the assertion above
+// would also pass against a mutation that failed every young entry outright.
+test('listSessions - the same age with NO reason is still `starting`', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 5000).toISOString())]);
+
+  const views = listSessions(ctx);
+  assert.equal(views[0].status, 'starting');
+  assert.equal('env_error' in views[0], false);
 });
 
 // The negative control for the three above: a live session with NO .err must
@@ -1411,6 +1431,45 @@ test('discoverDeskSessions - a LIVE desk session replaces a dead `ended` record,
   assert.equal(views[0].source, 'desk');
   assert.equal(views[0].status, 'running');
   assert.equal(views[0].pid, 4248);
+});
+
+// A LIVE DESK SESSION MASKS A FAILED RECORD, REASON OR NOT.
+//
+// An exception for records carrying env_error was written here in cycle 14 and
+// REVERTED the same cycle. It made the API return both views, which is all a
+// test at this level can see - but the PWA then drew neither correctly:
+// sessionFor() takes the first match by path, got the failed view, and the
+// live desk session lost its tile, its dot and its STOP for the full 24h
+// retention. Preserving a message is not worth hiding a running session, and
+// this level of test could not have caught that. The known limitation it
+// leaves - a failed launch on a folder already open at the desk loses its
+// reason - is in .claude/waits/W01-review-plan-main-c14.json.
+test('a live desk session masks a failed record in the same folder, WITH a reason', () => {
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now, livePids: new Set([4249]) });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 5000).toISOString())]);
+  writeErrFile(ctx, PULL_REQUESTS, 'pre_launch_command failed: conda not found');
+  writeDeskFile(ctx.sessionDirs[0], { pid: 4249, sessionId: 'desk-1', cwd: path.join(base, 'Pull Requests') });
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1, 'one row: a live session must never be hidden behind a dead record');
+  assert.equal(views[0].source, 'desk');
+  assert.equal(views[0].status, 'running');
+});
+
+test('with NO desk session, that same failed record reports its reason', () => {
+  // THE CONTROL. The two differ in one thing: whether a live desk session
+  // exists. Without this, the assertion above would also pass against a
+  // registry that dropped reasoned failures altogether.
+  const now = Date.now();
+  const ctx = makeCtx({ now: () => now });
+  writeSessions(ctx.registryPath, [validEntry('Pull Requests', new Date(now - 5000).toISOString())]);
+  writeErrFile(ctx, PULL_REQUESTS, 'pre_launch_command failed: conda not found');
+
+  const views = listSessions(ctx);
+  assert.equal(views.length, 1);
+  assert.equal(views[0].status, 'failed');
+  assert.equal(views[0].env_error, 'pre_launch_command failed: conda not found');
 });
 
 test('discoverDeskSessions - with NO desk session, the `ended` record still reports what happened', () => {

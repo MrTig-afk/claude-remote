@@ -731,17 +731,26 @@ export function listSessions(ctx) {
 
     const pid = readPidFile(pidDir, sessionName);
     let status;
-    // READ FOR EVERY STATUS, AND THE REASON IS THE WHOLE POINT OF T121.
-    // The obvious-looking place for this is the `failed` branch below, and it
-    // is WRONG: the catch in launch-session.ps1 has no throw, no exit and no
-    // return, so a pre_launch_command that blew up writes its .err and then
-    // execution falls straight through to Start-Process (ps1 L134) and the pid
-    // write (ps1 L199). A broken environment step costs the environment, not
-    // the session - deliberately, and the ps1 says so. So the NORMAL outcome
-    // of the failure this feature exists to report is a session sitting there
-    // `running` with the wrong environment, which the `failed` branch never
-    // sees. Read it off the FILE's existence, which is what actually means
-    // "the environment step failed", and never off the status.
+    // READ FOR EVERY STATUS, STILL - but the reason CHANGED at R12.1.
+    //
+    // It used to be read here because the launcher's catch had no exit: a
+    // blown pre_launch_command wrote its .err and fell through to
+    // Start-Process, so the normal outcome was a session sitting there
+    // `running` with the wrong environment, which the `failed` branch would
+    // never see. That state no longer exists - the catch now exits (ps1
+    // R12.1), and Artifact sequence 7 removed the UI for it.
+    //
+    // It stays read here rather than inside the `failed` branch because the
+    // branch does not exist yet at this point - the status is DECIDED below,
+    // partly FROM this value. That is the whole reason, and it is the only one:
+    // an earlier draft of this comment claimed a desk-started session could
+    // reach here carrying a stale .err, which is false. A desk entry only
+    // enters the registry through claimDeskSession, which always writes
+    // `status: 'ending'` and returns above this line; discovered desk views are
+    // built by discoverDeskSessions and never read this at all.
+    //
+    // What the value now means is narrower and stronger than it was: the
+    // launcher stopped before it started anything.
     const failureReason = readErrFile(pidDir, sessionName);
     if (pid !== null) {
       if (isAlive(pid)) {
@@ -765,18 +774,25 @@ export function listSessions(ctx) {
         continue;
       }
       const effectiveAge = Math.max(0, age);
-      if (effectiveAge < STARTING_GRACE_MS) {
-        status = 'starting';
-      } else if (effectiveAge < FAILED_RETENTION_MS) {
-        // No pid file past the grace window. The agent cannot tell "never
-        // started" from "started but the pid write failed" - `failed` here
-        // means only "never confirmed, and never will be". The UI must say
-        // that, not "it failed".
-        status = 'failed';
-      } else {
+      if (effectiveAge >= FAILED_RETENTION_MS) {
         drop(sessionName);
         continue;
       }
+      // TWO WAYS TO BE FAILED, AND THEY ARE NOT THE SAME CLAIM.
+      //
+      // A .err beside a MISSING pid file is a DEFINITE VERDICT and is reported
+      // AT ONCE, without waiting out STARTING_GRACE_MS. Under R12.1 the
+      // launcher writes that file and exits, so nothing was started and
+      // nothing is coming; the answer is already on disk. Making the owner
+      // wait two minutes to be told something the agent already knows is the
+      // opposite of what this feature is for.
+      //
+      // No pid file and NO .err past the grace window is still only "never
+      // confirmed, and never will be" - the agent cannot tell "never started"
+      // from "started but the pid write failed". The UI must keep saying that
+      // rather than "it failed", which is why the row wording differs on
+      // whether a reason is present.
+      status = (failureReason || effectiveAge >= STARTING_GRACE_MS) ? 'failed' : 'starting';
     }
 
     // A LAUNCHED session's registry pid is the cmd.exe wrapper, so activity
@@ -847,6 +863,22 @@ export function listSessions(ctx) {
   // still reports what happened, which is the whole reason it is retained.
   if (desk.length) {
     const found = new Set(desk.map((v) => v.session_name));
+    // AN EXCEPTION FOR REASONED FAILURES WAS TRIED HERE AND REVERTED, and it
+    // is worth a paragraph so it is not tried a third time. The idea was that a
+    // `failed` view carrying env_error should survive masking, because it is
+    // the only place the owner is ever told why the launch they just triggered
+    // did not happen. The API did return both views. THE PWA DREW NEITHER
+    // CORRECTLY: sessionFor() takes the FIRST match by path, which is the
+    // retained failed view, so the live desk session got no tile, no dot and no
+    // STOP, and the row read `launch unconfirmed` - for the full 24h retention.
+    // That is the exact bug the masking rule exists to prevent, and the
+    // exception reintroduced it while trying to preserve a message.
+    //
+    // KNOWN LIMITATION, recorded rather than papered over: tapping a project
+    // that is already open at the desk, when its environment step fails, loses
+    // the reason on the next poll. The fix needs the PWA to render both, which
+    // is UI work and an owner decision - see
+    // .claude/waits/W01-review-plan-main-c14.json.
     views = views.filter((v) => !(found.has(v.session_name)
       && (v.status === 'failed' || v.status === 'ended')));
   }

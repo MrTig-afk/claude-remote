@@ -1,5 +1,5 @@
 [CmdletBinding()]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Deliberate: $ErrorActionPreference is Stop, and by this point the session is already launched - a failed pid-file write must not abort the script or surface an error with nowhere to go (NonInteractive, stdio ignored).')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingEmptyCatchBlock', '', Justification = 'Deliberate, at TWO sites with DIFFERENT reasons. (1) The pid-file write: by that point the session is already launched, so a failed write must not abort the script or surface an error with nowhere to go (NonInteractive, stdio ignored). (2) Write-LaunchRefusal: nothing is launched there and the swallowed failure is the REASON WRITE ITSELF - if Set-Content fails (pidDir removed, AV lock, read-only profile) the script still exits 1, and the owner gets a reasonless failed tile after the grace window. Throwing instead would replace a bad message with no message and no exit code, which is worse. Recorded rather than glossed: this is a known hole, not a covered case.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingInvokeExpression', '', Justification = 'Running the string IS the feature. -PreLaunch carries the owner-configured pre_launch_command, and it must take effect in THIS session so environment changes reach claude.cmd - a child process would exit and undo them. The rule guards against executing untrusted input; this input comes only from config.json on the local disk, which no API route can write (pinned by a test in accept.test.js) and which already requires the desk access needed to run anything as this user. See resolvePreLaunchCommand in agent/config.js.')]
 param(
     [Parameter(Mandatory)][string]$ProjectPath,
@@ -11,6 +11,25 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# R12.1. THE ONE WAY THIS SCRIPT REFUSES TO LAUNCH. Write the reason where the
+# agent can find it, then stop - no Start-Process, no pid file.
+#
+# The .err file is the ONLY place a failure can be seen. Write-Warning goes to
+# a stream the agent spawns with stdio:'ignore', and this script runs
+# -NonInteractive, so without this write a failure is indistinguishable from
+# success at the agent, in the PWA, and in this terminal.
+#
+# `exit` inside a function ends the SCRIPT in PowerShell, not just the
+# function. That is the intent and it is the reason this is a function at all:
+# every refusal path writes the same file and stops the same way, so a new one
+# cannot be added that forgets half of it.
+function Write-LaunchRefusal([string]$Reason) {
+    if ($PidFile) {
+        try { Set-Content -LiteralPath "$PidFile.err" -Value $Reason -Encoding utf8 } catch { }
+    }
+    exit 1
+}
 
 # CLEAR LAST LAUNCH'S FAILURE FIRST. The .err file below is the only place a
 # failed pre_launch_command is visible, and nothing else ever deletes it -
@@ -51,18 +70,21 @@ Set-Location -LiteralPath $ProjectPath
 # a relative path resolves against the project. Why executing it is acceptable
 # is in the PSAvoidUsingInvokeExpression justification at the top of this file.
 if ($PreLaunch) {
-    # THE catch IS NOT OPTIONAL. $ErrorActionPreference is 'Stop', so a failure
-    # here aborts the script BEFORE Start-Process: no session, no pid file, and
-    # nothing visible - the agent still answers 202 and the tile ages into
-    # `failed`. A broken environment step must cost the environment, not the
-    # session.
+    # THE LAUNCH STOPS HERE. PRD R12.1, owner's decision 2026-09-12.
     #
-    # THE .err FILE IS THE ONLY PLACE A FAILURE CAN BE SEEN. Write-Warning goes
-    # to a stream the agent spawns with stdio:'ignore', and this script is
-    # -NonInteractive, so without it a failed command is indistinguishable from
-    # success at the agent, in the PWA and in this terminal. Beside the pid
-    # file: that directory already exists by now and the agent already knows
-    # the path.
+    # THIS REVERSES WHAT THIS BLOCK USED TO DO, and the old behaviour is worth
+    # stating because the comment defending it stood here for weeks: the catch
+    # used to write the .err and FALL THROUGH to Start-Process, on the argument
+    # that "a broken environment step must cost the environment, not the
+    # session". The cost of that argument was a session that is alive and
+    # wrong at the same time - a CONDITION that persists, which had to be shown
+    # on a surface that also carries transient news. FIVE user-visible designs
+    # were refuted trying to draw it (cycles 12 and 13), and Artifact sequence 7
+    # deleted the state instead of drawing it a sixth time.
+    #
+    # So: write the reason, then EXIT. No Start-Process, no pid file. The agent
+    # sees a .err beside a missing pid file, which is now a definite verdict
+    # rather than a guess, and reports `could not start` with this text.
     #
     # WHAT IS STILL NOT GUARDED, stated because it bit the docs: a command that
     # never RETURNS. There is no timeout here and there cannot easily be one -
@@ -79,16 +101,166 @@ if ($PreLaunch) {
         # on its own line survived a catch->finally mutation. Both were tried
         # and both stayed green. It also keeps the message the OUTER error if
         # the inner catch ever grows a body.
-        if ($PidFile) {
-            try { Set-Content -LiteralPath "$PidFile.err" -Value "pre_launch_command failed: $preLaunchFailure" -Encoding utf8 } catch { }
-        }
+        Write-LaunchRefusal "pre_launch_command failed: $preLaunchFailure"
     }
 } else {
+    # R12. LOOK IN THE PROJECT. Nothing is configured and nothing is
+    # remembered, so a folder made a minute ago behaves like one used for a
+    # year. Two things are looked for, in this order, and the FIRST hit wins.
+    $activated = $false
+
     foreach ($dir in @('venv', '.venv')) {
         $activate = Join-Path $ProjectPath "$dir\Scripts\Activate.ps1"
         if (Test-Path -LiteralPath $activate) {
-            . $activate
+            # WRAPPED, AND IT WAS NOT BEFORE. $ErrorActionPreference is 'Stop',
+            # so a broken Activate.ps1 - a stale pyvenv.cfg, a moved
+            # interpreter, a venv copied from another machine - raised a
+            # terminating error here and killed the script with no .err at all.
+            # The registry then showed `starting` for the full grace window and
+            # `failed` with nothing to show, which is the exact outcome R12.1
+            # exists to abolish, on the MOST COMMON branch.
+            try { . $activate } catch {
+                Write-LaunchRefusal "could not activate the $dir environment in this project: $_"
+            }
+            $activated = $true
             break
+        }
+    }
+
+    # A conda project says its environment's name inside environment.yml, which
+    # is conda's own file and not something this tool invented. Read the NAME
+    # only - it is handed to `conda activate` as an ARGUMENT and never executed,
+    # which is what keeps a cloned repository from running anything here.
+    $envYml = Join-Path $ProjectPath 'environment.yml'
+    if (-not $activated -and (Test-Path -LiteralPath $envYml)) {
+        # BOUNDED, and read errors are NOT laundered. -TotalCount stops this
+        # materialising an arbitrarily large file from a possibly-cloned
+        # project on a machine that commonly has ~1GB free; readErrFile bounds
+        # its read for the same reason. And a file that cannot be READ is a
+        # different fault from a file with no name in it - saying "no name:"
+        # for a locked or unreadable file sends the owner to fix the wrong
+        # thing.
+        $head = $null
+        try {
+            $head = Get-Content -LiteralPath $envYml -TotalCount 200
+        } catch {
+            Write-LaunchRefusal "could not read this project's environment.yml: $_"
+        }
+
+        # ANCHORED AT COLUMN 0 and CASE-SENSITIVE (-cmatch, not -match).
+        # PowerShell's -match is case-insensitive but YAML keys are not, so
+        # `NAME:` matched; and an unanchored `^\s*name:` matched a `name:`
+        # nested under another mapping in preference to the real top-level one.
+        # Surrounding quotes are stripped and a trailing comment dropped,
+        # because `name: "my env"` previously yielded `"my` - truncated at the
+        # space, quote kept. This is NOT a YAML parser and does not try to be;
+        # WHAT IT STILL GETS WRONG, said plainly rather than waved at: `#` is
+        # treated as a comment even inside quotes, which YAML does not do, so
+        # `name: "my # env"` parses as `my`. An earlier version of this comment
+        # claimed the activation check below catches mis-parses. IT DOES NOT -
+        # that check compares conda's result against the SAME mis-parsed value,
+        # so it is a tautology with respect to parse errors and can only catch
+        # "the parsed name does not exist". On a machine that happens to have a
+        # short environment actually called `my`, such a launch would proceed
+        # in the wrong one.
+        $envName = $null
+        foreach ($line in $head) {
+            if ($line -cmatch '^name:(.*)$') {
+                $value = $Matches[1]
+
+                # A `#` IS ONLY A COMMENT WHEN IT STARTS THE VALUE OR FOLLOWS
+                # WHITESPACE. The previous form was `\s*(.+?)\s*(?:#.*)?$`,
+                # which got both ends of that wrong: `name: # todo pick one`
+                # captured the whole COMMENT as the name, and `name: env#1` -
+                # a perfectly ordinary YAML scalar - lost its suffix.
+                if ($value -match '^\s*#') {
+                    $value = ''
+                } elseif ($value -cmatch '^(.*?)\s+#') {
+                    $value = $Matches[1]
+                }
+
+                # TRIMMED BEFORE THE QUOTES COME OFF, AND AGAIN AFTER.
+                # `(.*)` captures whitespace and a single space is TRUTHY in
+                # PowerShell, so `name: ` and `name:<tab>` previously produced a
+                # non-empty name and sailed past the guard below - the owner was
+                # then told their machine had no conda, about an environment
+                # called "".
+                $envName = $value.Trim().Trim('"', "'").Trim()
+                break
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($envName)) {
+            Write-LaunchRefusal "environment.yml has no top-level 'name:' in its first 200 lines, so there is no conda environment to activate. Add one, or remove the file."
+        }
+
+        # CONDA IS FOUND, NOT CONFIGURED. Under -NoProfile nothing `conda init`
+        # wrote exists, so a bare `conda activate` is not a command here - it
+        # falls through to conda.exe and errors with "Run 'conda init' first".
+        # The hook script is what makes activation work in THIS session, and it
+        # lives at a small number of standard roots.
+        # BUILT DEFENSIVELY. The previous form was one @(...) literal, which
+        # PowerShell evaluates ENTIRELY before the loop body runs - so a single
+        # unset USERPROFILE or LOCALAPPDATA made Join-Path raise a terminating
+        # ParameterBindingValidationException and killed the launcher with no
+        # .err. The agent runs as a scheduled task, where neither variable is
+        # guaranteed.
+        $hook = $null
+        $roots = @()
+        foreach ($base in @($env:USERPROFILE, $env:LOCALAPPDATA, 'C:\ProgramData')) {
+            if (-not $base) { continue }
+            foreach ($name in @('miniconda3', 'anaconda3')) {
+                $roots += (Join-Path $base $name)
+            }
+        }
+        foreach ($root in $roots) {
+            $candidate = Join-Path $root 'shell\condabin\conda-hook.ps1'
+            if (Test-Path -LiteralPath $candidate) { $hook = $candidate; break }
+        }
+        if (-not $hook) {
+            Write-LaunchRefusal "$envName is a conda environment (environment.yml), but no conda installation was found on this PC."
+        }
+
+        try {
+            . $hook
+        } catch {
+            Write-LaunchRefusal "could not load conda's PowerShell hook at ${hook}: $_"
+        }
+
+        # BOTH GUARDS, AND ROUND 2 IS WHY. Removing the try/catch was the
+        # wrong half of the round-1 fix: the post-condition is NECESSARY but
+        # not SUFFICIENT. A command-RESOLUTION failure IS terminating even
+        # though a non-zero exit is not - a hook that loads cleanly but defines
+        # no `conda` (a partial install, or a conda whose CONDA_EXE is unset)
+        # raises CommandNotFoundException here. Unguarded, that killed the
+        # script with NO .err: measured, status 1, errExists false, and the
+        # registry then showed `starting` for the full grace window and
+        # `failed` with nothing to show.
+        try {
+            conda activate $envName
+        } catch {
+            Write-LaunchRefusal "could not run conda activate for '$envName': $_"
+        }
+
+        # CHECKED BY POST-CONDITION AS WELL, NEVER BY EXCEPTION ALONE. A try/catch around `conda activate` catches NOTHING useful:
+        # a native command exiting non-zero does not raise a terminating error
+        # even under $ErrorActionPreference = 'Stop' (MEASURED on this host
+        # 2026-09-12: `& cmd /c "exit 1"` inside try/catch did not throw,
+        # $LASTEXITCODE = 1). Conda's own activate function runs conda.exe,
+        # captures what it prints and Invoke-Expressions it - so for a MISSING
+        # environment, the most likely failure by far, conda.exe writes to
+        # stderr, the captured string is empty, Invoke-Expression '' is a no-op
+        # and nothing is raised at all.
+        #
+        # The wrapped version of this shipped for exactly one review round and
+        # would have silently reinstated the state Artifact sequence 7 deleted:
+        # a cloned repo naming an environment that does not exist here would
+        # have launched a healthy-looking session sitting in `base`.
+        #
+        # CONDA_DEFAULT_ENV is what conda itself sets on success, so comparing
+        # it is a claim about the environment this process is actually in
+        # rather than about whether a command complained.
+        if ($env:CONDA_DEFAULT_ENV -ne $envName) {
+            Write-LaunchRefusal "could not enter the conda environment '$envName'. conda is installed, but that environment does not exist on this PC or could not be entered."
         }
     }
 }

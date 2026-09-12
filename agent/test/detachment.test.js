@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 
 // T28's whole claim is that a session launched with
@@ -13,6 +14,410 @@ import { test } from 'node:test';
 // launchSession uses, kill the process that spawned it, and confirm the
 // child is still alive. If this ever fails, launchSession's detachment
 // claim is false regardless of anything sessions.test.js says.
+
+// R12.1 - AND THIS ONE ACTUALLY RUNS THE LAUNCHER.
+//
+// Every other assertion about launch-session.ps1 in this file reads its SOURCE
+// and checks a token is present. That is how five UI designs shipped green
+// this week against code that could not work, and T104 is the standing task
+// about it. This one executes the script and looks at what it DID.
+//
+// What it proves: a pre_launch_command that throws stops the launcher dead.
+// The reason is written to the .err, no pid file appears, and execution never
+// reaches Start-Process. Before R12.1 the catch fell straight through and
+// started the session anyway - which is the state Artifact sequence 7 deleted
+// after five refuted attempts at drawing it.
+test('R12.1 - a failed pre-launch command STOPS the launcher before Start-Process', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-r121-'));
+  const pidFile = path.join(dir, 'session.pid');
+  const ps1 = fileURLToPath(new URL('../launch-session.ps1', import.meta.url));
+
+  // PATH IS NEUTERED DELIBERATELY. This suite is forbidden from ever starting
+  // a real `claude` session (see the note at the top of this file), and the
+  // whole claim under test is that the launcher stops BEFORE Start-Process -
+  // so if the guard is ever removed, the script would run on and try to start
+  // one. With claude.cmd unreachable it cannot, whatever the script does, and
+  // the regression surfaces as the last assertion rather than as a stray
+  // session on somebody's machine.
+  // ABSOLUTE PATH to the shell, because PATH below is neutered and
+  // powershell.exe lives in a SUBDIRECTORY of System32 - resolving it by name
+  // fails with status null, which is a spawn error and not a script result.
+  const shell = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+  );
+  const r = spawnSync(shell, [
+    '-NoProfile', '-NonInteractive', '-File', ps1,
+    '-ProjectPath', dir,
+    '-SessionName', 'r121',
+    '-PidFile', pidFile,
+    // No quotes in the value, so nothing depends on how Node quotes argv on
+    // Windows - and the message this produces is the real-world shape:
+    // "The term '...' is not recognized", capitalised, with no trailing stop.
+    '-PreLaunch', 'definitely-not-a-real-command-xyz',
+  ], { encoding: 'utf8', env: { ...process.env, PATH: 'C:\\Windows\\System32' } });
+
+  assert.equal(r.status, 1, 'the launcher must exit non-zero, not carry on');
+
+  const errFile = `${pidFile}.err`;
+  assert.equal(fs.existsSync(errFile), true, 'the reason is the only thing the phone will ever get');
+  const reason = fs.readFileSync(errFile, 'utf8');
+  assert.match(reason, /definitely-not-a-real-command-xyz/, 'the .err must name what failed');
+  assert.match(reason, /not recognized/i);
+
+  assert.equal(fs.existsSync(pidFile), false, 'no pid file - nothing was started');
+
+  // THE DISCRIMINATOR. Remove the `exit 1` and the script runs on to
+  // Start-Process, which then fails to resolve claude.cmd and says so on
+  // stderr. Matching `claude.cmd` rather than `claude` on purpose: this
+  // script's own path contains "claude-remote" and turns up in PowerShell
+  // error output.
+  const out = `${r.stdout || ''}${r.stderr || ''}`;
+  assert.doesNotMatch(out, /claude\.cmd/i, 'the launcher reached Start-Process - the R12.1 guard is gone');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// Runs the REAL launcher and reports what it did. Every test below drives
+// this rather than reading the script's source.
+//
+// PATH IS NEUTERED, and USERPROFILE/LOCALAPPDATA are redirected at a scratch
+// directory. Two separate reasons:
+//   - PATH: this suite is forbidden from ever starting a real `claude`
+//     session, and several of these tests assert the launcher stops BEFORE it
+//     would. If a guard is ever removed the script must still be unable to
+//     start one.
+//   - USERPROFILE/LOCALAPPDATA: the conda search reads them, so redirecting
+//     makes "conda is not installed" true for the test regardless of what is
+//     on the machine running it. `C:\\ProgramData` is searched too and cannot
+//     be redirected - absent on this host, checked 2026-09-12 - so a machine
+//     with a ProgramData conda would take the activate path instead. The
+//     assertions below are written to hold either way: what they claim is
+//     that the launcher REFUSES, not which sentence it refuses with.
+function runLauncher(dir, args) {
+  const shell = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+  );
+  const ps1 = fileURLToPath(new URL('../launch-session.ps1', import.meta.url));
+  const pidFile = path.join(dir, 'session.pid');
+  const r = spawnSync(shell, [
+    '-NoProfile', '-NonInteractive', '-File', ps1,
+    '-ProjectPath', dir,
+    '-SessionName', 'probe',
+    '-PidFile', pidFile,
+    ...args,
+  ], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      PATH: 'C:\\Windows\\System32',
+      USERPROFILE: path.join(dir, 'no-home'),
+      LOCALAPPDATA: path.join(dir, 'no-appdata'),
+    },
+  });
+  const errFile = `${pidFile}.err`;
+  return {
+    status: r.status,
+    out: `${r.stdout || ''}${r.stderr || ''}`,
+    pidFileExists: fs.existsSync(pidFile),
+    errExists: fs.existsSync(errFile),
+    // BOM STRIPPED. PowerShell 5.1's `Set-Content -Encoding utf8` writes a
+    // byte-order mark, so the reason starts with U+FEFF on disk and any
+    // assertion anchored with ^ fails for a reason that has nothing to do
+    // with what is being tested. readErrFile (registry.js) strips it in
+    // production for the same reason; this keeps the test seeing what the
+    // phone sees.
+    reason: fs.existsSync(errFile)
+      ? fs.readFileSync(errFile, 'utf8').replace(/^﻿/, '')
+      : null,
+  };
+}
+
+function project() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'cr-env-'));
+}
+
+test('R12 - environment.yml with no `name:` refuses the launch and says which', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'dependencies:\n  - python=3.12\n');
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  assert.equal(r.pidFileExists, false, 'nothing may be started');
+  assert.match(r.reason, /name:/, 'the reason must say what is missing from the file');
+  assert.doesNotMatch(r.out, /claude\.cmd/i, 'it must not have reached Start-Process');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - a conda project on a machine with no conda refuses, and says THAT', () => {
+  // PRECONDITION, ASSERTED NOT ASSUMED. runLauncher redirects USERPROFILE and
+  // LOCALAPPDATA into a scratch directory, so four of the six roots the
+  // launcher searches are empty by construction. The two ProgramData roots are
+  // absolute and cannot be redirected, so they are checked here. This FAILS
+  // rather than skips if conda is installed there: a skipped guard is a green
+  // run, and the exact message below is the thing under test.
+  for (const root of ['C:\\ProgramData\\miniconda3', 'C:\\ProgramData\\anaconda3']) {
+    assert.equal(
+      fs.existsSync(path.join(root, 'shell', 'condabin', 'conda-hook.ps1')), false,
+      `this test needs no conda at ${root}; with one installed there the launcher would take the activate path instead`,
+    );
+  }
+
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: nutrition-de\ndependencies: []\n');
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  assert.equal(r.pidFileExists, false, 'nothing may be started');
+  assert.equal(r.errExists, true, 'a refusal without a reason is the failure this feature exists to remove');
+  assert.match(r.reason, /nutrition-de/, 'a phone shows nothing but this line, so it must name the environment');
+  // THE EXACT DIAGNOSIS, not merely "it refused". Deleting the no-conda guard
+  // still refuses - `. $null` throws and the catch below it turns that into
+  // "could not activate" - so an assertion that only checked for a refusal
+  // passed against the deleted guard. Measured: that mutation survived until
+  // this line existed. What breaks is the OWNER'S ability to tell "conda is
+  // not installed" from "your environment is broken", which are different
+  // jobs to do in the morning.
+  assert.match(r.reason, /no conda installation was found/i);
+  assert.doesNotMatch(r.out, /claude\.cmd/i);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - an unset USERPROFILE refuses cleanly instead of dying silently', () => {
+  // F13-C03. The conda roots were one @(...) literal, which PowerShell
+  // evaluates ENTIRELY before the loop body runs - so a single unset
+  // USERPROFILE made Join-Path raise a terminating
+  // ParameterBindingValidationException and killed the launcher with no .err
+  // at all. The agent runs as a scheduled task, where neither USERPROFILE nor
+  // LOCALAPPDATA is guaranteed to be present.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: needs-conda\n');
+
+  const shell = path.join(
+    process.env.SystemRoot || 'C:\\Windows',
+    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
+  );
+  const ps1 = fileURLToPath(new URL('../launch-session.ps1', import.meta.url));
+  const pidFile = path.join(dir, 'session.pid');
+  // EMPTIED, NOT DELETED, and the difference is the whole test. `delete
+  // env.USERPROFILE` does NOT reach PowerShell - Windows repopulates it, and
+  // this test passed for that reason alone while proving nothing (measured
+  // 2026-09-12: the child reported `USERPROFILE STILL SET: C:\\Users\\...`).
+  // An empty string does arrive empty, and `Join-Path '' x` throws exactly as
+  // a null one does, which is the terminating error the fix exists to avoid.
+  const env = {
+    ...process.env,
+    PATH: 'C:\\Windows\\System32',
+    LOCALAPPDATA: path.join(dir, 'no-appdata'),
+    USERPROFILE: '',
+  };
+
+  const r = spawnSync(shell, [
+    '-NoProfile', '-NonInteractive', '-File', ps1,
+    '-ProjectPath', dir, '-SessionName', 'probe', '-PidFile', pidFile,
+  ], { encoding: 'utf8', env });
+
+  assert.equal(r.status, 1);
+  assert.equal(fs.existsSync(`${pidFile}.err`), true, 'it must refuse WITH a reason, not just die');
+  assert.match(fs.readFileSync(`${pidFile}.err`, 'utf8'), /needs-conda/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - the name is parsed as YAML means it, not as the old regex did', () => {
+  // F13-C04. The first version was `^\\s*name:\\s*([^\\s#]+)` with PowerShell's
+  // case-INSENSITIVE -match. Measured against real files, it produced `"my`
+  // for `name: "my env"` - truncated at the space, opening quote kept - and it
+  // matched `NAME:`, which YAML does not, and a `name:` indented under another
+  // key in preference to the real top-level one.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: "my env"  # the one to use\n');
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  // No conda here, so the refusal quotes the name it parsed - which is what
+  // makes the parse observable at all.
+  assert.match(r.reason, /^my env is a conda environment/,
+    'quotes stripped, trailing comment dropped, and NOT truncated at the space');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - an UPPERCASE NAME: is not a YAML name key, and is not treated as one', () => {
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'NAME: shouty\n');
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  assert.match(r.reason, /no top-level 'name:'/, 'YAML keys are case-sensitive; -match was not');
+  assert.doesNotMatch(r.reason, /shouty/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - an UNREADABLE environment.yml says so, instead of blaming the file for having no name', () => {
+  // F13-C05. -ErrorAction SilentlyContinue turned every read fault into
+  // `$envName = $null`, so a locked or unreadable file told the owner it had
+  // no `name:` - sending them to fix the wrong thing. A DIRECTORY by that name
+  // is the cheapest reliable unreadable file on Windows.
+  const dir = project();
+  fs.mkdirSync(path.join(dir, 'environment.yml'));
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  assert.match(r.reason, /could not read this project's environment\.yml/);
+  assert.doesNotMatch(r.reason, /no top-level/, 'that is a different fault with a different fix');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// STANDING CONDA IN, so the activation guard is reachable at all.
+//
+// runLauncher points USERPROFILE at `<dir>/no-home`, and that is the FIRST root
+// the launcher searches - so a hook placed there wins over any real conda on
+// the machine, and these two tests are deterministic everywhere.
+//
+// This is not a mock of the thing under test. conda's real conda-hook.ps1 is
+// itself just a PowerShell script that defines a `conda` function; what is
+// stood in here is conda, not the launcher, and the launcher runs untouched.
+function fakeConda(dir, body) {
+  const hookDir = path.join(dir, 'no-home', 'miniconda3', 'shell', 'condabin');
+  fs.mkdirSync(hookDir, { recursive: true });
+  fs.writeFileSync(path.join(hookDir, 'conda-hook.ps1'), body);
+}
+
+test('R12.1 - conda that does NOT enter the environment refuses the launch', () => {
+  // F13-C01, THE CRITICAL ONE, and the reason a try/catch could never catch it:
+  // a native command exiting non-zero raises no terminating error even under
+  // $ErrorActionPreference = 'Stop' (measured on this host 2026-09-12), and
+  // conda's own activate Invoke-Expressions an EMPTY string when the
+  // environment does not exist - so nothing is thrown at all. This conda
+  // "succeeds" loudly and enters nothing, which is exactly that shape.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: never-created\n');
+  fakeConda(dir, 'function conda { }\n');
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1, 'a session in the WRONG environment is the state Artifact sequence 7 deleted');
+  assert.equal(r.errExists, true);
+  assert.match(r.reason, /could not enter the conda environment 'never-created'/);
+  assert.equal(r.pidFileExists, false);
+  assert.doesNotMatch(r.out, /claude\.cmd/i, 'it must not have reached Start-Process');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - conda that DOES enter the environment lets the launch proceed', () => {
+  // THE POSITIVE CONTROL. The two differ in one thing only: whether conda
+  // actually set CONDA_DEFAULT_ENV. Without this, the assertion above would
+  // also pass against a launcher that refused every conda project outright.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: really-there\n');
+  fakeConda(dir, "function conda { if ($args[0] -eq 'activate') { $env:CONDA_DEFAULT_ENV = $args[1] } }\n");
+
+  const r = runLauncher(dir, []);
+  // No .err at all: Write-LaunchRefusal is the only thing that writes it, so
+  // its absence proves the environment step completed and the script ran on -
+  // then failed at Start-Process, because PATH makes claude.cmd unreachable.
+  assert.equal(r.errExists, false, 'a working activation must not be refused');
+  assert.equal(r.pidFileExists, false, 'and claude.cmd is deliberately unreachable, so nothing started');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12.1 - a conda hook that defines no `conda` refuses WITH a reason', () => {
+  // F14-D2-C02. Round 1 replaced the try/catch with a post-condition; round 2
+  // showed the post-condition is NECESSARY BUT NOT SUFFICIENT. A non-zero exit
+  // is not terminating, but a command-RESOLUTION failure is - a hook that loads
+  // cleanly and defines no `conda` (a partial install, or a conda whose
+  // CONDA_EXE is unset) throws CommandNotFoundException. Unguarded that killed
+  // the script with no .err at all, which is the reasonless failure R12.1
+  // exists to abolish.
+  const dir = project();
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: half-installed\n');
+  fakeConda(dir, '# a hook that loads fine and defines nothing\n');
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  assert.equal(r.errExists, true, 'a refusal with no reason is the whole failure mode');
+  assert.match(r.reason, /could not run conda activate for 'half-installed'/);
+  assert.equal(r.pidFileExists, false);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - a `name:` with an empty or comment-only value is treated as absent', () => {
+  // F14-D2-C03. `(.+?)` captures whitespace and a single space is TRUTHY in
+  // PowerShell, so `name: ` sailed past the empty check and the owner was told
+  // their machine had no conda - about an environment called "". A comment-only
+  // value was worse: the comment became the name.
+  for (const body of ['name: \n', 'name:\t\n', 'name: # todo pick one\n']) {
+    const dir = project();
+    fs.writeFileSync(path.join(dir, 'environment.yml'), body);
+
+    const r = runLauncher(dir, []);
+    assert.equal(r.status, 1);
+    assert.match(r.reason, /no top-level 'name:'/, `should read as absent: ${JSON.stringify(body)}`);
+    assert.doesNotMatch(r.reason, /no conda installation/, 'that accuses the machine of the wrong fault');
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('R12.1 - a BROKEN venv activate refuses the launch with a reason', () => {
+  // F13-C02. `. $activate` sat outside any try/catch, so with
+  // $ErrorActionPreference = 'Stop' a broken Activate.ps1 - a stale
+  // pyvenv.cfg, a moved interpreter, a venv copied from another machine -
+  // killed the script with NO .err at all. The registry then showed
+  // `starting` for the full grace window and `failed` with nothing to show,
+  // on the branch that runs for every project that is not configured.
+  const dir = project();
+  fs.mkdirSync(path.join(dir, 'venv', 'Scripts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'venv', 'Scripts', 'Activate.ps1'), "throw 'this venv is broken'\n");
+
+  const r = runLauncher(dir, []);
+  assert.equal(r.status, 1);
+  assert.equal(r.errExists, true, 'a refusal with no reason is the failure R12.1 exists to abolish');
+  assert.match(r.reason, /this venv is broken/, 'the underlying error has to reach the phone');
+  assert.equal(r.pidFileExists, false);
+  assert.doesNotMatch(r.out, /claude\.cmd/i);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('R12 - a venv WINS over environment.yml, and the launch gets past the environment step', () => {
+  // SAME PRECONDITION AS THE CONDA TEST, and for the same reason. This proves
+  // the venv branch won from the ABSENCE of a .err - but on a host with conda
+  // at ProgramData the conda branch would run, fail to activate
+  // `should-not-be-used`, and now write a .err, so the assertion would still
+  // be meaningful. Asserted anyway so the discriminator is not silently
+  // resting on which machine happens to run it.
+  for (const root of ['C:\\ProgramData\\miniconda3', 'C:\\ProgramData\\anaconda3']) {
+    assert.equal(
+      fs.existsSync(path.join(root, 'shell', 'condabin', 'conda-hook.ps1')), false,
+      `this test needs no conda at ${root}`,
+    );
+  }
+  const dir = project();
+  // An empty Activate.ps1 is dot-sourceable and does nothing, which is exactly
+  // what this needs: the claim is about which branch runs, not about venv.
+  fs.mkdirSync(path.join(dir, 'venv', 'Scripts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'venv', 'Scripts', 'Activate.ps1'), '');
+  fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: should-not-be-used\n');
+
+  const r = runLauncher(dir, []);
+  // THE DISCRIMINATOR: no .err at all. Write-LaunchRefusal is the only thing that
+  // writes that file, so its absence proves the environment step completed and
+  // the script ran on - it then fails at Start-Process, because PATH above
+  // makes claude.cmd unreachable on purpose.
+  assert.equal(r.errExists, false, 'the venv branch must have won - a .err means it tried conda');
+  assert.equal(r.pidFileExists, false, 'and claude.cmd is deliberately unreachable, so nothing started');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
 function isAlive(pid) {
   try {
