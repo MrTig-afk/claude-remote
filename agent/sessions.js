@@ -805,6 +805,27 @@ export function launchSession(ctx, project) {
   child.on('error', (err) => {
     inFlightLaunches.delete(key);
     console.error(`claude-remote agent: launch of '${sessionName}' failed to spawn:`, err);
+    // F15-D2-C01. THE REASON HAS TO REACH THE PHONE, and console.error does not
+    // - the agent runs as a scheduled task and nobody reads its terminal.
+    //
+    // This is the one failure launch-session.ps1 CANNOT report, because the
+    // script never runs: spawn is given `cwd: r.path`, so a project folder
+    // deleted or renamed between the phone listing it and the tap landing makes
+    // NODE fail with ENOENT before PowerShell starts. MEASURED: 'error' fires
+    // with no 'exit'. The script's own Set-Location guard only covers the gap
+    // between node's cwd check and its first statement.
+    //
+    // Without this the entry sits `starting` for STARTING_GRACE_MS and then
+    // reads `failed` with nothing to show - the reasonless failure R12.1 exists
+    // to abolish, reached by the most ordinary accident there is.
+    //
+    // Written with the SAME shape launch-session.ps1 uses, so registry.js's
+    // readErrFile needs no special case, and swallowed for the same reason the
+    // script swallows its own: a failed reason-write must not take the error
+    // handler down with it.
+    try {
+      fs.writeFileSync(`${pidFilePath}.err`, `could not start: ${err.message}`, 'utf8');
+    } catch { /* nothing better to do from here */ }
   });
   child.on('exit', () => inFlightLaunches.delete(key));
   child.unref();

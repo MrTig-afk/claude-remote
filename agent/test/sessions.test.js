@@ -1283,6 +1283,36 @@ test('HTTP - second POST past STARTING_GRACE_MS while the launcher still runs ->
   }
 });
 
+test("launchSession - a spawn that never happened still tells the phone WHY", () => {
+  // F15-D2-C01. This is the ONE failure launch-session.ps1 cannot report,
+  // because the script never runs. spawn is given `cwd: r.path`, so a project
+  // folder deleted or renamed between the phone listing it and the tap landing
+  // makes NODE fail with ENOENT before PowerShell starts - 'error' fires, no
+  // 'exit', and the handler used to only console.error where the agent's own
+  // terminal is the only reader. The entry then sat `starting` for the grace
+  // window and read `failed` with nothing to show.
+  const { spawner, calls } = makeFakeSpawner();
+  let currentTime = Date.now();
+  const regCtx = makeRegCtx({ now: () => currentTime });
+  const ctx = { baseDir: base, spawner, ...regCtx };
+
+  launchSession(ctx, 'email-lint');
+  calls[0].child.handlers.error(Object.assign(new Error('spawn powershell.exe ENOENT'), { code: 'ENOENT' }));
+
+  // PAST THE GRACE WINDOW, so the registry has made its verdict.
+  currentTime += STARTING_GRACE_MS + 1000;
+
+  // baseDir is what lets listSessions resolve projects - see the sibling
+  // test above; regCtx alone carries no roots.
+  const view = listSessions({ baseDir: base, ...regCtx }).find((s) => s.project === 'email-lint');
+  assert.ok(view, 'the launch must still be recorded');
+  assert.equal(view.status, 'failed');
+  assert.match(
+    view.env_error, /could not start: .*ENOENT/,
+    'a failed tile with no reason is the whole failure mode this fixes',
+  );
+});
+
 test("launchSession - a launcher that fails to spawn releases the guard on 'error' alone", () => {
   const { spawner, calls } = makeFakeSpawner();
   let currentTime = Date.now();

@@ -61,7 +61,82 @@ if ($ConfigDir) {
     Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
 }
 
-Set-Location -LiteralPath $ProjectPath
+# WRAPPED, BUT READ THE LIMIT BEFORE TRUSTING IT. This catches a ProjectPath
+# that vanishes, which under $ErrorActionPreference = 'Stop' otherwise kills the
+# script with NO .err - the reasonless failure R12.1 exists to abolish.
+#
+# IT IS ALMOST UNREACHABLE IN PRODUCTION, and an earlier version of this comment
+# claimed otherwise. sessions.js spawns this script with `cwd: r.path` - the
+# SAME path - so a missing folder makes NODE fail with ENOENT and PowerShell
+# never starts at all. The script's own guard only covers the window between
+# node's cwd check and this line. The real gap is in the spawn's `error`
+# handler, which today only console.errors where no phone can see it; recorded
+# as a finding rather than fixed here, because sessions.js is not in this
+# change's reviewed scope and adding it would invalidate the review.
+try {
+    Set-Location -LiteralPath $ProjectPath
+} catch {
+    Write-LaunchRefusal "could not open the project folder '$ProjectPath': $_"
+}
+
+# RESOLVED BEFORE THE VENV TOUCHES $env:PATH. This is the second half of the
+# fix that removed the Activate.ps1 dot-source, and without it that fix was
+# worth very little.
+#
+# AFTER -PreLaunch, DELIBERATELY. An earlier version resolved before it, which
+# refused any pre_launch_command that PUTS claude.cmd on PATH - a version
+# manager or toolchain shim - for no security gain: -PreLaunch is arbitrary
+# owner-configured code running with full user permissions already (see the
+# PSAvoidUsingInvokeExpression justification at the top). Only the venv
+# auto-detect, which reads a path out of the PROJECT, needs resolution to come
+# first.
+#
+# Activating a venv PREPENDS <project>\venv\Scripts to PATH. Launching by the
+# bare name `claude.cmd` then resolves through that PATH - so a cloned repo
+# carrying venv\Scripts\python.exe (to be detected) AND venv\Scripts\claude.cmd
+# would have its own claude.cmd run instead of the real one, at full user
+# permissions, the moment its tile is tapped. Exactly the attack that was just
+# closed, one step further down the script.
+#
+# Resolving to an absolute Source here removes the name lookup from the launch
+# entirely. MEASURED 2026-09-13, because an earlier version of this comment
+# asserted an ordering the code does not have: `Get-Command <name>
+# -CommandType Application` does NOT search the current directory, so running
+# after Set-Location is harmless.
+#
+# WHAT THIS DOES NOT FIX, said plainly: the launched process still INHERITS the
+# modified PATH, so a venv carrying its own node.exe can still influence what
+# claude.cmd's own shim runs. That is what activating a venv MEANS - the same
+# exposure as typing `activate` at the desk - and narrowing it further would
+# mean not activating venvs at all. What is fixed is the part this launcher
+# controls: which executable IT starts.
+# A FUNCTION WITH TWO CALLERS, because the two environment branches need it at
+# OPPOSITE moments and a single call site had to be wrong for one of them:
+#   -PreLaunch      -> AFTER, so a pre_launch_command that PUTS claude.cmd on
+#                      PATH (a version manager, a toolchain shim) still works.
+#                      Resolving before it refused those for no security gain.
+#   auto-detect     -> BEFORE, because the venv prepends a path read out of the
+#                      PROJECT and that is the hijack being closed.
+function Resolve-ClaudeExe {
+    $exe = (Get-Command claude.cmd -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1).Source
+    if (-not $exe) {
+        Write-LaunchRefusal "claude.cmd is not on PATH, so there is no Claude Code to start."
+    }
+    return $exe
+}
+
+# CLEARED FOR BOTH BRANCHES, and it used to be cleared for only one.
+# Start-Process inherits this process's environment - the same argument the
+# CLAUDE_CONFIG_DIR block above makes - so an agent started by hand from an
+# activated shell handed its own VIRTUAL_ENV to every project that has none.
+# Hoisted above the branch so a -PreLaunch project is covered too; the venv
+# branch sets it again when it actually activates one.
+#
+# The PATH half of that inheritance is NOT undone: unpicking one venv's entries
+# out of an inherited PATH means parsing it, and getting that wrong breaks every
+# launch rather than one. Stated rather than quietly skipped.
+Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
 
 # THE ENVIRONMENT. Two mutually exclusive paths; the default is the one that
 # has always run. -PreLaunch REPLACES the auto-detect rather than preceding it,
@@ -103,25 +178,77 @@ if ($PreLaunch) {
         # the inner catch ever grows a body.
         Write-LaunchRefusal "pre_launch_command failed: $preLaunchFailure"
     }
+
+    # AFTER the owner's command, on purpose - see Resolve-ClaudeExe.
+    $claudeExe = Resolve-ClaudeExe
 } else {
     # R12. LOOK IN THE PROJECT. Nothing is configured and nothing is
     # remembered, so a folder made a minute ago behaves like one used for a
     # year. Two things are looked for, in this order, and the FIRST hit wins.
+    #
+    # BEFORE any of it - see Resolve-ClaudeExe. The venv is about to prepend a
+    # directory read out of the project, and resolving by name after that is the
+    # hijack this closes.
+    $claudeExe = Resolve-ClaudeExe
     $activated = $false
 
+    # THE PROJECT'S OWN SCRIPT IS NEVER EXECUTED, AND THAT IS THE WHOLE POINT
+    # OF THIS BLOCK. It used to `. $activate` - dot-source
+    # `<project>\venv\Scripts\Activate.ps1` - which is ARBITRARY CODE FROM THE
+    # PROJECT FOLDER, run at full user permissions the moment a tile is tapped.
+    # Clone someone's repository, tap it on your phone, run their code. That
+    # predated R12 by a long way and was found by the security review of
+    # c27ecc4 on 2026-09-13.
+    #
+    # It also contradicted this project's own rule, already written into PRD
+    # R12.3: the per-project command is deliberately NOT a file inside the
+    # project, "because a cloned repository must never be able to run a command
+    # when its tile is tapped". The venv path was violating that rule the whole
+    # time.
+    #
+    # NOTHING IS LOST BY NOT RUNNING IT. Activating a venv is three environment
+    # changes, and Activate.ps1's remaining work - setting a shell prompt and
+    # defining `deactivate` - is meaningless to a launcher that starts one
+    # process and exits. Start-Process inherits this environment, so Claude Code
+    # and everything under it see the venv exactly as before.
+    #
+    # DETECTED BY THE INTERPRETER, NOT BY THE SCRIPT. `python.exe` is what makes
+    # a venv usable; Activate.ps1 is now never read, never executed, and its
+    # absence or corruption cannot affect a launch at all.
     foreach ($dir in @('venv', '.venv')) {
-        $activate = Join-Path $ProjectPath "$dir\Scripts\Activate.ps1"
-        if (Test-Path -LiteralPath $activate) {
-            # WRAPPED, AND IT WAS NOT BEFORE. $ErrorActionPreference is 'Stop',
-            # so a broken Activate.ps1 - a stale pyvenv.cfg, a moved
-            # interpreter, a venv copied from another machine - raised a
-            # terminating error here and killed the script with no .err at all.
-            # The registry then showed `starting` for the full grace window and
-            # `failed` with nothing to show, which is the exact outcome R12.1
-            # exists to abolish, on the MOST COMMON branch.
-            try { . $activate } catch {
-                Write-LaunchRefusal "could not activate the $dir environment in this project: $_"
+        $venvRoot = Join-Path $ProjectPath $dir
+        $venvScripts = Join-Path $venvRoot 'Scripts'
+        if (Test-Path -LiteralPath (Join-Path $venvScripts 'python.exe')) {
+            # A `;` CANNOT BE PUT ON PATH AT ALL. It is the separator, it is a
+            # legal filename character, and a folder name can come from a clone.
+            # There is no escaping that PowerShell's resolver honours, so the
+            # only honest options are refuse or silently half-activate - and
+            # silently launching outside the venv is the failure this whole
+            # block exists to remove.
+            if ($venvScripts -like '*;*') {
+                Write-LaunchRefusal "this project's path contains a ';', which cannot be placed on PATH, so its virtual environment cannot be activated. Rename the folder."
             }
+            $env:VIRTUAL_ENV = $venvRoot
+            # NOT QUOTED, AND THE QUOTED VERSION WAS TRIED AND MEASURED WRONG.
+            # A review suggested quoting this segment so a `;` in the project
+            # path could not split it. Quoting it does not work: PowerShell's
+            # command resolution does NOT honour quotes inside a PATH entry, so
+            # `python` kept resolving to the SYSTEM interpreter while
+            # VIRTUAL_ENV claimed the venv was active - every venv project
+            # launched outside its venv, silently. Measured against this repo's
+            # own venv on 2026-09-13:
+            #   quoted   -> C:\...\Python311\python.exe        (WRONG)
+            #   unquoted -> ...\claude-remote\venv\Scripts\python.exe  (right)
+            # The test suite could not see it: a synthetic venv only proves
+            # `python.exe` EXISTS, never that it RESOLVES.
+            #
+            # The `;` problem is real, so it is REFUSED above rather than
+            # quoted around.
+            $env:PATH = "$venvScripts;$env:PATH"
+            # venv's own activate clears this, and so must we: a PYTHONHOME
+            # inherited from the agent's environment overrides the venv and
+            # sends imports to the wrong interpreter's stdlib.
+            Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
             $activated = $true
             break
         }
@@ -303,7 +430,7 @@ if (-not $NoOpeningReport -and (Test-Path -LiteralPath (Join-Path $ProjectPath '
 # It fails SILENTLY: no error is raised even under ErrorActionPreference
 # 'Stop', so with stdio:'ignore' the agent reports 202 "starting" and
 # nothing ever starts. Verified on this machine 2026-08-25.
-$proc = Start-Process -FilePath 'claude.cmd' -WorkingDirectory $ProjectPath -PassThru -ArgumentList (@(
+$proc = Start-Process -FilePath $claudeExe -WorkingDirectory $ProjectPath -PassThru -ArgumentList (@(
     # NO --channels HERE, and that is a deliberate reversal. Measured
     # 2026-09-05: with `--channels=plugin:whatsapp-channel@whatsapp-claude-plugin`
     # a PWA-launched session starts fine - correct window title, TUI drawn - and

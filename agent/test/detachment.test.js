@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 
 // T28's whole claim is that a session launched with
 // { detached: true, stdio: 'ignore', windowsHide: true } outlives the
@@ -28,65 +28,41 @@ import { test } from 'node:test';
 // started the session anyway - which is the state Artifact sequence 7 deleted
 // after five refuted attempts at drawing it.
 test('R12.1 - a failed pre-launch command STOPS the launcher before Start-Process', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-r121-'));
-  const pidFile = path.join(dir, 'session.pid');
-  const ps1 = fileURLToPath(new URL('../launch-session.ps1', import.meta.url));
+  const dir = project();
 
-  // PATH IS NEUTERED DELIBERATELY. This suite is forbidden from ever starting
-  // a real `claude` session (see the note at the top of this file), and the
-  // whole claim under test is that the launcher stops BEFORE Start-Process -
-  // so if the guard is ever removed, the script would run on and try to start
-  // one. With claude.cmd unreachable it cannot, whatever the script does, and
-  // the regression surfaces as the last assertion rather than as a stray
-  // session on somebody's machine.
-  // ABSOLUTE PATH to the shell, because PATH below is neutered and
-  // powershell.exe lives in a SUBDIRECTORY of System32 - resolving it by name
-  // fails with status null, which is a spawn error and not a script result.
-  const shell = path.join(
-    process.env.SystemRoot || 'C:\\Windows',
-    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
-  );
-  const r = spawnSync(shell, [
-    '-NoProfile', '-NonInteractive', '-File', ps1,
-    '-ProjectPath', dir,
-    '-SessionName', 'r121',
-    '-PidFile', pidFile,
-    // No quotes in the value, so nothing depends on how Node quotes argv on
-    // Windows - and the message this produces is the real-world shape:
-    // "The term '...' is not recognized", capitalised, with no trailing stop.
-    '-PreLaunch', 'definitely-not-a-real-command-xyz',
-  ], { encoding: 'utf8', env: { ...process.env, PATH: 'C:\\Windows\\System32' } });
+  const r = runLauncher(dir, ['-PreLaunch', 'definitely-not-a-real-command-xyz']);
 
   assert.equal(r.status, 1, 'the launcher must exit non-zero, not carry on');
+  assert.equal(r.errExists, true, 'the reason is the only thing the phone will ever get');
+  assert.match(r.reason, /definitely-not-a-real-command-xyz/, 'the .err must name what failed');
+  assert.match(r.reason, /not recognized/i);
+  assert.equal(r.pidFileExists, false, 'no pid file - nothing was started');
+  assert.equal(r.claudeStarted, false, 'the R12.1 guard is gone - it reached Start-Process');
 
-  const errFile = `${pidFile}.err`;
-  assert.equal(fs.existsSync(errFile), true, 'the reason is the only thing the phone will ever get');
-  const reason = fs.readFileSync(errFile, 'utf8');
-  assert.match(reason, /definitely-not-a-real-command-xyz/, 'the .err must name what failed');
-  assert.match(reason, /not recognized/i);
-
-  assert.equal(fs.existsSync(pidFile), false, 'no pid file - nothing was started');
-
-  // THE DISCRIMINATOR. Remove the `exit 1` and the script runs on to
-  // Start-Process, which then fails to resolve claude.cmd and says so on
-  // stderr. Matching `claude.cmd` rather than `claude` on purpose: this
-  // script's own path contains "claude-remote" and turns up in PowerShell
-  // error output.
-  const out = `${r.stdout || ''}${r.stderr || ''}`;
-  assert.doesNotMatch(out, /claude\.cmd/i, 'the launcher reached Start-Process - the R12.1 guard is gone');
-
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 // Runs the REAL launcher and reports what it did. Every test below drives
 // this rather than reading the script's source.
 //
-// PATH IS NEUTERED, and USERPROFILE/LOCALAPPDATA are redirected at a scratch
-// directory. Two separate reasons:
-//   - PATH: this suite is forbidden from ever starting a real `claude`
-//     session, and several of these tests assert the launcher stops BEFORE it
-//     would. If a guard is ever removed the script must still be unable to
-//     start one.
+// A STAND-IN CLAUDE, and it replaced a weaker idea. This harness used to neuter
+// PATH so `claude.cmd` could not resolve at all, and tests proved "the launcher
+// stopped early" by asserting the string `claude.cmd` was absent from stderr.
+// That broke the moment the launcher started RESOLVING claude.cmd up front
+// (which it must, so a venv on PATH cannot hijack the name) - and it was always
+// an indirect proof.
+//
+// Instead: a harmless claude.cmd is planted in `<dir>/bin`, which is the only
+// thing on PATH besides System32. It writes a marker file and exits. So
+// `claudeStarted` is a DIRECT observation of whether the launcher got all the
+// way to Start-Process, and no real Claude session can be started whatever the
+// script does - which is the rule this suite must never break.
+//
+// PATH CONTAINS ONLY THAT BIN AND System32, and USERPROFILE/LOCALAPPDATA are
+// redirected at a scratch directory. Two separate reasons:
+//   - PATH: the real claude.cmd is unreachable, so no test can start a real
+//     session however badly the launcher misbehaves. The stand-in above is the
+//     only thing it can find.
 //   - USERPROFILE/LOCALAPPDATA: the conda search reads them, so redirecting
 //     makes "conda is not installed" true for the test regardless of what is
 //     on the machine running it. `C:\\ProgramData` is searched too and cannot
@@ -94,16 +70,44 @@ test('R12.1 - a failed pre-launch command STOPS the launcher before Start-Proces
 //     with a ProgramData conda would take the activate path instead. The
 //     assertions below are written to hold either way: what they claim is
 //     that the launcher REFUSES, not which sentence it refuses with.
-function runLauncher(dir, args) {
+// `projectPath` defaults to `dir`, and is separable because the pid file does
+// NOT live in the project in production - it lives in the agent's own
+// session-pids directory, which always exists. A test for a MISSING project
+// folder has to keep the two apart or it tests the wrong thing.
+function runLauncher(dir, args = [], envOverride = {}, projectPath = dir) {
   const shell = path.join(
     process.env.SystemRoot || 'C:\\Windows',
     'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
   );
   const ps1 = fileURLToPath(new URL('../launch-session.ps1', import.meta.url));
   const pidFile = path.join(dir, 'session.pid');
+
+  // OUTSIDE the project under test, deliberately. A `bin` folder planted in
+  // the project could influence what the launcher sees, and - measured - a
+  // project path containing a `;` split the harness's own directory off PATH,
+  // so the test failed for its fixture rather than for the launcher.
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-bin-'));
+  binDirs.push(bin);
+  const startedMarker = path.join(bin, 'CLAUDE-STARTED.txt');
+  // IT RECORDS THE ENVIRONMENT IT WAS GIVEN, which is the only way a test can
+  // see whether activation actually reached the launched process. Asserting
+  // that a synthetic venv's python.exe EXISTS proves nothing about whether
+  // `python` would RESOLVE to it - and that gap hid a real bug: quoting the
+  // PATH segment left every venv project launching outside its venv, with the
+  // whole suite green.
+  fs.writeFileSync(
+    path.join(bin, 'claude.cmd'),
+    `@echo VIRTUAL_ENV=%VIRTUAL_ENV% > "${startedMarker}"\r\n`
+    + `@echo PATH=%PATH% >> "${startedMarker}"\r\n`
+    // A TERMINATOR, because the file EXISTS as soon as the first line lands and
+    // reading it then loses the rest. Waiting on mere existence was a race in
+    // this harness, and it surfaced as "the stand-in did not record PATH".
+    + `@echo DONE >> "${startedMarker}"\r\n`,
+  );
+
   const r = spawnSync(shell, [
     '-NoProfile', '-NonInteractive', '-File', ps1,
-    '-ProjectPath', dir,
+    '-ProjectPath', projectPath,
     '-SessionName', 'probe',
     '-PidFile', pidFile,
     ...args,
@@ -111,9 +115,10 @@ function runLauncher(dir, args) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: 'C:\\Windows\\System32',
+      PATH: `${bin};C:\\Windows\\System32`,
       USERPROFILE: path.join(dir, 'no-home'),
       LOCALAPPDATA: path.join(dir, 'no-appdata'),
+      ...envOverride,
     },
   });
   const errFile = `${pidFile}.err`;
@@ -121,6 +126,46 @@ function runLauncher(dir, args) {
     status: r.status,
     out: `${r.stdout || ''}${r.stderr || ''}`,
     pidFileExists: fs.existsSync(pidFile),
+    // Start-Process is detached, so the stand-in may still be starting when
+    // spawnSync returns. Waited for, briefly, rather than raced: a false
+    // `claudeStarted: false` would read as "the launcher refused", which is the
+    // opposite of the truth and the assertion most of these tests make.
+    claudeStarted: (() => {
+      // Atomics.wait, NOT a spin. The first version of this was a bare
+      // `while (Date.now() < until)` loop, which never yielded the CPU - the
+      // marker only ever appeared once the process actually slept, so every
+      // test asserting a launch SUCCEEDED read as a refusal. Measured: the
+      // same probe with a real 2.5s sleep saw the marker, the spin never did.
+      // A REFUSAL SHORTENS THE WAIT. IT DOES NOT ANSWER THE QUESTION.
+      //
+      // This used to `return false` outright when a .err existed, which turned
+      // every `claudeStarted === false` assertion into a restatement of
+      // `errExists === true` - a tautology. The mutation it could not see is
+      // exactly the bug this cycle is about: make Write-LaunchRefusal write the
+      // .err and then FALL THROUGH to Start-Process. The .err exists, so the
+      // oracle said "did not start", while a real session had started.
+      //
+      // So the marker is STILL observed after a refusal - just briefly, because
+      // nothing should be coming. The long wait is only for a launch that was
+      // not refused.
+      //
+      // (The flat 5s that preceded all this went red once under load, reporting
+      // a successful launch as a refusal. A flaky launcher test is the T110
+      // shape and is not tolerated.)
+      const refused = fs.existsSync(errFile);
+      const sleeper = new Int32Array(new SharedArrayBuffer(4));
+      const until = Date.now() + (refused ? 1500 : 30000);
+      while (Date.now() < until) {
+        // FULLY written, not merely present - see the terminator above.
+        try {
+          if (fs.readFileSync(startedMarker, 'utf8').includes('DONE')) return true;
+        } catch { /* not written yet */ }
+        Atomics.wait(sleeper, 0, 0, 50);
+      }
+      return false;
+    })(),
+    // What the launched process actually received. null when nothing started.
+    launchedEnv: fs.existsSync(startedMarker) ? fs.readFileSync(startedMarker, 'utf8') : null,
     errExists: fs.existsSync(errFile),
     // BOM STRIPPED. PowerShell 5.1's `Set-Content -Encoding utf8` writes a
     // byte-order mark, so the reason starts with U+FEFF on disk and any
@@ -138,6 +183,30 @@ function project() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cr-env-'));
 }
 
+// EVERY runLauncher call made one of these and nothing removed it, so a suite
+// run left ~20 temp directories behind, each containing an executable called
+// claude.cmd. Cleared once at the end rather than per call, because the
+// stand-in may still be exiting when a test finishes.
+const binDirs = [];
+after(() => {
+  for (const b of binDirs) {
+    try {
+      fs.rmSync(b, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    } catch { /* the OS will get it */ }
+  }
+});
+
+// The stand-in claude.cmd is DETACHED, so cmd.exe can still hold the directory
+// as its working dir when the test finishes - rmSync then throws EPERM and a
+// passing test reports as failed. Retried, and a leftover temp directory is
+// swallowed rather than failing the run: it is in the OS temp folder and it is
+// not what any of these tests are about.
+function cleanup(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  } catch { /* the OS will get it */ }
+}
+
 test('R12 - environment.yml with no `name:` refuses the launch and says which', () => {
   const dir = project();
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'dependencies:\n  - python=3.12\n');
@@ -146,9 +215,9 @@ test('R12 - environment.yml with no `name:` refuses the launch and says which', 
   assert.equal(r.status, 1);
   assert.equal(r.pidFileExists, false, 'nothing may be started');
   assert.match(r.reason, /name:/, 'the reason must say what is missing from the file');
-  assert.doesNotMatch(r.out, /claude\.cmd/i, 'it must not have reached Start-Process');
+  assert.equal(r.claudeStarted, false, 'it must not have reached Start-Process');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12 - a conda project on a machine with no conda refuses, and says THAT', () => {
@@ -181,50 +250,34 @@ test('R12 - a conda project on a machine with no conda refuses, and says THAT', 
   // not installed" from "your environment is broken", which are different
   // jobs to do in the morning.
   assert.match(r.reason, /no conda installation was found/i);
-  assert.doesNotMatch(r.out, /claude\.cmd/i);
+  assert.equal(r.claudeStarted, false, 'it must not have reached Start-Process');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
-test('R12 - an unset USERPROFILE refuses cleanly instead of dying silently', () => {
-  // F13-C03. The conda roots were one @(...) literal, which PowerShell
+test('R12 - an EMPTY USERPROFILE refuses cleanly instead of dying silently', () => {
+  // F14-D1-C03. The conda roots were one @(...) literal, which PowerShell
   // evaluates ENTIRELY before the loop body runs - so a single unset
   // USERPROFILE made Join-Path raise a terminating
-  // ParameterBindingValidationException and killed the launcher with no .err
-  // at all. The agent runs as a scheduled task, where neither USERPROFILE nor
-  // LOCALAPPDATA is guaranteed to be present.
+  // ParameterBindingValidationException and killed the launcher with no .err.
+  // The agent runs as a scheduled task, where neither USERPROFILE nor
+  // LOCALAPPDATA is guaranteed.
+  //
+  // EMPTIED, NOT DELETED. `delete env.USERPROFILE` does NOT reach PowerShell -
+  // Windows repopulates it, and an earlier version of this test passed for
+  // that reason alone while proving nothing. An empty string does arrive
+  // empty, and `Join-Path '' x` throws exactly as a null one does.
   const dir = project();
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: needs-conda\n');
 
-  const shell = path.join(
-    process.env.SystemRoot || 'C:\\Windows',
-    'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe',
-  );
-  const ps1 = fileURLToPath(new URL('../launch-session.ps1', import.meta.url));
-  const pidFile = path.join(dir, 'session.pid');
-  // EMPTIED, NOT DELETED, and the difference is the whole test. `delete
-  // env.USERPROFILE` does NOT reach PowerShell - Windows repopulates it, and
-  // this test passed for that reason alone while proving nothing (measured
-  // 2026-09-12: the child reported `USERPROFILE STILL SET: C:\\Users\\...`).
-  // An empty string does arrive empty, and `Join-Path '' x` throws exactly as
-  // a null one does, which is the terminating error the fix exists to avoid.
-  const env = {
-    ...process.env,
-    PATH: 'C:\\Windows\\System32',
-    LOCALAPPDATA: path.join(dir, 'no-appdata'),
-    USERPROFILE: '',
-  };
-
-  const r = spawnSync(shell, [
-    '-NoProfile', '-NonInteractive', '-File', ps1,
-    '-ProjectPath', dir, '-SessionName', 'probe', '-PidFile', pidFile,
-  ], { encoding: 'utf8', env });
+  const r = runLauncher(dir, [], { USERPROFILE: '' });
 
   assert.equal(r.status, 1);
-  assert.equal(fs.existsSync(`${pidFile}.err`), true, 'it must refuse WITH a reason, not just die');
-  assert.match(fs.readFileSync(`${pidFile}.err`, 'utf8'), /needs-conda/);
+  assert.equal(r.errExists, true, 'it must refuse WITH a reason, not just die');
+  assert.match(r.reason, /needs-conda/);
+  assert.equal(r.claudeStarted, false);
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12 - the name is parsed as YAML means it, not as the old regex did', () => {
@@ -243,7 +296,7 @@ test('R12 - the name is parsed as YAML means it, not as the old regex did', () =
   assert.match(r.reason, /^my env is a conda environment/,
     'quotes stripped, trailing comment dropped, and NOT truncated at the space');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12 - an UPPERCASE NAME: is not a YAML name key, and is not treated as one', () => {
@@ -255,7 +308,7 @@ test('R12 - an UPPERCASE NAME: is not a YAML name key, and is not treated as one
   assert.match(r.reason, /no top-level 'name:'/, 'YAML keys are case-sensitive; -match was not');
   assert.doesNotMatch(r.reason, /shouty/);
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12 - an UNREADABLE environment.yml says so, instead of blaming the file for having no name', () => {
@@ -271,7 +324,7 @@ test('R12 - an UNREADABLE environment.yml says so, instead of blaming the file f
   assert.match(r.reason, /could not read this project's environment\.yml/);
   assert.doesNotMatch(r.reason, /no top-level/, 'that is a different fault with a different fix');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 // STANDING CONDA IN, so the activation guard is reachable at all.
@@ -305,9 +358,9 @@ test('R12.1 - conda that does NOT enter the environment refuses the launch', () 
   assert.equal(r.errExists, true);
   assert.match(r.reason, /could not enter the conda environment 'never-created'/);
   assert.equal(r.pidFileExists, false);
-  assert.doesNotMatch(r.out, /claude\.cmd/i, 'it must not have reached Start-Process');
+  assert.equal(r.claudeStarted, false, 'it must not have reached Start-Process');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12 - conda that DOES enter the environment lets the launch proceed', () => {
@@ -323,9 +376,9 @@ test('R12 - conda that DOES enter the environment lets the launch proceed', () =
   // its absence proves the environment step completed and the script ran on -
   // then failed at Start-Process, because PATH makes claude.cmd unreachable.
   assert.equal(r.errExists, false, 'a working activation must not be refused');
-  assert.equal(r.pidFileExists, false, 'and claude.cmd is deliberately unreachable, so nothing started');
+  assert.equal(r.claudeStarted, true, 'and the launch must actually go through');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12.1 - a conda hook that defines no `conda` refuses WITH a reason', () => {
@@ -346,7 +399,7 @@ test('R12.1 - a conda hook that defines no `conda` refuses WITH a reason', () =>
   assert.match(r.reason, /could not run conda activate for 'half-installed'/);
   assert.equal(r.pidFileExists, false);
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 test('R12 - a `name:` with an empty or comment-only value is treated as absent', () => {
@@ -363,29 +416,221 @@ test('R12 - a `name:` with an empty or comment-only value is treated as absent',
     assert.match(r.reason, /no top-level 'name:'/, `should read as absent: ${JSON.stringify(body)}`);
     assert.doesNotMatch(r.reason, /no conda installation/, 'that accuses the machine of the wrong fault');
 
-    fs.rmSync(dir, { recursive: true, force: true });
+    cleanup(dir);
   }
 });
 
-test('R12.1 - a BROKEN venv activate refuses the launch with a reason', () => {
-  // F13-C02. `. $activate` sat outside any try/catch, so with
-  // $ErrorActionPreference = 'Stop' a broken Activate.ps1 - a stale
-  // pyvenv.cfg, a moved interpreter, a venv copied from another machine -
-  // killed the script with NO .err at all. The registry then showed
-  // `starting` for the full grace window and `failed` with nothing to show,
-  // on the branch that runs for every project that is not configured.
+test('R12.1 - the SCRIPT refuses a vanished project folder (see the limit below)', () => {
+  // READ THE LIMIT BEFORE TRUSTING THIS TEST. It pins the script's own guard,
+  // and the script's guard is ALMOST UNREACHABLE in production: sessions.js
+  // spawns it with `cwd: r.path`, the same path, so a missing folder makes NODE
+  // fail with ENOENT and PowerShell never starts. The combination this test
+  // uses - a pid file in a live directory, a ProjectPath in a dead one -
+  // cannot arise from a tap.
+  //
+  // It is kept because the guard is still correct and costs nothing, and
+  // because the day `cwd` is dropped it becomes the real guard. The REAL gap is
+  // in the spawn's `error` handler, which console.errors where no phone can see
+  // it; filed as F15-D2-C01 rather than fixed here, because sessions.js is not
+  // in this change's reviewed scope.
   const dir = project();
-  fs.mkdirSync(path.join(dir, 'venv', 'Scripts'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'venv', 'Scripts', 'Activate.ps1'), "throw 'this venv is broken'\n");
+  const gone = path.join(dir, 'deleted-between-listing-and-tap');
+
+  const r = runLauncher(dir, [], {}, gone);
+  assert.equal(r.status, 1);
+  assert.equal(r.errExists, true, 'silence here is the failure mode');
+  assert.match(r.reason, /could not open the project folder/);
+  assert.equal(r.claudeStarted, false);
+
+  cleanup(dir);
+});
+
+test('R12 - a pre_launch_command may put claude.cmd on PATH', () => {
+  // F15-D2-C04. Resolving claude.cmd BEFORE -PreLaunch refused any
+  // pre_launch_command that provides it - a version manager or toolchain shim -
+  // for no security gain, since -PreLaunch is arbitrary owner-configured code
+  // with full user permissions already. Resolution now happens after it.
+  const dir = project();
+  const late = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-late-'));
+  const marker = path.join(late, 'LATE-CLAUDE.txt');
+  fs.writeFileSync(path.join(late, 'claude.cmd'), `@echo DONE > "${marker}"\r\n`);
+
+  // PATH has NO claude.cmd until the pre-launch command adds one.
+  const r = runLauncher(dir, ['-PreLaunch', `$env:PATH = '${late};' + $env:PATH`], { PATH: 'C:\\Windows\\System32' });
+
+  assert.equal(r.errExists, false, `refused a pre_launch_command that supplies claude.cmd: ${r.reason}`);
+  assert.equal(fs.existsSync(marker), true, 'the claude.cmd the pre-launch command put on PATH must be the one that runs');
+
+  cleanup(dir);
+  cleanup(late);
+});
+
+test('R12 - an inherited VIRTUAL_ENV is cleared on the -PreLaunch branch too', () => {
+  // F15-D2-C05. The clear used to live inside the auto-detect branch only, so a
+  // project with a non-Python pre_launch_command (`nvm use 20`, a .env loader)
+  // still inherited somebody else's VIRTUAL_ENV from an agent started by hand
+  // in an activated shell.
+  const dir = project();
+
+  const r = runLauncher(dir, ['-PreLaunch', '$null = 1'], { VIRTUAL_ENV: 'F:\\somebody\\elses\\venv' });
+  assert.equal(r.claudeStarted, true, `should have launched: ${r.reason}`);
+
+  const line = r.launchedEnv.split(/\r?\n/).find((l) => l.startsWith('VIRTUAL_ENV='));
+  assert.equal(line.trim(), 'VIRTUAL_ENV=', `the inherited venv leaked through: ${line}`);
+
+  cleanup(dir);
+});
+
+test('R12 - an INHERITED VIRTUAL_ENV does not follow a project that has no venv', () => {
+  // The mutation that deletes this guard survived until this test existed.
+  // Start-Process inherits this process's environment - the same argument the
+  // CLAUDE_CONFIG_DIR block makes two sections up - so an agent started by
+  // hand from an activated shell would hand its own venv to every project that
+  // has none, and nothing about that is visible from a phone.
+  const dir = project();   // deliberately NO venv and no environment.yml
+
+  const r = runLauncher(dir, [], { VIRTUAL_ENV: 'F:\\somebody\\elses\\venv' });
+  assert.equal(r.claudeStarted, true, 'a project with no venv must still launch');
+
+  const line = r.launchedEnv.split(/\r?\n/).find((l) => l.startsWith('VIRTUAL_ENV='));
+  assert.equal(line.trim(), 'VIRTUAL_ENV=', `the inherited venv leaked through: ${line}`);
+
+  cleanup(dir);
+});
+
+test('R12 - the venv REACHES the launched process, not just the launcher', () => {
+  // THIS IS THE TEST THAT WAS MISSING, and its absence hid a real bug for a
+  // whole review round. Everything else here proves a venv is DETECTED - that
+  // `python.exe` exists and the right branch ran. None of it proved the
+  // activation arrived anywhere.
+  //
+  // It did not. A review asked for the PATH segment to be quoted so a `;` in
+  // the project path could not split it; PowerShell's command resolution does
+  // not honour quotes inside a PATH entry, so `python` kept resolving to the
+  // SYSTEM interpreter while VIRTUAL_ENV claimed otherwise. Every venv project
+  // would have launched outside its venv, silently, with this file green.
+  //
+  // So: read what the launched process ACTUALLY received.
+  const dir = project();
+  const scripts = path.join(dir, 'venv', 'Scripts');
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.writeFileSync(path.join(scripts, 'python.exe'), '');
 
   const r = runLauncher(dir, []);
+  assert.equal(r.claudeStarted, true, 'nothing launched, so there is nothing to inspect');
+
+  const env = r.launchedEnv;
+  assert.match(env, new RegExp(`VIRTUAL_ENV=${path.join(dir, 'venv').replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}`),
+    'the launched process must be told which venv it is in');
+
+  // FIRST on PATH, not merely present. Anything already on PATH that shadows
+  // the venv's python would make the activation a lie.
+  const pathLine = env.split(/\r?\n/).find((l) => l.startsWith('PATH='));
+  assert.ok(pathLine, 'the stand-in did not record PATH');
+  const firstEntry = pathLine.slice('PATH='.length).split(';')[0];
+  assert.equal(firstEntry.toLowerCase(), scripts.toLowerCase(),
+    `the venv must be FIRST on the launched PATH, got: ${firstEntry}`);
+
+  // AND NO QUOTES. The quoted form is what broke it, and it is invisible unless
+  // asserted - both forms look identical in any test that only checks presence.
+  assert.doesNotMatch(pathLine, /"/, 'a quoted PATH entry is not honoured by PowerShell resolution');
+
+  cleanup(dir);
+});
+
+test("R12 - a `;` in the project path is REFUSED, not silently half-activated", () => {
+  // The `;` is the PATH separator and a legal filename character, and a folder
+  // name can come from a clone. There is no escaping PowerShell's resolver
+  // honours, so the choice is refuse or launch outside the venv while claiming
+  // to be inside it. Refusing is the only honest one.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-semi-'));
+  const weird = path.join(dir, 'a;b');
+  const scripts = path.join(weird, 'venv', 'Scripts');
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.writeFileSync(path.join(scripts, 'python.exe'), '');
+
+  const r = runLauncher(weird, []);
   assert.equal(r.status, 1);
   assert.equal(r.errExists, true, 'a refusal with no reason is the failure R12.1 exists to abolish');
-  assert.match(r.reason, /this venv is broken/, 'the underlying error has to reach the phone');
-  assert.equal(r.pidFileExists, false);
-  assert.doesNotMatch(r.out, /claude\.cmd/i);
+  assert.match(r.reason, /';'/, 'the reason has to name what is wrong with the folder');
+  assert.equal(r.claudeStarted, false, 'nothing may start in a half-activated environment');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
+});
+
+test('SECURITY - a claude.cmd planted in the venv does NOT win the launch', () => {
+  // Found by the cycle-15 review, and it is the SAME attack as the
+  // Activate.ps1 one, one step further down the script. Removing the
+  // dot-source was not enough on its own: activating a venv PREPENDS
+  // <project>\\venv\\Scripts to PATH, and the launcher used to start Claude by
+  // the bare name `claude.cmd`. So a cloned repo carrying python.exe (to be
+  // detected) AND claude.cmd (to be run) got its own binary launched instead,
+  // at full user permissions, on a tap.
+  //
+  // The fix resolves claude.cmd to an absolute Source BEFORE anything touches
+  // PATH. This test plants the attacker's copy exactly where the venv branch
+  // will put it on the front of PATH, and proves the real one still runs.
+  const dir = project();
+  const scripts = path.join(dir, 'venv', 'Scripts');
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.writeFileSync(path.join(scripts, 'python.exe'), '');
+
+  const hijacked = path.join(dir, 'HIJACKED.txt');
+  fs.writeFileSync(path.join(scripts, 'claude.cmd'), `@echo pwned > "${hijacked}"\r\n`);
+
+  const r = runLauncher(dir, []);
+
+  assert.equal(fs.existsSync(hijacked), false,
+    'the venv\'s claude.cmd RAN - a cloned repo can hijack the launch through PATH');
+  // POSITIVE CONTROL: the REAL stand-in must have run instead. Without this the
+  // assertion above would pass on a launcher that simply started nothing.
+  assert.equal(r.claudeStarted, true, 'the genuine claude.cmd must still be what starts');
+
+  cleanup(dir);
+});
+
+test("SECURITY - a project's own Activate.ps1 is NEVER executed", () => {
+  // Found by the security review of c27ecc4, 2026-09-13. The launcher used to
+  // dot-source `<project>\venv\Scripts\Activate.ps1` - arbitrary code from the
+  // project folder, at full user permissions, the moment a tile is tapped.
+  // Clone someone's repository, tap it on your phone, run their code.
+  //
+  // It also broke this project's own rule, already in PRD R12.3: a per-project
+  // command is deliberately NOT a file inside the project, "because a cloned
+  // repository must never be able to run a command when its tile is tapped".
+  // The venv path had been violating that from the beginning.
+  //
+  // THE VENV IS STILL DETECTED HERE - python.exe is present - so this proves
+  // the launcher took the venv branch and STILL did not run the script, which
+  // is a stronger claim than "it ignored the folder".
+  const dir = project();
+  const scripts = path.join(dir, 'venv', 'Scripts');
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.writeFileSync(path.join(scripts, 'python.exe'), '');
+  const marker = path.join(dir, 'PWNED.txt');
+  // NO PATH MANGLING. The path goes into a PowerShell SINGLE-quoted string,
+  // where a backslash is already literal and only `'` would need doubling.
+  // An earlier version doubled the separators and only worked because Win32
+  // collapses them - which nothing asserted, so any mistake in the fixture
+  // would have read as "the fix works".
+  fs.writeFileSync(
+    path.join(scripts, 'Activate.ps1'),
+    `Set-Content -LiteralPath '${marker}' -Value 'executed'\n`,
+  );
+
+  const r = runLauncher(dir, []);
+
+  assert.equal(fs.existsSync(marker), false,
+    'the project\'s Activate.ps1 RAN - a cloned repo can execute code on tap');
+
+  // THE POSITIVE CONTROL, and the negative assertion above means little without
+  // it. The launcher must have gone ALL THE WAY THROUGH - past the venv branch
+  // it took, to actually starting Claude. Otherwise any early refusal, or a
+  // fixture that simply failed to write, would read as success.
+  assert.equal(r.errExists, false, 'nothing should have been refused here');
+  assert.equal(r.claudeStarted, true, 'the launch must have completed, or the marker proves nothing');
+
+  cleanup(dir);
 });
 
 test('R12 - a venv WINS over environment.yml, and the launch gets past the environment step', () => {
@@ -402,10 +647,11 @@ test('R12 - a venv WINS over environment.yml, and the launch gets past the envir
     );
   }
   const dir = project();
-  // An empty Activate.ps1 is dot-sourceable and does nothing, which is exactly
-  // what this needs: the claim is about which branch runs, not about venv.
+  // A venv is now recognised by its INTERPRETER, not by its activate script -
+  // an empty python.exe is enough, because the launcher only ever Test-Paths
+  // it. No Activate.ps1 is created at all: nothing reads one any more.
   fs.mkdirSync(path.join(dir, 'venv', 'Scripts'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'venv', 'Scripts', 'Activate.ps1'), '');
+  fs.writeFileSync(path.join(dir, 'venv', 'Scripts', 'python.exe'), '');
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: should-not-be-used\n');
 
   const r = runLauncher(dir, []);
@@ -414,9 +660,9 @@ test('R12 - a venv WINS over environment.yml, and the launch gets past the envir
   // the script ran on - it then fails at Start-Process, because PATH above
   // makes claude.cmd unreachable on purpose.
   assert.equal(r.errExists, false, 'the venv branch must have won - a .err means it tried conda');
-  assert.equal(r.pidFileExists, false, 'and claude.cmd is deliberately unreachable, so nothing started');
+  assert.equal(r.claudeStarted, true, 'and the launch must actually go through');
 
-  fs.rmSync(dir, { recursive: true, force: true });
+  cleanup(dir);
 });
 
 function isAlive(pid) {
@@ -609,7 +855,19 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
     // building the array and not passing it is the silent-failure shape.
     'Read HANDOFF.md and give the opening report.',
     ') + $openingReport)',
-    'Activate.ps1',
+    // THE VENV, PINNED BY WHAT MAKES IT WORK. This entry was 'Activate.ps1'
+    // until 2026-09-13, when dot-sourcing the project's own script was
+    // removed as an arbitrary-code-execution path. The three tokens below
+    // are the whole of activation now; losing any one silently launches
+    // Claude outside the venv, which nothing downstream would notice.
+    "'python.exe'",
+    '$env:VIRTUAL_ENV = $venvRoot',
+    '$env:PATH = "$venvScripts;$env:PATH"',
+    // venv's own activate clears this and so must we: a PYTHONHOME inherited
+    // from the agent overrides the venv and sends imports to another
+    // interpreter's stdlib. Pinned because nothing else would notice - it is
+    // only wrong on a machine that happens to set it.
+    'Remove-Item Env:PYTHONHOME',
     'Start-Process',
     '-LiteralPath',
     '-PassThru',
