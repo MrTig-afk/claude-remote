@@ -15,10 +15,12 @@ conversation happens in the Claude Code app. That is deliberate.
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screens/list.png" alt="Project list with one session running"></td>
-<td width="50%"><img src="docs/screens/running.png" alt="Two sessions running"></td>
+<td width="33%"><img src="docs/screens/picker.png" alt="Folder picker with one folder selected to share"></td>
+<td width="33%"><img src="docs/screens/list.png" alt="Project list with one session running"></td>
+<td width="33%"><img src="docs/screens/running.png" alt="Two sessions running"></td>
 </tr>
 <tr>
+<td align="center"><sub>Choose folders to share</sub></td>
 <td align="center"><sub>One session running</sub></td>
 <td align="center"><sub>Two, side by side</sub></td>
 </tr>
