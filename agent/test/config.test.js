@@ -204,7 +204,7 @@ test('getSessionDirPaths - any ~/.claude-* profile holding sessions/ is DISCOVER
   for (const p of ['.claude', '.claude-work', '.claude-other']) {
     fs.mkdirSync(path.join(home, p, 'sessions'), { recursive: true });
   }
-  fs.mkdirSync(path.join(home, '.claude-hooks'), { recursive: true });   // no sessions/
+  fs.mkdirSync(path.join(home, '.claude-tools'), { recursive: true });   // no sessions/
   fs.mkdirSync(path.join(home, 'Documents'), { recursive: true });       // not a profile
   const dirs = getSessionDirPaths(writeConfig('discover.json'), home);
 
@@ -212,8 +212,8 @@ test('getSessionDirPaths - any ~/.claude-* profile holding sessions/ is DISCOVER
   assert.ok(dirs.includes(path.join(home, '.claude-other', 'sessions')));
   assert.ok(dirs.includes(path.join(home, '.claude', 'sessions')), 'the default is always scanned');
   assert.ok(
-    !dirs.some((d) => d.includes('.claude-hooks')),
-    'a sibling with no sessions/ is not a profile - this is what keeps .claude-hooks out',
+    !dirs.some((d) => d.includes('.claude-tools')),
+    'a sibling with no sessions/ is not a profile - this is what keeps .claude-tools out',
   );
   assert.ok(!dirs.some((d) => d.includes('Documents')), 'a non-.claude directory is never scanned');
   assert.equal(new Set(dirs).size, dirs.length, 'no directory may be scanned twice');
@@ -294,7 +294,7 @@ test('pre_launch_commands: an unusable per-project entry falls through to the gl
   assert.equal(result, 'conda activate global');
 });
 
-test('pre_launch_commands: null or blank is an explicit OPT-OUT, not a fall-through', () => {
+test('pre_launch_commands: null is an explicit OPT-OUT; a blank is malformed and falls through', () => {
   // Without this there is no way to say "this project needs nothing": an owner
   // with a global conda command and one plain Node project would get conda run
   // there anyway. That is the silent-wrong-environment outcome the feature

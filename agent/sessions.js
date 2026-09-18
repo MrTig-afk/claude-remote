@@ -85,20 +85,12 @@ async function defaultPidImageName(pid) {
  * never ctx.baseDir directly; every other caller - projects.js, the tests -
  * passes a bare name or a flat path and is unaffected.
  */
-// SECURITY - an ALLOWLIST, and it must stay one. Everything that is not a
-// letter or a digit collapses to a single '-', so no shell metacharacter can
-// reach a session name whatever a folder is called.
-// It was a denylist (whitespace and dots only) until this was found: a
-// session name flows into launch-session.ps1, which hands it to
-// Start-Process for `claude.cmd` - a .cmd, so Windows runs it through
-// cmd.exe. A project named `x&calc` therefore executed calc. Anyone with a
-// valid token could create one over the API, and so could a folder name on
-// disk. Widening the name validators instead would have been a denylist
-// guarding a denylist; this is the one choke point every caller goes
-// through - resolveProjectPath, the launchability check, createProject's
-// collision guard, the pid-file name and the registry key.
-// Do not "relax" this to allow a character back in. Any new character here
-// is a new character reaching cmd.exe.
+// SECURITY - an ALLOWLIST, and it must stay one: the internal session name
+// (registry key, pid-file name) can hold no shell metacharacter. The RAW
+// folder leaf does reach `claude.cmd` (--name, --remote-control), and there
+// the launcher's double quotes are the protection - a Windows file name cannot
+// contain `"`. MEASURED 2026-09-18: `x&mkdir PWNED`, `a^&...`, `b)&...` arrived
+// as plain text; only `%VAR%` expands, which is cosmetic. Keep both.
 export const slugSegment = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
 /**
@@ -354,9 +346,12 @@ function resolveNestedChild(base, seg1, seg2) {
 
   // S8n - each segment checked SEPARATELY: testing only the joined string
   // would let a child named '-weird' through as 'pull-requests/-weird'.
-  const slug1 = seg1.replace(/[\s.]+/g, '-').toLowerCase();
-  const slug2 = seg2.replace(/[\s.]+/g, '-').toLowerCase();
-  if (slug1 === '' || slug1.startsWith('-') || slug2 === '' || slug2.startsWith('-')) {
+  // Refused: a leading dot, dash or space (as before), and a name with no
+  // letter or digit at all - `项目` slugs to a bare '-' that every such folder
+  // would share (F16-C05). NOT refused: `_scratch`, `(old) api`, `#2`, which
+  // name a real session and must keep their STOP (F16-D2-C02).
+  const unusable = (s) => /^[\s.-]/.test(s) || !/[a-z0-9]/.test(slugSegment(s));
+  if (unusable(seg1) || unusable(seg2)) {
     return { ok: false, status: 400, error: 'invalid_project' };
   }
 
@@ -751,20 +746,9 @@ export function launchSession(ctx, project) {
     // THE CODE-TAB ROW NAME, and nothing else - see remoteControlName above.
     // The registry key keeps the root-qualified `sessionName`, because
     // recordLaunch below is still passed the untouched value.
-    // launch-session.ps1 hands this value straight to
-    // `claude.cmd --remote-control`. Whether that CLI accepts a '/' inside a
-    // session name could not be established: node's spawn, PowerShell,
-    // Start-Process and cmd.exe all pass '/' through untouched (it is not a
-    // cmd metacharacter, and the token does not begin with one, so it is not
-    // read as a switch), but the CLI's own handling is observable only by
-    // running it, which this build was not permitted to do. The collapse is
-    // therefore PRECAUTIONARY, and it is the same one pidFileNameFor
-    // (registry.js) makes for the pid FILE name, for the same reason it is
-    // collision-free: the slug rule maps every '.' and every whitespace run
-    // to '-', so no single-segment session name can contain a '.' and
-    // 'pull-requests.vercel' is unreachable by any flat project. If a launch
-    // is ever seen working with a '/', this replace can simply go - nothing
-    // else in the agent reads the --remote-control name back.
+    // launch-session.ps1 hands this RAW folder leaf, double-quoted, to
+    // `claude.cmd --remote-control` - see the SECURITY note on slugSegment for
+    // why the quoting, not the slug, is what makes that safe.
     '-SessionName', remoteControlName(r.path, allProjectPaths(roots)),
     '-PidFile', pidFilePath,
     // Only when configured. An absent claude_config_dir must pass NO -ConfigDir
@@ -805,24 +789,11 @@ export function launchSession(ctx, project) {
   child.on('error', (err) => {
     inFlightLaunches.delete(key);
     console.error(`claude-remote agent: launch of '${sessionName}' failed to spawn:`, err);
-    // F15-D2-C01. THE REASON HAS TO REACH THE PHONE, and console.error does not
-    // - the agent runs as a scheduled task and nobody reads its terminal.
-    //
-    // This is the one failure launch-session.ps1 CANNOT report, because the
-    // script never runs: spawn is given `cwd: r.path`, so a project folder
-    // deleted or renamed between the phone listing it and the tap landing makes
-    // NODE fail with ENOENT before PowerShell starts. MEASURED: 'error' fires
-    // with no 'exit'. The script's own Set-Location guard only covers the gap
-    // between node's cwd check and its first statement.
-    //
-    // Without this the entry sits `starting` for STARTING_GRACE_MS and then
-    // reads `failed` with nothing to show - the reasonless failure R12.1 exists
-    // to abolish, reached by the most ordinary accident there is.
-    //
-    // Written with the SAME shape launch-session.ps1 uses, so registry.js's
-    // readErrFile needs no special case, and swallowed for the same reason the
-    // script swallows its own: a failed reason-write must not take the error
-    // handler down with it.
+    // F15-D2-C01. A spawn that never happened (PowerShell missing or
+    // unstartable) is the one failure launch-session.ps1 cannot report, since
+    // it never runs - so the reason is written here, in the script's own .err
+    // shape. A project folder that vanished before the tap is NOT this case:
+    // listSessions drops an entry whose folder is gone (F16-C02).
     try {
       fs.writeFileSync(`${pidFilePath}.err`, `could not start: ${err.message}`, 'utf8');
     } catch { /* nothing better to do from here */ }

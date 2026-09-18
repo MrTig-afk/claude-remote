@@ -94,13 +94,14 @@ const SCREEN_MAIN = {
   agent: 'set-agent',
   reset: 'set-reset',
   about: 'set-about',
+  contact: 'set-contact',  // two deep, About -> Contact me; the settingsSubs stack carries it
 };
 
 // The screens that are BELOW the settings root. Membership is what tells
 // onPopState which of the two entries just popped, so a screen added to
 // SCREEN_MAIN above must be added here too or its back gesture will fall
 // through and close Settings entirely.
-const SETTINGS_SUBS = new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update', 'root']);
+const SETTINGS_SUBS = new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update', 'root', 'contact']);
 
 // The one place a screen changes. Sets `hidden` on every <main> in
 // SCREEN_MAIN so two of them can never render stacked (the failure the
@@ -2878,7 +2879,8 @@ function renderSettingsSub(key) {
   if (key === 'see') { renderSections(document.getElementById('see-sections')); return; }
   if (key === 'about') { renderAbout(); return; }
   if (key === 'agent') { renderAgentStatus(); return; }
-  // 'reset' is static markup - its only moving part is the button.
+  // 'reset' and 'contact' are static markup: reset's only moving part is
+  // the button, and contact's two rows are plain links in index.html.
 }
 
 // ---------------------------------------------------------------------------
@@ -2945,16 +2947,17 @@ async function onChangePasscode(ev) {
   document.getElementById('pw-msg').textContent = messageFor(res.code, res.status, res.data);
 }
 
+// The ONE external URL this file knows. The no-egress test allows exactly
+// this constant and no other absolute URL.
+const REPO_URL = 'https://github.com/MrTig-afk/claude-remote';
+
 function renderAbout() {
   document.getElementById('about-ver').textContent = `${SHELL_VERSION} · MIT licence`;
   const listEl = document.getElementById('about-list');
   listEl.innerHTML = '';
-  // REPO_URL is one constant because T62 and T83 point at the same repo and
-  // it does not exist yet. Rows that would open a dead link are omitted
-  // rather than drawn - the artifact's Contact me screen is a real screen and
-  // gets built with the repo, not faked with a href to nowhere. The update
-  // screen's "Full release notes" row is omitted for the same reason: it
-  // links to the repo's releases page.
+  // The update screen's "Full release notes" row is still omitted: it links
+  // to the repo's releases page, which is empty until a GitHub release
+  // exists. Rows that would open a dead link are omitted rather than drawn.
   const rows = [];
   // Lane 5: the ONE row on this screen that carries a dot, so the news stands
   // out against plain rows. Absent entirely when there is nothing waiting -
@@ -2965,6 +2968,13 @@ function renderAbout() {
       state: 'see what changed', enterable: true, dot: true, accent: true,
     });
   }
+  // Artifact order: the update row, Source code, Report a problem, Contact
+  // me, then What this app can see. No sub-lines - the Decided table says no
+  // descriptions, and buildSettingsRow draws none for an empty state. The
+  // two repo rows waited for the repo to exist (T66, 2026-09-15).
+  rows.push({ id: 'source', icon: 'i-ext', name: 'Source code', state: '', enterable: true, href: REPO_URL });
+  rows.push({ id: 'issues', icon: 'i-ext', name: 'Report a problem', state: '', enterable: true, href: `${REPO_URL}/issues` });
+  rows.push({ id: 'contact', icon: 'i-mail', name: 'Contact me', state: '', enterable: true });
   rows.push({
     id: 'see', icon: 'i-eye', name: 'What this app can see', state: '', enterable: true,
   });
@@ -3508,11 +3518,20 @@ function openPickerFromShared() {
 // never launch). A disabled-looking row that still answers a tap is what this
 // avoids.
 function buildSettingsRow({
-  id, icon, name, state: stateText, enterable, fact = false, dot = false, accent = false,
+  id, icon, name, state: stateText, enterable, fact = false, dot = false, accent = false, href = null,
 }) {
-  const el = document.createElement(enterable ? 'button' : 'div');
+  // A row with an href LEAVES the app (the repo, its issues page): a real
+  // <a>, so the phone opens it in the browser, and no data-settings, so the
+  // settings delegate never routes it as a screen. Same shape as the static
+  // Contact me rows in index.html. noreferrer is not optional: the tailnet
+  // hostname must not travel as a Referer (the no-egress test pins it).
+  const el = document.createElement(href ? 'a' : enterable ? 'button' : 'div');
   el.className = accent ? 'row folder set-row has-update' : 'row folder set-row';
-  if (enterable) {
+  if (href) {
+    el.href = href;
+    el.target = '_blank';
+    el.rel = 'noopener noreferrer';
+  } else if (enterable) {
     el.type = 'button';
     el.dataset.settings = id;
   }
@@ -3554,7 +3573,10 @@ function buildSettingsRow({
   // and an accent chevron over a row that ignores the tap is a dead control
   // someone meets often. `.share-off` sets the same precedent: an inert row
   // mutes its name and draws no chevron.
-  if (enterable) {
+  // An href row is ALWAYS enterable, whatever the caller passed: a muted,
+  // chevron-less <a> would still navigate on a tap, which is the exact
+  // disabled-looking-but-live control this branch exists to prevent.
+  if (enterable || href) {
     const chev = document.createElement('span');
     chev.className = 'folder-chev';
     chev.setAttribute('aria-hidden', 'true');

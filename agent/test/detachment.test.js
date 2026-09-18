@@ -299,6 +299,44 @@ test('R12 - the name is parsed as YAML means it, not as the old regex did', () =
   cleanup(dir);
 });
 
+test('SECURITY - an environment.yml name that is a PATH is refused before conda sees it', () => {
+  // F16-C01. conda activates a value with / or \ as a prefix path, resolved
+  // inside the project, and dot-sources its etc\conda\activate.d\*.ps1 - so a
+  // cloned repo could run its own script on one tap. A stand-in conda sits at
+  // the first searched root and records any call: with the guard removed the
+  // launcher reaches `conda activate` and the marker appears.
+  for (const name of ['./.env', '.\\.env', '..', '.', '-p']) {
+    const dir = project();
+    fs.writeFileSync(path.join(dir, 'environment.yml'), `name: "${name}"\n`);
+    const marker = path.join(dir, 'conda-called');
+    fakeConda(dir, `function conda { Set-Content -LiteralPath '${marker}' -Value x }\n`);
+
+    const r = runLauncher(dir, []);
+    assert.equal(r.status, 1, `${name} must refuse`);
+    assert.match(r.reason, /is a path, not a conda environment name/, name);
+    assert.equal(fs.existsSync(marker), false, `${name}: conda must never be called with a path`);
+    assert.equal(r.claudeStarted, false);
+
+    cleanup(dir);
+  }
+});
+
+test('R12 - a real conda name with characters beyond [A-Za-z0-9._-] still reaches conda', () => {
+  // F16-D2-C01, the positive control for the guard above: conda forbids only
+  // / \ : # and space, so these are real environment names and must activate.
+  for (const name of ['torch2+cu118', '_base', 'env@2']) {
+    const dir = project();
+    fs.writeFileSync(path.join(dir, 'environment.yml'), `name: ${name}\n`);
+    fakeConda(dir, "function conda { if ($args[0] -eq 'activate') { $env:CONDA_DEFAULT_ENV = $args[1] } }\n");
+
+    const r = runLauncher(dir, []);
+    assert.equal(r.status, 0, `${name}: ${r.reason || r.out}`);
+    assert.equal(r.claudeStarted, true, name);
+
+    cleanup(dir);
+  }
+});
+
 test('R12 - an UPPERCASE NAME: is not a YAML name key, and is not treated as one', () => {
   const dir = project();
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'NAME: shouty\n');

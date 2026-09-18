@@ -32,12 +32,14 @@ function Write-LaunchRefusal([string]$Reason) {
 }
 
 # CLEAR LAST LAUNCH'S FAILURE FIRST. The .err file below is the only place a
-# failed pre_launch_command is visible, and nothing else ever deletes it -
-# clearPidFile (registry.js) unlinks the .pid and knows nothing about this.
-# Without this line a fixed config still shows the old failure for ever, and a
-# second failure after a good run is indistinguishable from the first. Cleared
-# unconditionally rather than inside the -PreLaunch branch, so a stale file
-# does not survive by the owner simply removing the setting.
+# failed pre_launch_command is visible. Since 2026-09-12 clearPidFile
+# (registry.js) deletes it too, on a deliberate stop and on launchSession's
+# pre-spawn clear - this line is the second of the two clears its comment
+# names - while clearPidFileOnly, on the already-gone paths, KEEPS it on
+# purpose. Cleared here as well so the script is right when run by hand with
+# no agent ahead of it, and unconditionally rather than inside the -PreLaunch
+# branch, so a stale file does not survive by the owner simply removing the
+# setting.
 if ($PidFile) { Remove-Item -LiteralPath "$PidFile.err" -ErrorAction SilentlyContinue }
 
 # T56. This used to join $HOME to one specific personal profile name, hardcoded.
@@ -69,10 +71,8 @@ if ($ConfigDir) {
 # claimed otherwise. sessions.js spawns this script with `cwd: r.path` - the
 # SAME path - so a missing folder makes NODE fail with ENOENT and PowerShell
 # never starts at all. The script's own guard only covers the window between
-# node's cwd check and this line. The real gap is in the spawn's `error`
-# handler, which today only console.errors where no phone can see it; recorded
-# as a finding rather than fixed here, because sessions.js is not in this
-# change's reviewed scope and adding it would invalidate the review.
+# node's cwd check and this line. A spawn that fails outright is reported by
+# sessions.js's `error` handler, which writes this same .err (since 2266724).
 try {
     Set-Location -LiteralPath $ProjectPath
 } catch {
@@ -104,12 +104,14 @@ try {
 # -CommandType Application` does NOT search the current directory, so running
 # after Set-Location is harmless.
 #
-# WHAT THIS DOES NOT FIX, said plainly: the launched process still INHERITS the
-# modified PATH, so a venv carrying its own node.exe can still influence what
-# claude.cmd's own shim runs. That is what activating a venv MEANS - the same
-# exposure as typing `activate` at the desk - and narrowing it further would
-# mean not activating venvs at all. What is fixed is the part this launcher
-# controls: which executable IT starts.
+# WHAT THIS DOES NOT FIX, said plainly (F16-C04): Claude Code and every tool
+# and hook it runs INHERIT the modified PATH, so any command they call by bare
+# name - git, bash, python - resolves into the project's venv\Scripts first. A
+# repo shipping its own venv\Scripts\git.exe runs it the first time Claude
+# calls `git`. That is what activating a venv means, and it is why the README
+# says a launched session is not a sandbox; the tap itself executes nothing
+# from the project, but the session it starts works inside the project. What
+# is fixed here is the part this launcher controls: which executable IT starts.
 # A FUNCTION WITH TWO CALLERS, because the two environment branches need it at
 # OPPOSITE moments and a single call site had to be wrong for one of them:
 #   -PreLaunch      -> AFTER, so a pre_launch_command that PUTS claude.cmd on
@@ -318,6 +320,14 @@ if ($PreLaunch) {
         }
         if ([string]::IsNullOrWhiteSpace($envName)) {
             Write-LaunchRefusal "environment.yml has no top-level 'name:' in its first 200 lines, so there is no conda environment to activate. Add one, or remove the file."
+        }
+
+        # NEVER A PATH (F16-C01). conda activates a value holding / or \ as a
+        # prefix INSIDE this project and runs its etc\conda\activate.d\*.ps1 -
+        # a cloned repo's own script, on one tap. conda's names cannot hold
+        # those or `:`; a leading - or . also rules out `.`, `..` and options.
+        if ($envName -match '[\\/:]' -or $envName -match '^[-.]') {
+            Write-LaunchRefusal "environment.yml names '$envName', which is a path, not a conda environment name. A path is refused on purpose: it would activate a folder inside the project."
         }
 
         # CONDA IS FOUND, NOT CONFIGURED. Under -NoProfile nothing `conda init`

@@ -216,8 +216,8 @@ export function getSessionDirPaths(configPath = getConfigFilePath(), homeDir = o
   // Discovery fixes both halves at once - no personal name in the source, and
   // wider coverage than the hardcoded list ever had, since it finds a profile
   // this project has never heard of. Gated on the profile actually holding a
-  // `sessions` directory, which is what keeps siblings like `.claude-hooks`
-  // out. A home directory that cannot be read costs the discovery only: the
+  // `sessions` directory, which is what keeps `.claude-*` siblings that are
+  // not profiles out. A home directory that cannot be read costs the discovery only: the
   // configured dir and the default below still stand.
   let discovered = [];
   try {

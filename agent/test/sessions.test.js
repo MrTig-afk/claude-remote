@@ -295,6 +295,27 @@ test('resolveProjectPath - nested rejection table', () => {
   }
 });
 
+test('resolveProjectPath - a nested name slugging to "-" is refused, as it is at the top level', () => {
+  // F16-C05. The nested check used a denylist ([\s.]+) while the session name
+  // is built with slugSegment, so `Work/项目` passed and slugged to '-', and a
+  // sibling `Work/工作` got the same session name. Its own root, so the shared
+  // fixtures' child counts are untouched.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-cjk-'));
+  fs.mkdirSync(path.join(root, 'Work', '项目'), { recursive: true });
+  const ok = ['ok-one', '_scratch', '(old) api', '#2'];
+  for (const n of ok) fs.mkdirSync(path.join(root, 'Work', n));
+  const { spawner, calls } = makeFakeSpawner();
+  const ctx = { baseDir: root, spawner, ...makeRegCtx() };
+  const bad = launchSession(ctx, 'Work/项目');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error, 'invalid_project');
+  assert.equal(calls.length, 0);
+  // F16-D2-C02: a leading non-alphanumeric that is not a dot, dash or space
+  // still names a real session - refusing it strands a running one's STOP.
+  for (const n of ok) assert.equal(launchSession(ctx, `Work/${n}`).ok, true, `Work/${n} must still launch`);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 // --- T70: the routes, end to end - nested-target pins ----------------------
 // These sit here, above 'endSession - handoff exit with HANDOFF.md mtime
 // moved -> ended record written/true', because that test writes a HANDOFF.md
@@ -1284,13 +1305,7 @@ test('HTTP - second POST past STARTING_GRACE_MS while the launcher still runs ->
 });
 
 test("launchSession - a spawn that never happened still tells the phone WHY", () => {
-  // F15-D2-C01. This is the ONE failure launch-session.ps1 cannot report,
-  // because the script never runs. spawn is given `cwd: r.path`, so a project
-  // folder deleted or renamed between the phone listing it and the tap landing
-  // makes NODE fail with ENOENT before PowerShell starts - 'error' fires, no
-  // 'exit', and the handler used to only console.error where the agent's own
-  // terminal is the only reader. The entry then sat `starting` for the grace
-  // window and read `failed` with nothing to show.
+  // F15-D2-C01: PowerShell itself failing to start (see the comment in sessions.js).
   const { spawner, calls } = makeFakeSpawner();
   let currentTime = Date.now();
   const regCtx = makeRegCtx({ now: () => currentTime });
@@ -2568,7 +2583,7 @@ test('deriveSessionName - the nested form slugs each segment, so every / is a re
 test('deriveSessionName - every real project name is unchanged by the allowlist', () => {
   const rows = [
     ['claude-remote', 'claude-remote'],
-    ['claude-master', 'claude-master'],
+    ['claude-config', 'claude-config'],
     ['Harbor', 'harbor'],
     ['Pull Requests', 'pull-requests'],
     ['Video Editing', 'video-editing'],

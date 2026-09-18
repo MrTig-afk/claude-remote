@@ -29,6 +29,10 @@ social-media/
 portfolio/
 project_summary.txt
 docs/internal/
+# the spec and the one-time icon generator stay local; neither is needed to
+# run the plugin (runtime-only surface decided 2026-09-15)
+docs/claude-remote-prd.md
+agent/tools/
 Laptop.md
 Laptop.md.bak
 

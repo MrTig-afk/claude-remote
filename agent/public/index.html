@@ -608,6 +608,40 @@
       <div class="spacer"></div>
     </main>
 
+    <!-- Lane 7, Contact me. Reached from About, so its crumb says About - the
+         second screen in the app two levels below the settings root. Two
+         rows and no sub-lines, per the Artifact's Decided table ("LinkedIn
+         and email only. No Medium, no descriptions under the rows"). Static
+         markup like set-reset: the rows are plain links, so there is nothing
+         to render, and an <a> carries no data-settings so the settings-row
+         delegate never sees it. -->
+    <main id="set-contact" hidden>
+      <div class="set-head">
+        <button class="set-back" type="button" data-set-back aria-label="Back to About">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>About</span>
+        </button>
+        <div class="set-label">Contact me</div>
+      </div>
+      <div class="set-body">
+        <div class="set-p contact-lead">Bugs and feature requests are best raised as issues. For anything else:</div>
+        <a class="row folder set-row" href="https://www.linkedin.com/in/kaushikn2002" target="_blank" rel="noopener noreferrer">
+          <svg class="ico set-ico" width="15" height="15" aria-hidden="true"><use href="#i-in"/></svg>
+          <span class="row-main"><span class="row-name">LinkedIn</span></span>
+          <span class="folder-chev" aria-hidden="true">&gt;</span>
+        </a>
+        <a class="row folder set-row" href="mailto:kaushiknaru2002@gmail.com">
+          <svg class="ico set-ico" width="15" height="15" aria-hidden="true"><use href="#i-mail"/></svg>
+          <span class="row-main"><span class="row-name">Email</span></span>
+          <span class="folder-chev" aria-hidden="true">&gt;</span>
+        </a>
+        <div class="banner set-note">
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg>
+          <span>These open your own apps. Nothing is sent from here.</span>
+        </div>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
     <!-- Lane 10 / R2. The once-only sheet explaining the two-app flow.
          A SIBLING of the screens, never inside one. It used to live in
          #picker, which meant Settings > About could "open" it into a

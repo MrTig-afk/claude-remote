@@ -206,6 +206,24 @@ test('the offline navigate fallback reads /index.html from THIS cache, not the o
   );
 });
 
+test('T109: a named cache lookup that REJECTS falls through instead of failing the request', async () => {
+  // RED WHEN: either `.catch(() => undefined)` is dropped from sw.js. Under the
+  // older Service Worker spec a named caches.match rejects with NotFoundError
+  // once that cache is gone; matchAcross above models only the modern
+  // resolve-undefined behaviour, so this fake rejects on purpose.
+  const notFound = async () => { throw new Error('NotFoundError'); };
+  const net = { ok: true, status: 200, type: 'basic', clone: () => ({}) };
+  const online = loadServiceWorker({ cacheMatch: notFound, fetch: async () => net });
+  assert.equal(await servedFor(online, 'http://127.0.0.1:8790/app.js', 'same-origin'), net);
+
+  const offline = loadServiceWorker({
+    cacheMatch: notFound,
+    fetch: async () => { throw new Error('agent not up'); },
+  });
+  const res = await servedFor(offline, 'http://127.0.0.1:8790/deep/link', 'navigate');
+  assert.equal(res.status, 503);
+});
+
 test('PRECACHE contains no entry beginning /api', () => {
   const source = read('sw.js');
   const match = source.match(/const PRECACHE = (\[[\s\S]*?\]);/);
@@ -370,9 +388,27 @@ test('lock.js never calls fetch() directly - it only calls into api.js', () => {
 
 // --- No egress ---
 
+// Two exemptions (T83), both for links the owner TAPS rather than anything the
+// app LOADS: an <a href> in index.html, and app.js's one REPO_URL constant,
+// which buildSettingsRow turns into rows. Each must carry rel="noreferrer" so
+// the tailnet hostname never travels as a Referer - asserted below.
+const NAV_LINK = /<a\b[^>]*\bhref="https?:\/\/[^"]*"[^>]*>/g;
+const REPO_CONST = /^const REPO_URL = 'https:\/\/github\.com\/[^']+';\r?$/m;  // \r: app.js is CRLF
+
 test('no shipped asset embeds an absolute http(s) URL', () => {
   for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js', 'copy.js']) {
-    const source = read(f);
+    let source = read(f);
+    if (f === 'app.js') {
+      assert.match(source, REPO_CONST, 'app.js may carry the repo URL only as the REPO_URL constant');
+      assert.match(source, /el\.rel = 'noopener noreferrer';/, 'buildSettingsRow must set noreferrer on href rows');
+      source = source.replace(REPO_CONST, '');
+    }
+    if (f === 'index.html') {
+      source = source.replace(NAV_LINK, (tag) => {
+        assert.match(tag, /\brel="[^"]*\bnoreferrer\b[^"]*"/, `${tag} must carry rel="noreferrer" - the tailnet hostname must not travel as a Referer`);
+        return '<a>';
+      });
+    }
     assert.ok(!source.includes('http://'), `${f} must not contain http://`);
     assert.ok(!source.includes('https://'), `${f} must not contain https://`);
   }

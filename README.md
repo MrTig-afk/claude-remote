@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.png">
-    <img src="docs/hero-light.png" alt="claude-remote" width="720">
-  </picture>
+  <img src="docs/hero-dark.png" alt="claude-remote" width="720">
 </p>
 
 # Claude Remote
@@ -10,8 +7,7 @@
 Start, watch, and stop a Claude Code session on your Windows PC from your phone,
 over Tailscale. Open the PWA, tap a project, and the session appears in the
 Claude Code app - the same session whether you drive it from the phone or sit
-down at the desk. Tap STOP and it ends the session and writes a handoff summary
-for next time.
+down at the desk. Tap STOP and it ends the session.
 
 It is a **remote start button, not a terminal.** There is no live console output
 and no way to answer an interactive prompt from the phone; the actual
@@ -52,6 +48,10 @@ Specifically:
 - **No filesystem isolation.** A launched session can reach anything your user
   account can. Claude Code's sandbox does not run on native Windows and governs
   Bash only. This is an open design decision, not an oversight.
+- **Only open projects you trust.** Tapping a project never runs a file from
+  it, but the session it starts works inside it. With a venv active, a program
+  the project ships in `venv\Scripts` (a `git.exe`, say) runs in place of the
+  real one the first time Claude calls it by name.
 - **The passcode is the only authentication.** It is stored hashed (scrypt,
   per-install salt), never logged or echoed, rate-limited with a lockout, and
   asked every time the app opens. It is still six digits.
@@ -92,9 +92,9 @@ phone (PWA) --https(Tailscale)--> tailscale serve --http--> Local Agent
                                                   claude.cmd --remote-control
                                                     (Claude Code app, Code tab)
 
-STOP --> taskkill on the session's process --> agent/handoff-session.ps1
-         (hidden `claude -p ... /handoff`, writes the handoff, no
-         --remote-control so it never registers a session of its own)
+STOP --> confirm on the tile --> taskkill on the session's process tree
+         (nothing is written on your behalf: ask the session for a
+         handoff first, while it still has its context)
 ```
 
 `tailscale serve` terminates HTTPS on your machine's MagicDNS name and proxies
@@ -156,14 +156,25 @@ loopback traffic does not traverse the firewall at all.
 
 Worth knowing, because it is invisible from the phone. When you tap a project,
 the launcher changes into that directory and activates an environment before
-starting Claude Code. By default it looks for a `venv` or `.venv` folder
-containing `Scripts\Activate.ps1` and activates it. Nothing to configure, and
-nothing happens if there is no such folder.
+starting Claude Code. Nothing to configure; by default it checks two things,
+in this order:
 
-That covers a standard Python project on Windows. **If you use conda, poetry,
-uv, pipenv, a differently-named folder, or a non-Python stack, it will find
-nothing** and your session starts in the wrong environment with no visible
-sign of it. Set `pre_launch_command` in the config file
+1. **A `venv` or `.venv` folder containing `Scripts\python.exe`.** The launcher
+   puts that folder first on `PATH` itself. It never runs the project's
+   `Activate.ps1`, because that file comes with the repo, and running it would
+   let any cloned project execute code on your PC the moment you tap it.
+2. **An `environment.yml` with a `name:`.** The launcher finds conda under
+   `miniconda3` or `anaconda3` in your user folder, `AppData\Local` or
+   `C:\ProgramData`, and activates that environment. If conda is not there, or
+   the file has no name, the launch is refused with the reason, rather than
+   starting a session in the wrong environment.
+
+If neither is found, the session starts with no environment step.
+
+**If you use poetry, uv, pipenv, a differently-named folder, conda installed
+somewhere else, or a non-Python stack, it will find nothing** and your session
+starts in the wrong environment with no visible sign of it. Set
+`pre_launch_command` in the config file
 (`%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\config.json`):
 
 ```json
@@ -171,6 +182,10 @@ sign of it. Set `pre_launch_command` in the config file
 ```
 
 Three constraints, and none of them is obvious. Read them before you set it.
+And one rule: **never put a credential in this command.** If it fails, its
+error text - which can quote the command - is written beside the pid file and
+sent to the phone in the agent's response, so a token typed here leaves the
+machine.
 
 **It runs with `-NoProfile`, so your PowerShell profile does not exist.**
 Anything `conda init`, `nvm` or similar installed into your profile - including
@@ -214,10 +229,11 @@ though a global is set, map it to `null`:
 { "pre_launch_commands": { "F:\\Dev\\Projects\\web": null } }
 ```
 
-When it fails, the launcher writes the error to `<pid file>.err` in
-`%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\session-pids\`.
-That file is the only place a failure is visible - nothing surfaces on the
-phone.
+When it fails, the launch is refused and nothing starts: the project row on the
+phone reads `launch unconfirmed`, and the reason is written to `<pid file>.err`
+in `%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\session-pids\`.
+Read that file for the why - the app shows that it failed, not what the
+command said.
 
 This setting is deliberately not in the app. The value is executed, so a text
 box reachable from your phone would turn the six-digit passcode into a way to
@@ -229,8 +245,8 @@ can already run anything as you.
 
 A session you start from the phone opens by telling you where the work stands,
 rather than sitting silent until you type something. The launcher does this by
-submitting one prompt for you - "Read HANDOFF.md and give the opening report."
-- and only when the project actually contains a `HANDOFF.md`. A project without
+submitting one prompt for you, "Read HANDOFF.md and give the opening report.",
+and only when the project actually contains a `HANDOFF.md`. A project without
 one starts silent, exactly as before.
 
 It exists because the PWA is a start button: nobody is at the keyboard to type
@@ -247,9 +263,9 @@ session started from a phone gives you nothing to diagnose.
    appears in the Claude Code app's Code tab - work there as normal.
 3. A session you started at the desk shows up too, marked "desktop". You can end
    it from the phone the same way.
-4. When finished, tap STOP, then confirm END & WRITE HANDOFF. The agent ends the
-   session's process and runs a hidden `claude -p ... /handoff` in the project to
-   write a summary, then confirms with a banner.
+4. When finished, tap STOP. The confirm warns that nothing writes a handoff for
+   you and offers OPEN CLAUDE FIRST, so you can ask the session for one while it
+   still has its context. END ANYWAY ends the process tree; that is all it does.
 
 ## Known limitations
 
@@ -258,6 +274,15 @@ session started from a phone gives you nothing to diagnose.
 - Nothing reaps sessions or their MCP children automatically. On a memory-tight
   machine this bites at around 3-5 concurrent projects.
 - The launcher is a convenience, not a boundary (see the threat model above).
+
+## Contributing
+
+Contributions are welcome. For anything bigger than a small fix, open an issue
+first and wait for a reply before you start - see `CONTRIBUTING.md`.
+
+`CONTRIBUTING.md` is the short version of what a change needs. `AGENTS.md` is
+the same rules written for an AI coding agent working in this repo: commands,
+hard rules, and where things are.
 
 ## Reading the source
 

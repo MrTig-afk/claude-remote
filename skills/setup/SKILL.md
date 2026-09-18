@@ -83,12 +83,16 @@ sitting at the lock screen has no agent, is in `docs/agent-autostart.md`.
 ASK THE OWNER THIS - do not assume, and do not skip it because their machine
 happens to look like a plain Python project. When a session launches, the
 launcher `cd`s into the project and then activates an environment. Out of the
-box it looks for a `venv` or `.venv` folder holding
-`Scripts\Activate.ps1` and dot-sources it. That covers a standard Python
-project on Windows and nothing else.
+box it checks two things, in order: a `venv` or `.venv` folder holding
+`Scripts\python.exe`, which it puts first on `PATH` itself (it never runs the
+project's `Activate.ps1`); then an `environment.yml` with a `name:`, which it
+activates through a conda found under `miniconda3` or `anaconda3` in the user
+folder, `AppData\Local` or `C:\ProgramData` - refusing the launch, with the
+reason, if conda is not there.
 
-If they use conda, poetry, uv, pipenv, a differently-named folder, or a
-non-Python stack, that auto-detect finds nothing and the session starts in the
+If they use poetry, uv, pipenv, a differently-named folder, conda installed
+anywhere else, or a non-Python stack, that auto-detect finds nothing and the
+session starts in the
 wrong environment - silently, with no sign of it from the phone. Set
 `pre_launch_command` in the config file for that case:
 
