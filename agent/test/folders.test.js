@@ -804,3 +804,18 @@ test('10.28 - a malformed path against a COLD drive cache -> 400, driveExec neve
     fs.rmSync(dir28, { recursive: true, force: true });
   }
 });
+
+test('Lane 18 - each folder says whether it looks like ONE project: a .git (folder or file) or a CLAUDE.md', async () => {
+  // RED WHEN: the flag is dropped, keyed on the wrong names, or computed
+  // for an unreadable row. Existence only: the files hold nothing readable.
+  const dir = path.join(tmpRoot, 'lane18');
+  for (const n of ['repo', 'worktree', 'claude', 'plain']) fs.mkdirSync(path.join(dir, n), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'repo', '.git'));
+  fs.writeFileSync(path.join(dir, 'worktree', '.git'), '');
+  fs.writeFileSync(path.join(dir, 'claude', 'CLAUDE.md'), '');
+  fs.writeFileSync(path.join(dir, 'plain', 'README.md'), '');
+  const res = await sharedFetch(`/api/folders?path=${dir}`);
+  assert.equal(res.status, 200);
+  const flags = Object.fromEntries((await res.json()).folders.map((f) => [f.name, f.project]));
+  assert.deepEqual(flags, { claude: true, plain: false, repo: true, worktree: true });
+});

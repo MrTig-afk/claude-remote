@@ -30,6 +30,9 @@ export const SECTIONS = [
     items: [
       'The folders you pick, and the names of folders inside them.',
       'While you are choosing folders, folder names on your other drives.',
+      // Added 2026-09-23, owner's choice (Lane 18 Q2): the picker checks that
+      // these two names EXIST to pre-set a new share; it never opens either.
+      'Whether a folder holds a .git or CLAUDE.md, to suggest how to share it.',
     ],
   },
   {

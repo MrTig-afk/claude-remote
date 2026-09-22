@@ -12,7 +12,7 @@ import {
   projectSections, crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS,
   listZoneState, missingRoots, withoutRoot, sharedToTicks, sharedRowState,
   sharedFolderRows, stopSharingPrompt,
-  rootEditRows, excludesFrom, withRootExcludes, orphanWarning,
+  rootEditRows, excludesFrom, withRootExcludes, orphanWarning, modeSwitchWarning,
 } from './folders-ui.js';
 import {
   updateAvailable, releaseOf, releaseLines, readyLine, fallbackReadyLine, aboutRowState, updateWaiting,
@@ -2169,7 +2169,8 @@ function onNewProject() {
 // ============================================================================
 
 const share = {
-  ticks: [],        // [{ path, name, newFolders }] - client-side until SAVE
+  ticks: [],        // [{ path, name, newFolders, mode? }] - client-side until SAVE
+  modeOpen: null,   // the ticked path whose "Share X as" choice is open (Lane 18)
   path: null,       // the folder being listed, or null = the drive list
   parent: null,     // the agent's own answer for UP; null = the drive list
   rows: [],         // drives, or folders, as returned
@@ -2349,9 +2350,82 @@ function buildFolderRow(folder, basePath, ticks) {
     : coverage === 'covers'
       ? 'contains a folder you already picked'
       : '';
-  return buildTickableRow({
+  const row = buildTickableRow({
     path: childPath, name: folder.name, status, coverage,
   });
+  const tick = coverage === 'ticked' ? ticks.find((t) => t.path === childPath) : null;
+  if (!tick) return row;
+  // Lane 18: a ticked row says how it is shared. The choice itself opens
+  // under the row just ticked (share.modeOpen); every other ticked row shows
+  // its answer as a line that opens the same choice when tapped. On a
+  // one-project row the chevron is dimmed, not removed (Q3).
+  if (tick.mode === 'single') row.classList.add('share-row-single');
+  if (share.modeOpen !== childPath) return [row, buildModeLine(tick)];
+  // Named per path, so two open choices could never share one radio group.
+  const box = document.createElement('div');
+  box.className = 'share-mode';
+  for (const n of buildModeRadios(tick.name, tick.mode, `mode:${tick.path}`, { shareMode: tick.path })) box.appendChild(n);
+  return [row, box];
+}
+
+function buildModeLine(tick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = tick.mode === 'single' ? 'share-kind share-kind-single' : 'share-kind';
+  btn.dataset.kindOpen = tick.path;
+  btn.setAttribute('aria-label', `How ${tick.name} is shared - change`);
+  btn.textContent = tick.mode === 'single' ? 'one project' : 'folder of projects';
+  return btn;
+}
+
+// A radio change re-renders its whole list, which destroys the input that
+// had focus; put focus back on its replacement so arrow keys and a screen
+// reader keep their place (SS1-D1-C02).
+function refocusRadio(attr, key, value) {
+  const hit = [...document.querySelectorAll(`[data-${attr}]`)]
+    .find((i) => i.value === value && (key === null || i.getAttribute(`data-${attr}`) === key));
+  if (hit) hit.focus();
+}
+
+/**
+ * "Share <name> as" and two radios - one control, used by the picker and by
+ * Lane 3's editor, so the two screens cannot drift. `data` is copied onto
+ * each input as data-* so each screen's own delegate hears only its own.
+ */
+function buildModeRadios(name, mode, group, data) {
+  const nodes = [];
+  const head = document.createElement('div');
+  head.className = 'share-mode-head';
+  head.textContent = `Share ${name} as`;
+  nodes.push(head);
+  const options = [
+    ['single', 'One project', `start Claude in ${name} itself`],
+    ['container', 'A folder of projects', 'list the folders inside it'],
+  ];
+  for (const [value, label, hint] of options) {
+    const lab = document.createElement('label');
+    lab.className = 'share-mode-opt';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = group;
+    input.value = value;
+    input.checked = mode === value;
+    for (const [k, v] of Object.entries(data)) input.dataset[k] = v;
+    lab.appendChild(input);
+    const text = document.createElement('span');
+    text.className = 'row-main';
+    const l = document.createElement('span');
+    l.className = 'row-name';
+    l.textContent = label;
+    const h = document.createElement('span');
+    h.className = 'row-status';
+    h.textContent = hint;
+    text.appendChild(l);
+    text.appendChild(h);
+    lab.appendChild(text);
+    nodes.push(lab);
+  }
+  return nodes;
 }
 
 function buildPickedRow(tick, index) {
@@ -2370,12 +2444,16 @@ function buildPickedRow(tick, index) {
   main.appendChild(status);
   row.appendChild(main);
 
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'share-new';
-  toggle.dataset.newfolders = tick.path;
-  toggle.textContent = tick.newFolders === 'hide' ? 'NEW FOLDERS: HIDE' : 'NEW FOLDERS: SHOW';
-  row.appendChild(toggle);
+  // A one-project share has no folders inside it to add later, so the
+  // toggle would be a control that does nothing.
+  if (tick.mode !== 'single') {
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'share-new';
+    toggle.dataset.newfolders = tick.path;
+    toggle.textContent = tick.newFolders === 'hide' ? 'NEW FOLDERS: HIDE' : 'NEW FOLDERS: SHOW';
+    row.appendChild(toggle);
+  }
 
   const remove = document.createElement('button');
   remove.type = 'button';
@@ -2459,6 +2537,18 @@ function renderShare() {
     // Moved above the row loop (T100): a cap notice printed under 500 rows
     // is not a notice - the owner would have to scroll past all of them to
     // read it.
+    // Only where a row on screen actually carries the line it talks about.
+    // The row whose choice is OPEN shows radios, not the line (SS1-D2-C01).
+    const tickedHere = share.rows.some((f) => {
+      const p = joinShare(share.path, f.name);
+      return p !== share.modeOpen && share.ticks.some((t) => t.path === p);
+    });
+    if (tickedHere) {
+      const how = document.createElement('div');
+      how.className = 'share-note';
+      how.textContent = 'Ticking shares a folder. The line under it says how; tap it to change.';
+      el.list.appendChild(how);
+    }
     const note = truncatedNote(share.total, share.rows.length);
     if (note) {
       const t = document.createElement('div');
@@ -2466,7 +2556,10 @@ function renderShare() {
       t.textContent = note;
       el.list.appendChild(t);
     }
-    for (const f of share.rows) el.list.appendChild(buildFolderRow(f, share.path, share.ticks));
+    // A ticked row comes back as [row, its "shared as" line] (Lane 18).
+    for (const f of share.rows) {
+      for (const n of [].concat(buildFolderRow(f, share.path, share.ticks))) el.list.appendChild(n);
+    }
   }
 
   el.save.disabled = share.ticks.length === 0 || share.busy;
@@ -2495,12 +2588,27 @@ function toggleTick(path, checked) {
       return;
     }
     share.error = null;
-    share.ticks.push({ path, name: shareNameFor(path), newFolders: 'show' });
+    // Lane 18 Q1: pre-set from the agent's `project` flag (a .git or a
+    // CLAUDE.md inside). A drive row carries none, and is never tickable.
+    const folder = share.path === null ? null : share.rows.find((x) => joinShare(share.path, x.name) === path);
+    share.ticks.push({
+      path, name: shareNameFor(path), newFolders: 'show', mode: folder && folder.project ? 'single' : 'container',
+    });
+    share.modeOpen = path;
   } else {
     share.error = null;
     share.ticks = share.ticks.filter((t) => t.path !== path);
+    if (share.modeOpen === path) share.modeOpen = null;
   }
   renderShare();
+}
+
+function setTickMode(path, mode) {
+  const t = share.ticks.find((x) => x.path === path);
+  if (!t) return;
+  t.mode = mode === 'single' ? 'single' : 'container';
+  renderShare();
+  refocusRadio('share-mode', path, t.mode);
 }
 
 function toggleNewFolders(path) {
@@ -2653,6 +2761,8 @@ function onSkipClick() {
 }
 
 function onShareListChange(e) {
+  const radio = e.target.closest('[data-share-mode]');
+  if (radio) { setTickMode(radio.dataset.shareMode, radio.value); return; }
   const box = e.target.closest('[data-tick]');
   if (box) toggleTick(box.dataset.tick, box.checked);
 }
@@ -2660,6 +2770,8 @@ function onShareListChange(e) {
 function onShareListClick(e) {
   const retry = e.target.closest('[data-share-retry]');
   if (retry) { reloadShareLevel(); return; }
+  const kind = e.target.closest('[data-kind-open]');
+  if (kind) { share.modeOpen = kind.dataset.kindOpen; renderShare(); return; }
   const open = e.target.closest('[data-open]');
   if (open) openPath(open.dataset.open, { push: true });
 }
@@ -2712,6 +2824,7 @@ function showFolders(initial) {
   share.parent = null;
   share.rows = [];
   share.total = 0;
+  share.modeOpen = null;
   share.errorIndex = null;
   share.error = null;
   share.busy = false;
@@ -3312,7 +3425,11 @@ async function openRootEditor(rootPath) {
   // Opened BEFORE the fetch so the screen and its history entry exist while
   // the listing is in flight - the same shape openSettingsSub gives every
   // other sub-screen, rather than a blank frame appearing later.
-  rootEdit = { path: rootPath, name: row.name, rows: null };
+  // mode / savedMode (Lane 18): the kind on screen, and the kind on disk -
+  // the switch warning is about the difference between the two.
+  const savedMode = (Array.isArray(state.shared) ? state.shared : [])
+    .some((r) => r.path === rootPath && r.mode === 'single') ? 'single' : 'container';
+  rootEdit = { path: rootPath, name: row.name, rows: null, mode: savedMode, savedMode };
   openSettingsSub('root');
   document.getElementById('root-msg').textContent = 'Reading the folder...';
 
@@ -3355,15 +3472,25 @@ function renderRootEditor() {
   const host = document.getElementById('root-rows');
   host.innerHTML = '';
 
+  const modeHost = document.getElementById('root-mode');
+  modeHost.innerHTML = '';
+  for (const n of buildModeRadios(rootEdit.name, rootEdit.mode, 'root-mode', { rootMode: '1' })) modeHost.appendChild(n);
+  const single = rootEdit.mode === 'single';
+
   const warn = document.getElementById('root-warn');
-  const words = orphanWarning(rootEdit.rows);
+  const words = single
+    ? (rootEdit.savedMode === 'single' ? null : modeSwitchWarning(rootEdit.rows, rootEdit.name))
+    : orphanWarning(rootEdit.rows);
   warn.hidden = words === null;
   if (words !== null) warn.textContent = words;
 
   // SAVE is live only once the listing has landed: saving from an empty
   // working copy would write excludes for every child at once.
-  document.getElementById('root-save').disabled = rootEdit.rows === null;
-  if (rootEdit.rows === null) return;
+  // One project has no excludes to write, so its SAVE does not wait on the
+  // listing (SS1-D2-C02); the unknown-set guard in saveRootEdit still holds.
+  document.getElementById('root-save').disabled = rootEdit.rows === null && !single;
+  // One project has no children to tick; its list stays empty.
+  if (rootEdit.rows === null || single) return;
 
   for (const row of rootEdit.rows) host.appendChild(buildRootRow(row));
 }
@@ -3424,9 +3551,9 @@ function toggleRootTick(name, ticked) {
 }
 
 async function saveRootEdit() {
-  if (rootEdit === null || rootEdit.rows === null) return;
+  if (rootEdit === null || (rootEdit.rows === null && rootEdit.mode !== 'single')) return;
   const btn = document.getElementById('root-save');
-  const body = withRootExcludes(state.shared, rootEdit.path, excludesFrom(rootEdit.rows));
+  const body = withRootExcludes(state.shared, rootEdit.path, excludesFrom(rootEdit.rows), rootEdit.mode);
   // REFUSE rather than wipe. state.shared is nulled by load() whenever
   // GET /api/acknowledge fails, and load() runs on every visibilitychange - so
   // backgrounding the app on this screen during a network blip and then tapping
@@ -3974,6 +4101,14 @@ function wireEvents() {
   document.getElementById('root-rows').addEventListener('change', (e) => {
     const box = e.target.closest('[data-root-tick]');
     if (box) toggleRootTick(box.dataset.rootTick, box.checked);
+  });
+  document.getElementById('root-mode').addEventListener('change', (e) => {
+    const radio = e.target.closest('[data-root-mode]');
+    if (radio && rootEdit !== null) {
+      rootEdit.mode = radio.value;
+      renderRootEditor();
+      refocusRadio('root-mode', null, rootEdit.mode);
+    }
   });
   document.getElementById('root-save').addEventListener('click', saveRootEdit);
   document.getElementById('root-stop').addEventListener('click', stopSharingFromEditor);

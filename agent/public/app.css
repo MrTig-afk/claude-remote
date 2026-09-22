@@ -1223,6 +1223,33 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 .share-remove { width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
+
+/* Lane 18: how a ticked folder is shared. The closed form reads as the row's
+   own sub-line (indented to the name, row-status size) but is a separate
+   button, because the row's name is already the button that goes INTO it. */
+.share-kind {
+  display: block;
+  width: calc(100% - 52px);
+  margin: -8px 0 4px 52px;
+  min-height: 28px;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+  color: var(--dim);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.share-kind-single { color: var(--accent); }
+.share-row-single .folder-chev { opacity: 0.35; }
+.share-mode { padding: 0 8px 8px 52px; }
+.share-mode.root-mode { padding: 0 0 8px; }
+.share-mode-head { font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--dim); margin: 2px 0 2px; }
+.share-mode-opt { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.share-mode-opt input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--accent); }
 .empty-action { width: 100%; }
 
 /* Moved above the row loop (T100): a cap notice printed under 500 rows is

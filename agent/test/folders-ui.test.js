@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import {
   MAX_SHARED_ROOTS, crumbSegments, sharedBody, coverageOf, driveRowState,
   truncatedNote, shareErrorMessage, applySaveResult,
-  listZoneState, missingRoots, withoutRoot, sharedToTicks, withRootExcludes,
+  listZoneState, missingRoots, withoutRoot, sharedToTicks, withRootExcludes, modeSwitchWarning,
 } from '../public/folders-ui.js';
 import { emptyDayOneTitle } from '../public/copy.js';
 import { MAX_SHARED_ROOTS as SERVER_MAX_SHARED_ROOTS } from '../shared.js';
@@ -416,4 +416,33 @@ test('editing excludes on a root that is NOT in a known set returns null', () =>
   // made the PUT succeed and saveRootEdit report a clean save while discarding
   // the owner's edit. An empty set is the simplest case of "not there".
   assert.equal(withRootExcludes([], String.raw`F:\Dev`, ['x']), null);
+});
+
+test('Lane 18 - withRootExcludes switches ONLY the target root\'s mode, and a one-project root is written with no excludes', () => {
+  const shared = [
+    { path: 'F:\Dev\Repos', mode: 'container', excludes: ['old'], new_folders: 'show' },
+    { path: 'F:\Dev\WIL', mode: 'container', excludes: ['venv'], new_folders: 'hide' },
+  ];
+  const single = withRootExcludes(shared, 'F:\Dev\WIL', ['venv'], 'single');
+  assert.deepEqual(single.shared_folders, [
+    { path: 'F:\Dev\Repos', mode: 'container', excludes: ['old'], new_folders: 'show' },
+    { path: 'F:\Dev\WIL', mode: 'single', excludes: [], new_folders: 'hide' },
+  ]);
+  const back = withRootExcludes(single.shared_folders, 'F:\Dev\WIL', ['data'], 'container');
+  assert.deepEqual(back.shared_folders[1], { path: 'F:\Dev\WIL', mode: 'container', excludes: ['data'], new_folders: 'hide' });
+  // No mode: the root keeps the kind it has.
+  assert.equal(withRootExcludes(single.shared_folders, 'F:\Dev\WIL', []).shared_folders[1].mode, 'single');
+});
+
+test('Lane 18 - modeSwitchWarning names only LISTED projects with a live session, and never blocks', () => {
+  assert.equal(modeSwitchWarning([{ name: 'a', running: false, ticked: true }], 'Repos'), null);
+  assert.equal(modeSwitchWarning([{ name: 'a', running: true, ticked: false }], 'Repos'), null);
+  assert.equal(
+    modeSwitchWarning([{ name: 'claude-remote', running: true, ticked: true }], 'Repos'),
+    'claude-remote has a session running inside Repos. Switching will not stop it; it just stops being listed.',
+  );
+  assert.match(
+    modeSwitchWarning([{ name: 'a', running: true, ticked: true }, { name: 'b', running: true, ticked: true }], 'Repos'),
+    /^2 projects have sessions running inside Repos\. Switching will not stop them/,
+  );
 });
