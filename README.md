@@ -269,6 +269,15 @@ session started from a phone gives you nothing to diagnose.
    you and offers OPEN CLAUDE FIRST, so you can ask the session for one while it
    still has its context. END ANYWAY ends the process tree; that is all it does.
 
+## FAQ
+
+**The app says "Waiting for the PC" or "Can’t reach your PC.", but Tailscale
+says Connected.**
+Fully quit the Tailscale app on the phone (swipe it away in the app switcher),
+reopen it, then reopen claude-remote. The phone's Tailscale can show Connected
+while its traffic has stopped moving; on iPhone its app may show a warning that
+"magicsock" is not running. Restarting Tailscale restarts it.
+
 ## Known limitations
 
 - No live terminal output, and no way to answer an interactive prompt from the

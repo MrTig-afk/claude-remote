@@ -167,6 +167,19 @@ tailscale serve --bg --https=8790 8790
 `https://<machine>.<tailnet>.ts.net:8790`, and the real certificate is what makes
 the service worker register and the PWA installable on the phone.
 
+**Then open that URL once yourself, before handing it over:**
+
+```powershell
+curl.exe -sS -m 120 -o NUL -w "%{http_code}`n" https://<machine>.<tailnet>.ts.net:8790/
+```
+
+Expect `200`. The certificate is issued on the FIRST connection after serve is
+turned on, and that connection can take tens of seconds. Left to the phone, it
+shows a white screen and then "server stopped responding" (measured 2026-09-22,
+iPhone, both the Safari and the Chrome home-screen app). Let this request pay
+that wait instead. `curl.exe`, not `curl`: in Windows PowerShell 5.1 `curl` is
+an alias for `Invoke-WebRequest`.
+
 To take it down again:
 
 ```powershell
