@@ -22,6 +22,17 @@ const FILE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/; // final segment: name + one ext
 const BAD_CHARS = /[%\\:]|\/\//; // percent, backslash, colon, double-slash
 const CONTROL_CHARS = /[\x00-\x1f]/;
 
+// On every static 200. The two frame headers keep the passcode screen out of
+// any other site's frame (XFO for older engines, frame-ancestors for current
+// ones); no-referrer keeps the tailnet hostname off every outbound request.
+const STATIC_HEADERS = {
+  'Cache-Control': 'no-cache',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'Referrer-Policy': 'no-referrer',
+};
+
 // The shell files the service worker precaches are what the cache key is
 // derived from. Kept in step with PRECACHE in sw.js by a test, not by hope.
 //
@@ -131,22 +142,12 @@ export function serveStatic(res, pathname) {
     } catch {
       return false;
     }
-    res.writeHead(200, {
-      'Content-Type': type,
-      'Content-Length': body.length,
-      'Cache-Control': 'no-cache',
-      'X-Content-Type-Options': 'nosniff',
-    });
+    res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, ...STATIC_HEADERS });
     res.end(body);
     return true;
   }
 
-  res.writeHead(200, {
-    'Content-Type': type,
-    'Content-Length': st.size,
-    'Cache-Control': 'no-cache',
-    'X-Content-Type-Options': 'nosniff',
-  });
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, ...STATIC_HEADERS });
   const stream = fs.createReadStream(full);
   stream.on('error', () => { res.destroy(); });
   stream.pipe(res);

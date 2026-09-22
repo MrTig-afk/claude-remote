@@ -1,0 +1,8 @@
+# Weekly update PRs for the GitHub Actions the workflows pin. The agent has
+# zero runtime dependencies and no lockfile, so there is no npm entry.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

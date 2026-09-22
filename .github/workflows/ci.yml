@@ -1,0 +1,47 @@
+# CI - runs the whole test suite on a clean Windows machine on every push to
+# main and every pull request. No tokens, no secrets.
+#
+# Windows, not Linux: the agent launches sessions through PowerShell and
+# Windows process APIs, and the suite exercises them. Keep the workflow name
+# "CI" and the job ids "ci" and "semgrep" - branch protection requires both.
+#
+# Lint and build steps are absent on purpose: the agent has no build step and
+# zero dependencies, and there is no linter this repo runs.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # Part of the suite drives headless Chrome (the iOS 16px input-zoom
+      # floor). The runner image ships Chrome under Program Files, which is
+      # where scripts/check-input-font-sizes.mjs looks; it FAILS rather than
+      # skips if Chrome is missing, so a green run means the check ran.
+      - name: Test
+        run: node --test "agent/test/**/*.test.js"
+
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v6
+      # Pinned rulesets, never --config auto: auto re-resolves the registry on
+      # every run, so a required check could go red with no code change.
+      - run: semgrep scan --config p/javascript --config p/secrets --error

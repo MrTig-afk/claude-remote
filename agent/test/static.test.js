@@ -138,6 +138,19 @@ test('every static 200 carries X-Content-Type-Options: nosniff and Cache-Control
   }
 });
 
+// The passcode screen must never render inside another site's frame, and a
+// tapped link must never carry the tailnet hostname out as a Referer. sw.js is
+// included because it is served by a separate branch.
+test('every static 200 refuses framing and sends no referrer', async () => {
+  for (const p of ['/', '/index.html', '/app.js', '/sw.js']) {
+    const res = await fetch(`${origin}${p}`);
+    assert.equal(res.status, 200, p);
+    assert.equal(res.headers.get('x-frame-options'), 'DENY', p);
+    assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'none'", p);
+    assert.equal(res.headers.get('referrer-policy'), 'no-referrer', p);
+  }
+});
+
 // --- Regression: the T27/T28/T29 surface is untouched ---
 
 test('GET /api/projects still 200 with a projects array (static did not shadow it)', async () => {

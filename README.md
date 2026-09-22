@@ -331,7 +331,8 @@ self-contained and does not need them.
 ## Contributing
 
 Contributions are welcome. For anything bigger than a small fix, open an issue
-first and wait for a reply before you start - see `CONTRIBUTING.md`.
+first and wait for a reply before you start - see `CONTRIBUTING.md`. Found a
+security hole? Report it privately, as `SECURITY.md` describes - not in an issue.
 
 `CONTRIBUTING.md` is the short version of what a change needs. `AGENTS.md` is
 the same rules written for an AI coding agent working in this repo: commands,
