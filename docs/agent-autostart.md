@@ -28,14 +28,22 @@ part that was broken.
 
 Shipped, in the repo, doing nothing until run:
 - `agent/autostart/claude-remote-agent.task.xml` — the Scheduled Task
-  definition, as a template with four placeholders filled in at register time.
-- `agent/autostart/start-agent-hidden.vbs` — a 12-line VBScript shim. A
-  Scheduled Task action cannot point straight at `node.exe` and stay hidden
-  and restart-supervised at the same time (see "Rejected alternatives"); this
-  shim is what makes both true together. It waits on node and returns node's
-  exit code, so a crash is visible to the task's own restart policy.
-- `agent/autostart/register-task.ps1` — renders the template, schema-validates
-  it via the Task Scheduler COM API, and (unless `-RenderOnly`) registers it.
+  definition, as a template with placeholders filled in at register time. Its
+  action is `conhost.exe --headless cmd.exe /s /c "... node.exe server.js >>
+  agent.log"`: headless conhost gives node a console that is never shown, and
+  cmd is there only for the log redirect. Two triggers: at logon (start now),
+  and a clock trigger every minute (start again if it died - see "Crash
+  recovery").
+- `agent/autostart/register-task.ps1` — renders the template, proves this
+  Windows honours `conhost --headless`, schema-validates the XML via the Task
+  Scheduler COM API, and (unless `-RenderOnly`) registers it. It refuses while
+  the task is running: use the next script.
+- `agent/autostart/update-agent.ps1` — the ONE way to stop, update, restart
+  and verify the agent (see "Stopping, restarting, updating").
+
+The chain used to be `wscript.exe //B start-agent-hidden.vbs`. It was replaced
+on 2026-09-23: Microsoft is disabling VBScript by default (~2027) and then
+removing it, which would have silently stopped the agent starting at logon.
 
 Not shipped, and not run by anyone but the owner: the actual
 `Register-ScheduledTask` call. No JavaScript changed — the agent already
@@ -72,63 +80,105 @@ powershell -NoProfile -File .\agent\autostart\register-task.ps1 -RenderOnly
 schtasks /Create /TN "Claude Remote Agent" /XML "$env:TEMP\claude-remote-agent.xml" /F
 ```
 
-To try it immediately, without waiting for a reboot:
+To start it immediately, without waiting for a reboot, and check it came up:
 
 ```powershell
-Start-ScheduledTask -TaskName 'Claude Remote Agent'
+powershell -NoProfile -ExecutionPolicy Bypass -File .\agent\autostart\update-agent.ps1
 ```
 
-## Verification — PARTLY MANUAL, and "the register command exited 0" is not acceptance
+Register from a NORMAL PowerShell. A task registered from an Administrator one
+is owned by Administrators and read-only to you (measured 2026-09-22), so no
+later update can pause or replace it; `update-agent.ps1` says so and prints the
+one elevated command that removes it.
 
-Automated tonight, without registering anything (all passed):
+## Stopping, restarting, updating
 
-1. `Invoke-ScriptAnalyzer -Path .\agent\autostart\register-task.ps1` — clean,
-   no errors or warnings.
-2. `register-task.ps1 -RenderOnly` — exits 0, prints the rendered path and
-   `nothing was registered`.
-3. `Get-ScheduledTask -TaskName 'Claude Remote Agent' -ErrorAction
-   SilentlyContinue` — returns nothing.
-4. The rendered XML has no leftover `{{` placeholder, and contains
-   `ExecutionTimeLimit>PT0S`.
-5. (Not part of this check.) Autostart adds no JavaScript, so the JS test
-   suite says nothing about whether it works — a green run would only mean
-   nothing else broke. It was deliberately not run as autostart verification
-   and no claim about it is made here.
-6. Shim smoke test — started `wscript.exe start-agent-hidden.vbs` directly
-   (no task involved), confirmed no window appeared, confirmed
-   `agent.log`'s last line was `Local Agent listening on
-   http://127.0.0.1:8790 (base: ...)`, confirmed by process id and
-   `Get-NetTCPConnection` that it was genuinely listening on 8790, then
-   killed it and confirmed with `tasklist` and `Get-NetTCPConnection` that
-   nothing was left behind.
+Never with `Stop-ScheduledTask` alone. It ends the task's own process
+(conhost) and node survives it, still holding the port (measured 2026-09-22:
+the task went Ready, the node pid lived on). A new agent then dies on
+EADDRINUSE while the old version keeps serving.
 
-Still manual, only possible once the owner actually registers the task and
-reboots or signs out and back in:
+`update-agent.ps1` is the only supported way, and everything else calls it:
 
-1. Register, then reboot or sign out/in.
-2. At the desk, without opening a terminal first: no console window appeared
-   at logon.
-3. `Invoke-RestMethod http://127.0.0.1:8790/api/projects` returns the project
-   list (or a `401` once the passcode ships — either proves the agent is
-   answering).
-4. `Get-ScheduledTaskInfo -TaskName 'Claude Remote Agent'` shows
-   `LastTaskResult 267009` (0x41301, "still running"). A plain `0` means the
-   task started and already exited — a FAIL dressed as success.
-5. Tail `agent.log`; the newest `listening` line is from this logon.
-6. Launch check, do not skip: from the phone (or `POST /api/sessions`
-   locally), start a session for a real project and confirm it appears in the
-   Claude app's Code tab. This is the one check that would notice a
-   scheduler environment where `claude.cmd` is not on PATH the way it is in
-   an interactive terminal.
-7. Once `tailscale serve --bg --https=8790 8790` is on:
+- no arguments: restart in place (a checkout; the repo's post-commit hook).
+- `-Source <plugin folder> -Target <install folder>`: an update (setup step 3).
+
+In order: stage the new copy beside the old one (a failed copy stops
+nothing) -> disable the task, so the every-minute trigger cannot restart the
+old copy mid-update -> kill this copy's node (and any agent `server.js` holding
+the port) -> wait until they are gone AND 127.0.0.1:<port> is free, or stop
+with nothing changed -> swap folders by rename (`<target>.prev` keeps the old
+one) -> register from the new copy and start it -> wait until the listener on
+127.0.0.1 (never "the first listener": `tailscale serve` holds the same port
+number on the tailnet addresses) is node, from the target folder, started
+after this step began, answering `/api/auth/status`. If not: put `.prev`
+back, start it, check it the same way, keep the bad copy as `.failed`, and
+exit non-zero.
+
+Open Claude Code sessions survive all of this. They are started by a
+PowerShell that exits, so they are not the agent's children (measured
+2026-09-22: a session's parent chain ends at a dead pid, never at the agent's
+node, and it stayed typeable through a 4-minute agent outage).
+
+## Crash recovery
+
+Measured 2026-09-22: the task's `RestartOnFailure` did NOT restart a killed
+agent in 270 seconds. That setting covers a task that fails to START, not a
+program that dies later. It is gone. Instead a clock trigger fires every
+minute; with `MultipleInstancesPolicy IgnoreNew` that is a no-op while the
+agent runs, and a restart once it has died. Measured 2026-09-23: killed agent
+back in 58 seconds. It has to be a clock trigger: a repetition on the logon
+trigger only starts counting at the next logon, so after an install it sat
+unarmed (measured the same night).
+
+## Verification — measured 2026-09-23, and "the register command exited 0" is not acceptance
+
+Run on the owner's PC against the live task (each step a few seconds of PWA
+downtime; open sessions untouched):
+
+1. `register-task.ps1 -RenderOnly` — the headless probe passes, the XML
+   schema-validates, nothing is registered.
+2. A fresh `update-agent.ps1 -Source <repo> -Target "<temp>\cr install test"`
+   (a path WITH SPACES) while the old checkout agent held the port: it killed
+   that agent, installed, and the new one was serving in 3 seconds.
+3. The same again: serving in 3 seconds, the previous copy kept as `.prev`.
+4. The same with a deliberately broken `server.js`: it failed to come up,
+   rolled back by itself, the good copy was serving again, the broken one kept
+   as `.failed`, exit non-zero.
+5. `update-agent.ps1` with no arguments from the repo: back on the checkout
+   in 3 seconds.
+6. Killed the agent's node by hand: back by itself in 58 seconds.
+6a. A new version that dies at once while an unrelated process grabs
+   127.0.0.1:8790 the moment the folders swap: the rollback cannot stop the
+   squatter, so it cannot start the previous version - but it still puts the
+   previous copy back in place, leaves the task ENABLED (Ready), and reports
+   both reasons. The next minute's trigger starts the previous version once
+   the port is free.
+6b. A restart where registering fails early (node.exe off PATH): reports it,
+   and the task is left enabled, not disabled.
+6c. A leftover `.prev` held open by another process: refused before
+   anything moved; the install stays intact and serving.
+7. No window appeared when conhost --headless first launched node (owner,
+   watching the desk, 2026-09-22).
+
+The first run of step 2 found a real bug: for a path with spaces the command
+line conhost hands on reads `...\cr" install "test\...`, so an exact-text
+match called the new agent "not ours" and rolled back a good update. Quotes
+are now ignored when comparing. Any Windows user name with a space would have
+hit it on every update.
+
+Still manual, only possible at a real logon:
+
+1. Reboot or sign out/in; at the desk, before opening a terminal, no console
+   window appeared.
+2. `Invoke-RestMethod http://127.0.0.1:8790/api/auth/status` answers.
+3. Launch check, do not skip: from the phone, start a session for a real
+   project and confirm it appears in the Claude app's Code tab. This is the
+   one check that would notice a scheduler environment where `claude.cmd` is
+   not on PATH the way it is in an interactive terminal.
+4. Once `tailscale serve --bg --https=8790 8790` is on:
    `https://<machine>.<tailnet>.ts.net:8790` loads after a reboot with
    nobody having started anything by hand.
-8. Restart check: `Stop-Process` the agent's `node.exe` and confirm it is
-   back within about a minute (repeat step 3). **This is the ONLY proof that
-   restart-on-failure actually works.** Nothing in this repo can verify it —
-   it needs a registered task, which is why it is your step. If the agent is
-   not back in roughly two minutes, restart-on-failure is NOT working, no
-   matter what the task's status column says.
 
 ## KNOWN LIMITATION
 
@@ -146,31 +196,34 @@ shop, not the customers who were inside it when the power went out.
 
 ## Already-running case
 
-If the owner already has an agent running from a terminal when the task
-fires, the task's own `node` hits `EADDRINUSE`, logs it, and exits 1. Task
-Scheduler retries up to three times one minute apart and then stops — the
-manually-started agent keeps serving throughout. That is the correct
-outcome; nothing needs to notice or work around it.
-
-One consequence worth knowing, because it is silent: after those three
-retries the task has GIVEN UP and will not try again until the next logon.
-So if you later close the terminal agent, nothing takes over — the PWA goes
-dead even though the task exists and looks fine. Recover without logging out:
+If the owner already has an agent running from a terminal, the task's own
+`node` hits `EADDRINUSE`, logs `port 8790 is already in use`, and exits - the
+terminal agent keeps serving. The every-minute trigger then tries again each
+minute, so the log gains a line a minute (about 1,400 a day) while it lasts;
+when the terminal agent is closed, the task takes over within a minute. For a
+long terminal session, pause it first and resume after:
 
 ```powershell
-Start-ScheduledTask -TaskName 'Claude Remote Agent'
+Disable-ScheduledTask -TaskName 'Claude Remote Agent'
+Enable-ScheduledTask  -TaskName 'Claude Remote Agent'
 ```
 
 ## Removing it
 
+Unregister first (so nothing restarts it), then end the agent yourself -
+`Stop-ScheduledTask` would leave node running. The agent is whatever listens
+on 127.0.0.1:8790 (your port, if you moved it):
+
 ```powershell
-Stop-ScheduledTask       -TaskName 'Claude Remote Agent'
 Unregister-ScheduledTask -TaskName 'Claude Remote Agent' -Confirm:$false
-Get-ScheduledTask        -TaskName 'Claude Remote Agent' -ErrorAction SilentlyContinue  # must return nothing
+Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8790 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Get-ScheduledTask    -TaskName 'Claude Remote Agent' -ErrorAction SilentlyContinue   # must return nothing
+Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8790 -State Listen -ErrorAction SilentlyContinue  # must return nothing
 ```
 
-`Stop-ScheduledTask` ends the running agent process too; nothing else is left
-behind except the log file, which is the owner's to delete. Removing the task
+Nothing else is left behind except the log file, which is the owner's to
+delete, and the install folder if setup made one. Removing the task
 does not touch `tailscale serve` — that is a separate command
 (`tailscale serve --https=8790 off`) and a separate decision.
 
@@ -186,8 +239,16 @@ does not touch `tailscale serve` — that is a separate command
   work. Not worth the risk for a saved file.
 - **`powershell.exe -WindowStyle Hidden`.** Still flashes a console window for
   a fraction of a second at every logon.
-- **Startup-folder shortcut.** Simple, but has no restart-on-failure at all,
-  which is required in the same breath as "no window."
+- **Startup-folder shortcut.** Simple, but nothing brings the agent back
+  after a crash, which is required in the same breath as "no window."
+- **A VBScript shim (`wscript //B`).** Used until 2026-09-23. Microsoft is
+  disabling VBScript by default (~2027) and then removing it.
+- **A Windows Service.** Services run in session 0: every Claude Code window
+  the agent opens would be invisible on the owner's desktop, and the whole
+  point is a session typeable at the desk as well as from the phone. Getting
+  around that means running as SYSTEM and spawning into the user's session.
+  It would also need an admin install, a stored password and a wrapper, since
+  node cannot talk to the service manager itself.
 
 ## Where the log is, and its one known ceiling
 
@@ -203,15 +264,16 @@ to reset it, and only add rotation if it ever actually grows into a problem.
 ## Security note
 
 A Scheduled Task that runs a file from this repo at every logon means write
-access to `start-agent-hidden.vbs` or `agent/server.js` is now logon
+access to `agent/server.js` (or anything it loads) is now logon
 persistence as the owner: automatic, hidden, and re-established at every
 sign-in.
 
 **That write access is currently GRANTED, not hypothetical.** Measured on
-this machine:
+this machine (2026-08-26, on the file the task then ran; every file in the
+repo inherits the same entries):
 
 ```
-> icacls agent\autostart\start-agent-hidden.vbs
+> icacls agent\autostart\<file>
     BUILTIN\Administrators:(I)(F)
     NT AUTHORITY\SYSTEM:(I)(F)
     NT AUTHORITY\Authenticated Users:(I)(M)      <-- Modify
@@ -242,7 +304,7 @@ own repo. Run the `icacls` inspection above on YOUR drive before assuming your
 ACLs match.
 
 Scope matters too: hardening `agent\autostart` alone is not enough, because
-the shim executes `agent\server.js`, which carries the same ACE.
+the task executes `agent\server.js`, which carries the same ACE.
 
 Grant first, then remove, at the repo root:
 
@@ -275,7 +337,7 @@ or joined to a domain. On a single-user personal machine it is lower priority
 
 The task runs with `LogonType InteractiveToken` and `RunLevel
 LeastPrivilege`, never elevated. No secret, token or passcode appears
-anywhere in the XML, the shim, the script, or the log. The agent's bind stays
+anywhere in the XML, the scripts, or the log. The agent's bind stays
 `127.0.0.1:8790` — nothing here changes what the tailnet can reach directly.
 
 ## If the agent's bind ever changes

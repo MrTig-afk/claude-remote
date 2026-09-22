@@ -3,6 +3,8 @@
 Registers (or, with -RenderOnly, just renders and schema-validates) the
 Scheduled Task that starts the claude-remote Local Agent at logon.
 See docs/agent-autostart.md for what this does and how to undo it.
+To (re)start the agent, run update-agent.ps1 beside this file: it stops the
+old one properly, registers, starts and checks the new one.
 #>
 [CmdletBinding()]
 param(
@@ -15,41 +17,56 @@ $ErrorActionPreference = 'Stop'
 
 $agentDir = Split-Path -Parent $PSScriptRoot
 $serverPath = Join-Path $agentDir 'server.js'
-$shimPath = Join-Path $PSScriptRoot 'start-agent-hidden.vbs'
 $templatePath = Join-Path $PSScriptRoot 'claude-remote-agent.task.xml'
+$dataDir = Join-Path $env:USERPROFILE '.claude\plugins\data\claude-remote-claude-remote'
+$logFile = Join-Path $dataDir 'agent.log'
 
 if (-not (Test-Path -LiteralPath $serverPath)) {
     throw "Cannot find the agent entry point at '$serverPath' - is this script still inside agent/autostart/?"
 }
-if (-not (Test-Path -LiteralPath $shimPath)) {
-    throw "Cannot find the hidden-launch shim at '$shimPath'."
-}
 
 # node.exe must already be on PATH - the same way the owner runs the agent
 # today. The resolved path below is reported only; the task itself
-# resolves node.exe from its own PATH at run time (see start-agent-hidden.vbs).
+# resolves node.exe from its own PATH at run time.
 $nodeCmd = Get-Command node.exe -ErrorAction SilentlyContinue
 if (-not $nodeCmd) {
     throw 'node.exe is not on PATH - the task would start and immediately fail.'
 }
 
-# VBScript hosting is a Feature-on-Demand on current Windows and is on a
-# deprecation path - fail with a clear message now rather than a mystery
-# "file not found" from Task Scheduler in a year.
-$wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
-if (-not (Test-Path -LiteralPath $wscript)) {
-    throw "wscript.exe not found at '$wscript' - VBScript hosting may be disabled on this machine."
+$conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
+if (-not (Test-Path -LiteralPath $conhost)) {
+    throw "conhost.exe not found at '$conhost'."
 }
+
+# --headless is undocumented, so prove this Windows honours it before
+# handing it to the scheduler: it must run the command it is given. Without
+# the flag's support the task would start nothing, silently, at every logon.
+$probe = Join-Path $env:TEMP "claude-remote-headless-probe-$PID"
+Remove-Item -LiteralPath $probe -ErrorAction SilentlyContinue
+$p = Start-Process -FilePath $conhost -PassThru -ArgumentList "--headless cmd.exe /c type nul > `"$probe`""
+$null = $p.WaitForExit(10000)
+if (-not (Test-Path -LiteralPath $probe)) {
+    throw "conhost.exe --headless did not run its command on this Windows - the agent cannot be started hidden here."
+}
+Remove-Item -LiteralPath $probe
 
 $userId = "$env:USERDOMAIN\$env:USERNAME"
 
-# .Replace() (literal string replace, not -replace/regex) so backslashes in
-# the Windows paths are substituted verbatim with no escaping needed.
+# cmd /s /c "<...>": /s strips only the outer quotes and takes the rest
+# verbatim, the one form that survives paths with spaces. md creates the
+# data dir on a first-ever run (2>nul swallows "already exists").
+$arguments = '--headless cmd.exe /s /c "md "' + $dataDir + '" 2>nul & node.exe "' +
+    $serverPath + '" 1>>"' + $logFile + '" 2>&1"'
+
+# Every value is XML-escaped: the arguments carry & and ", and a path may too.
+# .Replace() (literal, not -replace) so backslashes need no escaping.
+$esc = { param($s) [System.Security.SecurityElement]::Escape($s) }
 $rendered = Get-Content -LiteralPath $templatePath -Raw
-$rendered = $rendered.Replace('{{USER_ID}}', $userId)
-$rendered = $rendered.Replace('{{WSCRIPT}}', $wscript)
-$rendered = $rendered.Replace('{{SHIM}}', $shimPath)
-$rendered = $rendered.Replace('{{AGENT_DIR}}', $agentDir)
+$rendered = $rendered.Replace('{{USER_ID}}', (& $esc $userId))
+$rendered = $rendered.Replace('{{CONHOST}}', (& $esc $conhost))
+$rendered = $rendered.Replace('{{ARGUMENTS}}', (& $esc $arguments))
+$rendered = $rendered.Replace('{{AGENT_DIR}}', (& $esc $agentDir))
+$rendered = $rendered.Replace('{{START}}', (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss'))
 
 if ($rendered -match '\{\{') {
     throw 'Template still contains an unsubstituted {{PLACEHOLDER}} after rendering - refusing to hand this to the scheduler.'
@@ -66,8 +83,6 @@ $svc.Connect()
 $def = $svc.NewTask(0)
 $def.XmlText = $rendered
 
-$logFile = Join-Path $env:USERPROFILE '.claude\plugins\data\claude-remote-claude-remote\agent.log'
-
 if ($env:CLAUDE_REMOTE_AGENT_PORT) {
     Write-Warning "CLAUDE_REMOTE_AGENT_PORT is set to '$($env:CLAUDE_REMOTE_AGENT_PORT)' in this environment. The task inherits the user environment, so a stale value here would move the agent off port 8790 and silently break the tailscale serve mapping."
 }
@@ -79,17 +94,13 @@ if ($RenderOnly) {
     return
 }
 
-# Re-registering while an instance is running leaves the OLD agent process
-# alive and unsupervised - the new definition does not adopt it, and it keeps
-# the port, so the next start fails with EADDRINUSE for a reason nobody can
-# see. Stop it first, deliberately, rather than letting -Force paper over it.
+# Re-registering over a running instance would leave the old agent alive and
+# unsupervised, holding the port. Stop-ScheduledTask cannot fix that - it
+# ends conhost and node survives it (measured 2026-09-22) - so refuse, and
+# point at the script that stops it properly.
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($existing) {
-    Write-Output "Task '$TaskName' already exists - stopping it before re-registering."
-    if ($existing.State -eq 'Running') {
-        Stop-ScheduledTask -TaskName $TaskName
-        Write-Output '  stopped the running instance.'
-    }
+if ($existing -and $existing.State -eq 'Running') {
+    throw "Task '$TaskName' is running. Use update-agent.ps1 (beside this script), which stops the agent before re-registering it."
 }
 
 Register-ScheduledTask -TaskName $TaskName -Xml $rendered -Force | Out-Null
@@ -98,17 +109,6 @@ Write-Output "Registered scheduled task: $TaskName"
 Write-Output "node.exe resolved to: $($nodeCmd.Source)"
 Write-Output "Agent log file: $logFile"
 Write-Output ''
-Write-Output 'Registering does NOT start it - the trigger is at logon. Start it now:'
-Write-Output "  Start-ScheduledTask -TaskName '$TaskName'"
-Write-Output ''
-Write-Output 'Verify (docs/agent-autostart.md has the full manual check):'
-Write-Output "  Get-ScheduledTaskInfo -TaskName '$TaskName'"
-Write-Output "  Get-Content `"$logFile`" -Tail 5"
-Write-Output ''
-Write-Output 'LastTaskResult 267009 means RUNNING, which is what you want here.'
-Write-Output 'A 0 means the agent EXITED - that is a failure dressed as success.'
-Write-Output ''
-Write-Output 'To remove it:'
-Write-Output "  Stop-ScheduledTask       -TaskName '$TaskName'"
-Write-Output "  Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
-Write-Output "  Get-ScheduledTask        -TaskName '$TaskName' -ErrorAction SilentlyContinue  # must return nothing"
+Write-Output 'Registering does NOT start it. Start it, and check it came up, with:'
+Write-Output "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\update-agent.ps1`""
+Write-Output 'To remove it: docs/agent-autostart.md, "Removing it".'

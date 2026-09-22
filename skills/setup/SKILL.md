@@ -99,54 +99,40 @@ if (-not $src -or -not (Test-Path "$src\agent\server.js")) {
 ```
 
 The throw is load-bearing: with an empty `$src`, `"$src\agent"` is `\agent` at
-the root of the current drive, and the `/MIR` below would copy whatever is
+the root of the current drive, and the install below would copy whatever is
 there and register ITS script to run at every logon.
 
-Stop the running agent if there is one, copy, then register from the COPY and
-start it:
+Then install it. One script does the whole update - run the copy that ships
+with the NEW version, from the plugin folder:
 
 ```powershell
-$dst = Join-Path $env:LOCALAPPDATA 'claude-remote'
-$port = if ($env:CLAUDE_REMOTE_AGENT_PORT) { $env:CLAUDE_REMOTE_AGENT_PORT } else { '8790' }
-$holder = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess
-Stop-ScheduledTask -TaskName 'Claude Remote Agent' -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-    Where-Object { $_.CommandLine -and ($_.CommandLine.Contains("$dst\agent\server.js") -or
-                   ($holder -contains $_.ProcessId -and $_.CommandLine -match '\\agent\\server\.js')) } |
-    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
-robocopy "$src\agent" "$dst\agent" /MIR /XD "$src\agent\test" /NFL /NDL /NJH /NJS
-if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
-Copy-Item "$src\release-notes.json" $dst -Force
-powershell -NoProfile -ExecutionPolicy Bypass -File "$dst\agent\autostart\register-task.ps1"
-if ($LASTEXITCODE -ne 0) { throw "register-task.ps1 failed ($LASTEXITCODE)" }
-Start-ScheduledTask -TaskName 'Claude Remote Agent'
-Start-Sleep 3
-$now = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -First 1
-$cmd = if ($now) { (Get-CimInstance Win32_Process -Filter "ProcessId=$now").CommandLine }
-if (-not $cmd -or -not $cmd.Contains("$dst\agent\server.js")) {
-    throw "port $port is not served by the copied agent - check agent.log"
-}
+powershell -NoProfile -ExecutionPolicy Bypass -File "$src\agent\autostart\update-agent.ps1" -Source $src -Target (Join-Path $env:LOCALAPPDATA 'claude-remote')
+if ($LASTEXITCODE -ne 0) { throw "update-agent.ps1 failed ($LASTEXITCODE) - read its message above" }
 ```
 
-The node kill is not redundant: `Stop-ScheduledTask` leaves the agent's
-`node.exe` running (measured 2026-09-22 - the pid survived and the task went
-Ready), and an old node still holding the port means the new version never
-runs. It stops the copy's own node, plus whichever node holds the agent port
-running an agent `server.js` - an agent from an older git-clone setup, which
-would otherwise keep the port while the copy dies on EADDRINUSE. Nothing else
-is touched. The last check proves the port is now served by the copy, so an
-old agent can never pass for the new one.
+What it does, so you can tell the owner: copies the new version beside the
+old one first (a failed copy stops nothing), stops the agent, waits until it
+is really gone, swaps the folders, registers the logon task from the new copy,
+starts it, and checks that the process listening on 127.0.0.1 is the new
+agent and answers. If the new version does not come up, it puts the previous
+one back, starts that, and exits non-zero saying so - the phone keeps working.
+The previous copy stays beside it as `claude-remote.prev`, a failed one as
+`claude-remote.failed`. Your passcode and settings are NOT in these folders
+(they live under `.claude\plugins\data\claude-remote-claude-remote`), so an
+update never touches them. Open Claude Code sessions are not touched either:
+they are not children of the agent.
+
+If it says the task **was registered from an Administrator PowerShell**, an
+older setup ran elevated and this user may not change that task. Tell the owner
+to run the one command it prints in an Administrator PowerShell, then run the
+block above again. Do not try to elevate yourself.
+
 `CLAUDE_PLUGIN_ROOT` is preferred over `plugin list` because it names the copy
 Claude Code actually loaded; a plugin installed at two scopes with different
 folders is refused rather than guessed at.
 `-ExecutionPolicy Bypass` because a stock Windows client blocks running a
 `.ps1` by default, and this must not depend on the machine's policy. Its exit
 code is checked because a native command's failure does not throw.
-`/MIR` makes the copy match exactly, deleting files a newer version dropped;
-it is only ever pointed at `$dst`. robocopy exits 0-7 on success, 8 and up on
-failure. Your passcode and settings are NOT in this folder (they live under
-`.claude\plugins\data\claude-remote-claude-remote`), so an update never
-touches them.
 
 The agent listens on `http://127.0.0.1:8790` and nothing else. To change the
 port set `CLAUDE_REMOTE_AGENT_PORT`; if you do, the serve command in step 5 has
