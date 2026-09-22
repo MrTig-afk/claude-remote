@@ -512,6 +512,8 @@ test('C3 - every items line and every top-level string pins to its reviewed lite
   assert.deepEqual(copy.SECTIONS[0].items, [
     'The folders you pick, and the names of folders inside them.',
     'While you are choosing folders, folder names on your other drives.',
+    // Owner-approved 2026-09-23 (Artifact sequence 9, Lane 18 Q2).
+    'Whether a folder holds a .git or CLAUDE.md, to suggest how to share it.',
   ]);
   assert.deepEqual(copy.SECTIONS[1].items, [
     'The contents of your files. It never opens them.',

@@ -413,7 +413,7 @@ export function excludesFrom(rows) {
  * saving one folder's selection must not rewrite a sibling's mode or lose its
  * own excludes. A root this app does not hold is returned unchanged.
  */
-export function withRootExcludes(shared, path, excludes) {
+export function withRootExcludes(shared, path, excludes, mode) {
   // NULL IN, NULL OUT, for the same reason as withoutRoot above: an unknown
   // shared set must never be written out as an empty one.
   if (!Array.isArray(shared)) return null;
@@ -426,16 +426,35 @@ export function withRootExcludes(shared, path, excludes) {
   // whenever the set is refreshed between opening the editor and saving and no
   // longer holds this root. "Not found" and "done" must not look alike.
   if (!shared.some((r) => pathKey(r.path) === target)) return null;
+  // `mode` (Lane 18) changes the TARGET root's kind when given; absent keeps
+  // it. A one-project root has no children, so its excludes are written empty.
   return {
-    shared_folders: shared.map((r) => ({
-      path: r.path,
-      mode: r.mode === 'single' ? 'single' : 'container',
-      excludes: pathKey(r.path) === target
-        ? [...excludes]
-        : (Array.isArray(r.excludes) ? r.excludes : []),
-      new_folders: r.new_folders === 'hide' ? 'hide' : 'show',
-    })),
+    shared_folders: shared.map((r) => {
+      const isTarget = pathKey(r.path) === target;
+      const m = isTarget && mode ? mode : r.mode;
+      const single = m === 'single';
+      return {
+        path: r.path,
+        mode: single ? 'single' : 'container',
+        excludes: isTarget
+          ? (single ? [] : [...excludes])
+          : (Array.isArray(r.excludes) ? r.excludes : []),
+        new_folders: r.new_folders === 'hide' ? 'hide' : 'show',
+      };
+    }),
   };
+}
+
+/**
+ * Lane 18 step 5: switching a folder of projects to ONE project stops listing
+ * every project inside it. Warns, never blocks - a session keeps running.
+ * `rows` are the editor's child rows; only listed (ticked) running ones count.
+ */
+export function modeSwitchWarning(rows, folderName) {
+  const hit = (rows || []).filter((r) => r.running && r.ticked).map((r) => r.name);
+  if (hit.length === 0) return null;
+  if (hit.length === 1) return `${hit[0]} has a session running inside ${folderName}. Switching will not stop it; it just stops being listed.`;
+  return `${hit.length} projects have sessions running inside ${folderName}. Switching will not stop them; they just stop being listed.`;
 }
 
 /**

@@ -186,6 +186,10 @@ function defaultDirProbe(childPath) {
   }
 }
 
+function defaultProjectProbe(childPath) {
+  return fs.existsSync(path.join(childPath, '.git')) || fs.existsSync(path.join(childPath, 'CLAUDE.md'));
+}
+
 /**
  * One helper, used by both the lstat and the readdir catch. By err.code
  * only - never an OS error string or a filesystem path reaches the response.
@@ -346,7 +350,7 @@ async function cachedDrives(ctx) {
  */
 export async function listFolders(ctx, rawPath) {
   try {
-    const { dirProbe = defaultDirProbe } = ctx;
+    const { dirProbe = defaultDirProbe, projectProbe = defaultProjectProbe } = ctx;
 
     // Cheap shape check BEFORE the drive cache: a request that is rejectable
     // on shape alone (missing ?path=, UNC, %, ...) must not trigger a
@@ -400,7 +404,9 @@ export async function listFolders(ctx, rawPath) {
     // false for a junction or symlink on Windows - the same free link
     // exclusion listProjects documents, so a link is neither listed as a
     // folder nor probed. FILES ARE NEVER COUNTED, NEVER RETURNED, NEVER
-    // NAMED - the accept screen's promise covers folder names only.
+    // NAMED. The one file-level fact this route gives out is `project`
+    // below: whether two fixed names EXIST, which the accept screen states
+    // since 2026-09-23 ("Whether a folder holds a .git or CLAUDE.md").
     const names = [];
     for (const dirent of entries) {
       if (!dirent.isDirectory()) continue;
@@ -420,10 +426,14 @@ export async function listFolders(ctx, rawPath) {
 
     // 6.6 - readable, computed AFTER the slice: at most MAX_FOLDERS probes,
     // not `total`.
-    const folders = sliced.map((name) => ({
-      name,
-      readable: dirProbe(path.join(real, name)),
-    }));
+    // `project` pre-sets how the picker shares a newly ticked folder (Lane 18):
+    // true when it holds a .git (a folder, or the file a worktree has) or a
+    // CLAUDE.md. Existence only - nothing is opened or read.
+    const folders = sliced.map((name) => {
+      const child = path.join(real, name);
+      const readable = dirProbe(child);
+      return { name, readable, project: readable && projectProbe(child) };
+    });
 
     return {
       ok: true,

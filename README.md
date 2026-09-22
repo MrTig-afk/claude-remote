@@ -128,7 +128,10 @@ Setup walks you through the rest, in this order, and **the order matters**:
    every logon. It listens on `http://127.0.0.1:8790` and nothing else.
 3. It stops and hands you `http://127.0.0.1:8790`. Open it **at the desk**, set
    a six-digit passcode, then choose which folders the app may see. Nothing is
-   shared until you pick it.
+   shared until you pick it. Each folder is shared either as **one project**
+   (a session starts in that folder) or as **a folder of projects** (each
+   folder inside it is one). The app suggests one project when the folder holds
+   a `.git` or a `CLAUDE.md`; you can change it then, or later in Settings.
 4. **Only then** does it make the agent reachable from your tailnet, with
    `tailscale serve`. The app is at `https://<machine>.<tailnet>.ts.net:8790`.
 
