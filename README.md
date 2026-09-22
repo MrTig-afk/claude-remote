@@ -143,7 +143,8 @@ Good to know:
   `docs/tailscale-https.md`.
 - The agent starts at logon, not at boot: a PC sitting at the lock screen after
   a restart has **no agent running**, and the phone cannot reach it until you
-  sign in. See `docs/agent-autostart.md` for why that trade was made.
+  sign in. See `docs/agent-autostart.md` for why that trade was made. Once you
+  are signed in, an agent that crashes is started again within a minute.
 - Port 8790 is the default, not a requirement: set a user environment variable
   `CLAUDE_REMOTE_AGENT_PORT` to move it, and tell setup, so the serve command
   uses the same number.
@@ -158,8 +159,9 @@ auto-update**. To update by hand instead, run
 A plugin update does not reach the running agent by itself. When the plugin is
 newer than the copy that runs, the next Claude Code session you start says
 **"Claude Remote has an update. Run /claude-remote:setup to install it on this
-PC."** Run it: setup copies the new version over and restarts the agent. Your
-passcode and settings are kept.
+PC."** Run it: setup installs the new version, restarts the agent and checks
+it came up. If it did not, setup puts the previous version back, so the phone
+keeps working. Your passcode, settings and open sessions are kept.
 
 ## What launching a session does to your environment
 

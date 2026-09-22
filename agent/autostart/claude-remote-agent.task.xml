@@ -1,13 +1,32 @@
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Author>{{USER_ID}}</Author>
-    <Description>Starts the claude-remote Local Agent (node agent/server.js) at logon, with no console window, and restarts it if it fails. Registered by agent/autostart/register-task.ps1. Remove with: Unregister-ScheduledTask -TaskName 'Claude Remote Agent' -Confirm:$false</Description>
+    <Description>Starts the claude-remote Local Agent (node agent/server.js) at logon, with no console window, and starts it again within a minute if it stops. Registered by agent/autostart/register-task.ps1. Remove with: Unregister-ScheduledTask -TaskName 'Claude Remote Agent' -Confirm:$false</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
       <Enabled>true</Enabled>
       <UserId>{{USER_ID}}</UserId>
     </LogonTrigger>
+    <!-- THIS is the crash recovery, not RestartOnFailure. Measured
+         2026-09-22: with RestartOnFailure set, a killed agent was NOT
+         restarted in 270 seconds - that setting only covers a task that
+         fails to START. Firing every minute with IgnoreNew (below) is a
+         no-op while the agent runs and a restart once it has died.
+         A clock trigger, not a repetition on the logon trigger: that one
+         only starts counting at the next logon, so after an install or an
+         update it sat unarmed (measured, same night). No Duration = forever;
+         with InteractiveToken it only runs while the user is logged on.
+         Anything that stops the agent on purpose must Disable-ScheduledTask
+         first, or this starts it again: update-agent.ps1 does. -->
+    <TimeTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>{{START}}</StartBoundary>
+      <Repetition>
+        <Interval>PT1M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -20,8 +39,9 @@
     </Principal>
   </Principals>
   <Settings>
-    <!-- IgnoreNew: a second logon trigger (fast user switch, RDP) must not
-         start a second agent competing for the same port. -->
+    <!-- IgnoreNew: a second logon trigger (fast user switch, RDP) or the
+         once-a-minute repetition must not start a second agent competing
+         for the same port. -->
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <!-- Both battery settings default to true. Left at the default, the
          task would refuse to start, or would be killed, on battery -
@@ -47,26 +67,19 @@
          death this task exists to prevent. -->
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <Priority>7</Priority>
-    <!-- Three one-minute retries, then give up. A genuine crash loop (the
-         port permanently taken) stops thrashing after three minutes
-         instead of retrying forever; raise the count if a real incident
-         ever exhausts it. -->
-    <RestartOnFailure>
-      <Interval>PT1M</Interval>
-      <Count>3</Count>
-    </RestartOnFailure>
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{{WSCRIPT}}</Command>
-      <!-- //B is batch mode and it is load-bearing, not tidiness. Without it,
-           wscript.exe given a missing or moved script pops a MODAL dialog on
-           a desktop nobody is looking at and never exits. The task would then
-           sit forever in the running state, write nothing to the log, and
-           report LastTaskResult 267009 - the same code that means "healthy" -
-           while the agent is dead. Batch mode suppresses the dialog, exits
-           nonzero, and lets the restart policy actually see the failure. -->
-      <Arguments>//B "{{SHIM}}"</Arguments>
+      <!-- conhost.exe - headless: node gets a console that is never shown.
+           It replaced a VBScript shim, which Microsoft is disabling by
+           default (~2027) and then removing. Measured 2026-09-22: no window,
+           and conhost exits when node does, so the task shows Ready and the
+           repetition above can start it again. Stop-ScheduledTask ends
+           conhost only and node survives it (measured): stop the agent with
+           update-agent.ps1, never with the task. cmd /s /c is there for the
+           log redirect and the data-folder md. -->
+      <Command>{{CONHOST}}</Command>
+      <Arguments>{{ARGUMENTS}}</Arguments>
       <WorkingDirectory>{{AGENT_DIR}}</WorkingDirectory>
     </Exec>
   </Actions>
