@@ -111,48 +111,55 @@ keeping.
 Windows, Tailscale installed and logged in, Node >= 24.2.0, and the Claude Code
 CLI on `PATH`.
 
-## Setup
+## Install
 
-**The order matters.** Step 4 is where you set the passcode; step 5 is where the
-agent becomes reachable. Never do 5 before 4.
+In Claude Code, at the PC:
 
-1. **Check Tailscale is up.** `tailscale status`. If it is not, fix that first -
-   the alternatives (a port forward, an unscoped firewall rule) are worse than
-   not running this at all.
+```
+/plugin marketplace add MrTig-afk/claude-remote
+/plugin install claude-remote@claude-remote
+/claude-remote:setup
+```
 
-2. **Start the agent.**
+Setup walks you through the rest, in this order, and **the order matters**:
 
-   ```powershell
-   node agent/server.js
-   ```
+1. It checks Tailscale is up, and that Node and Claude Code are installed.
+2. It copies the agent to `%LOCALAPPDATA%\claude-remote` and has it start at
+   every logon. It listens on `http://127.0.0.1:8790` and nothing else.
+3. It stops and hands you `http://127.0.0.1:8790`. Open it **at the desk**, set
+   a six-digit passcode, then choose which folders the app may see. Nothing is
+   shared until you pick it.
+4. **Only then** does it make the agent reachable from your tailnet, with
+   `tailscale serve`. The app is at `https://<machine>.<tailnet>.ts.net:8790`.
 
-   It listens on `http://127.0.0.1:8790` and nothing else. Port 8790 is the
-   default, not a requirement: set `CLAUDE_REMOTE_AGENT_PORT` to move it, and
-   use the same number in both positions of the serve command in step 5.
+On the phone, open that address in Safari, tap Share, then **Add to Home
+Screen**.
 
-3. **Optional - have it start itself at logon.** Register the scheduled task;
-   see `docs/agent-autostart.md`. Note the limitation there: an at-logon trigger
-   means a cold boot sitting at the lock screen has **no agent running**, and
-   the phone gets a connection error with no explanation. Running it at boot as
-   SYSTEM would fix that and break the profile it needs, so this is a real
-   trade, not a bug.
+Good to know:
 
-4. **Open `http://127.0.0.1:8790` at the desk.** Set a six-digit passcode, then
-   choose which folders the app may see. Nothing is shared until you pick it.
+- No firewall rule is needed. Under serve the agent never leaves loopback, and
+  loopback traffic does not traverse the firewall at all. Take it off the
+  tailnet with `tailscale serve --https=8790 off`; see
+  `docs/tailscale-https.md`.
+- The agent starts at logon, not at boot: a PC sitting at the lock screen after
+  a restart has **no agent running**, and the phone cannot reach it until you
+  sign in. See `docs/agent-autostart.md` for why that trade was made.
+- Port 8790 is the default, not a requirement: set a user environment variable
+  `CLAUDE_REMOTE_AGENT_PORT` to move it, and tell setup, so the serve command
+  uses the same number.
 
-5. **Only now, expose it:**
+## Updates
 
-   ```powershell
-   tailscale serve --bg --https=8790 8790
-   ```
+Claude Code does not auto-update plugins from this marketplace unless you turn
+it on: `/plugin` → **Marketplaces** → **claude-remote** → **Enable
+auto-update**. To update by hand instead, run
+`claude plugin update claude-remote@claude-remote`.
 
-   `--bg` survives a reboot and the certificate renews itself. The app is then
-   at `https://<machine>.<tailnet>.ts.net:8790` - a real certificate, which is
-   what makes it installable on the phone. Take it down with
-   `tailscale serve --https=8790 off`. See `docs/tailscale-https.md`.
-
-No firewall rule is needed. Under serve the agent never leaves loopback, and
-loopback traffic does not traverse the firewall at all.
+A plugin update does not reach the running agent by itself. When the plugin is
+newer than the copy that runs, the next Claude Code session you start says
+**"Claude Remote has an update. Run /claude-remote:setup to install it on this
+PC."** Run it: setup copies the new version over and restarts the agent. Your
+passcode and settings are kept.
 
 ## What launching a session does to your environment
 
@@ -278,8 +285,43 @@ reopen it, then reopen claude-remote. The phone's Tailscale can show Connected
 while its traffic has stopped moving; on iPhone its app may show a warning that
 "magicsock" is not running. Restarting Tailscale restarts it.
 
+**Doesn't Claude Code already have Remote Control?**
+It does, and this is built on it: every session it starts runs with
+`--remote-control`. What Remote Control needs is a session already running,
+which means someone started it at the desk. This starts one with nobody there,
+in the folder you pick from the phone.
+
+**Couldn't one idle Remote Control session start the others?**
+Close, and it would work. This keeps a plain button instead: no session sitting
+idle to take the request, and nothing to talk to before a project opens.
+
+**How is this different from Dispatch?**
+Both run Claude on your own machine. The difference is the start: here there is
+no desk step, and you choose the project folder before the session exists.
+
+**Why not SSH into the PC from the phone?**
+That was the first design. A terminal on a phone screen is the wrong tool for
+driving Claude, and the Claude app already does that part well. This only has
+to start the session.
+
+**Why not a Discord or Telegram bot?**
+Those are valid, and more general. This is narrower on purpose: one button, no
+chat service in the middle, nothing leaving your tailnet.
+
+**A session is waiting for me to approve something. Can I answer from the phone?**
+Not from this app: it has no terminal. Answer it in the Claude app, where you
+drive the session. To be asked less while you are away, set the project's
+permissions before you leave.
+
+**Is your own Claude setup included?**
+No. My rules and notes are personal and stay private. The plugin is
+self-contained and does not need them.
+
 ## Known limitations
 
+- Windows only.
+- The PC has to be on, logged in (the agent starts at logon) and on Tailscale.
+- One six-digit passcode is the only authentication (see the threat model above).
 - No live terminal output, and no way to answer an interactive prompt from the
   phone. A session that stalls on a prompt shows as stalled, not as why.
 - Nothing reaps sessions or their MCP children automatically. On a memory-tight

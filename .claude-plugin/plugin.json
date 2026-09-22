@@ -1,7 +1,6 @@
 {
   "name": "claude-remote",
   "description": "Start a Claude Code session on your Windows PC from your phone, over your Tailscale network. A small local agent serves a PWA; the session it starts appears in the Claude app's Code tab and you drive it from there.",
-  "version": "1.0.0",
   "author": {
     "name": "Kaushik Narumanchi"
   },

@@ -1,0 +1,17 @@
+{
+  "description": "Tell the user when the installed plugin carries a newer Claude Remote agent than the copy that runs.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/check-update.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

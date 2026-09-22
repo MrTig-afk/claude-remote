@@ -45,6 +45,11 @@ already running (see "Already-running case" below) without any code change.
 
 ## Registering it
 
+A plugin install does not do this by hand: `/claude-remote:setup` copies the
+agent to `%LOCALAPPDATA%\claude-remote` and registers the task from that copy
+(see `skills/setup/SKILL.md`, step 3). The steps below are for running the
+agent from a checkout of this repo.
+
 From the repo root, in a normal (non-elevated) PowerShell window:
 
 ```powershell
@@ -219,6 +224,12 @@ this task did, and it applies to the whole repo. But autostart is what converts
 principal can run code as the owner at every logon, with no window and no
 prompt". Worth closing:
 
+A plugin install does not need this: the copy setup makes lives under
+`%LOCALAPPDATA%`, which by default grants only you, `SYSTEM` and
+`Administrators` (measured 2026-09-22 with `icacls $env:LOCALAPPDATA`; check
+yours). It applies to an agent run from a checkout on a drive like the one
+above.
+
 **Read the whole of this before running any of it — the obvious version of
 these commands locks you out of your own repo.**
 
@@ -236,7 +247,7 @@ the shim executes `agent\server.js`, which carries the same ACE.
 Grant first, then remove, at the repo root:
 
 ```powershell
-$repo = 'C:\path\to\claude-remote'   # your clone, not the plugin cache
+$repo = 'C:\path\to\claude-remote'   # a checkout; never the plugin cache
 
 # 1. Explicit ACE for yourself FIRST. Without this, step 3 removes your
 #    only write access to the repo.

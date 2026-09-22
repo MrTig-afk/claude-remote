@@ -54,29 +54,105 @@ polyfill.
 Note `claude.cmd`, not `claude`. On Windows the bare name resolves to
 `claude.ps1` first, which Start-Process cannot execute and which fails silently.
 
-## 3. Start the agent, and make it start itself
+## 3. Copy the agent to its permanent home, and make it start itself
 
-From the repo root. Every relative path in this skill is relative to it.
+The plugin's own folder is no place to run the agent from: it is named after
+the version (`...\plugins\cache\claude-remote\claude-remote\<version>\`) and
+moves on every plugin update, so a scheduled task pointing into it would
+silently stop starting. Setup copies the agent to a folder that never moves,
+`%LOCALAPPDATA%\claude-remote`, and autostart runs it from there. No git clone.
 
-A marketplace install does not give you a stable one. `claude plugin list
---json` reports its `installPath` (`claude plugin details` does NOT print a
-path - measured), but that path is VERSION-SCOPED,
-`...\cache\<marketplace>\<plugin>\<version>\`, and moves on every `claude
-plugin update`. A scheduled task registered from it would silently point at a
-directory that no longer exists. So for the agent: `git clone` the repo to a
-path you choose, and run it from there.
+**This step is also the update.** A plugin update changes nothing on its own;
+the copy keeps running until this step runs again. The plugin's SessionStart
+hook compares the two and says "Claude Remote has an update" when they differ.
+Decide which run this is BEFORE copying anything. It is an update only when
+all three already hold:
 
 ```powershell
-node agent/server.js
+$port = if ($env:CLAUDE_REMOTE_AGENT_PORT) { $env:CLAUDE_REMOTE_AGENT_PORT } else { '8790' }
+Test-Path "$env:LOCALAPPDATA\claude-remote\agent\server.js"
+(Invoke-RestMethod "http://127.0.0.1:$port/api/auth/status").configured   # True = passcode set
+tailscale serve status   # lists :$port
 ```
 
-It listens on `http://127.0.0.1:8790` and nothing else. To change the port set
-`CLAUDE_REMOTE_AGENT_PORT`; if you do, the serve command in step 5 has to use
-the same number in both places.
+Then do this step, confirm step 4's URL answers, and stop - the passcode and
+the tailnet exposure are already in place. If any one fails, it is a first run
+(or one abandoned at step 4): do every step. Step 3 is safe to repeat.
 
-For it to survive a reboot, register the scheduled task - the full procedure,
-including the known limitation that an at-logon trigger means a cold boot
-sitting at the lock screen has no agent, is in `docs/agent-autostart.md`.
+Find the plugin's folder (`claude plugin details` does NOT print a path -
+measured; `list --json` does):
+
+```powershell
+$src = $env:CLAUDE_PLUGIN_ROOT   # the copy Claude Code actually loaded, when set
+if (-not $src) {
+    $paths = @(claude.cmd plugin list --json | ConvertFrom-Json |
+               Where-Object id -eq 'claude-remote@claude-remote' |
+               ForEach-Object installPath | Select-Object -Unique)
+    if ($paths.Count -gt 1) {
+        throw "claude-remote is installed at $($paths.Count) scopes - uninstall all but one, then re-run setup"
+    }
+    $src = $paths | Select-Object -First 1
+}
+if (-not $src -or -not (Test-Path "$src\agent\server.js")) {
+    throw 'claude-remote plugin folder not found - is the plugin installed?'
+}
+```
+
+The throw is load-bearing: with an empty `$src`, `"$src\agent"` is `\agent` at
+the root of the current drive, and the `/MIR` below would copy whatever is
+there and register ITS script to run at every logon.
+
+Stop the running agent if there is one, copy, then register from the COPY and
+start it:
+
+```powershell
+$dst = Join-Path $env:LOCALAPPDATA 'claude-remote'
+$port = if ($env:CLAUDE_REMOTE_AGENT_PORT) { $env:CLAUDE_REMOTE_AGENT_PORT } else { '8790' }
+$holder = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess
+Stop-ScheduledTask -TaskName 'Claude Remote Agent' -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+    Where-Object { $_.CommandLine -and ($_.CommandLine.Contains("$dst\agent\server.js") -or
+                   ($holder -contains $_.ProcessId -and $_.CommandLine -match '\\agent\\server\.js')) } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+robocopy "$src\agent" "$dst\agent" /MIR /XD "$src\agent\test" /NFL /NDL /NJH /NJS
+if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
+Copy-Item "$src\release-notes.json" $dst -Force
+powershell -NoProfile -ExecutionPolicy Bypass -File "$dst\agent\autostart\register-task.ps1"
+if ($LASTEXITCODE -ne 0) { throw "register-task.ps1 failed ($LASTEXITCODE)" }
+Start-ScheduledTask -TaskName 'Claude Remote Agent'
+Start-Sleep 3
+$now = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -First 1
+$cmd = if ($now) { (Get-CimInstance Win32_Process -Filter "ProcessId=$now").CommandLine }
+if (-not $cmd -or -not $cmd.Contains("$dst\agent\server.js")) {
+    throw "port $port is not served by the copied agent - check agent.log"
+}
+```
+
+The node kill is not redundant: `Stop-ScheduledTask` leaves the agent's
+`node.exe` running (measured 2026-09-22 - the pid survived and the task went
+Ready), and an old node still holding the port means the new version never
+runs. It stops the copy's own node, plus whichever node holds the agent port
+running an agent `server.js` - an agent from an older git-clone setup, which
+would otherwise keep the port while the copy dies on EADDRINUSE. Nothing else
+is touched. The last check proves the port is now served by the copy, so an
+old agent can never pass for the new one.
+`CLAUDE_PLUGIN_ROOT` is preferred over `plugin list` because it names the copy
+Claude Code actually loaded; a plugin installed at two scopes with different
+folders is refused rather than guessed at.
+`-ExecutionPolicy Bypass` because a stock Windows client blocks running a
+`.ps1` by default, and this must not depend on the machine's policy. Its exit
+code is checked because a native command's failure does not throw.
+`/MIR` makes the copy match exactly, deleting files a newer version dropped;
+it is only ever pointed at `$dst`. robocopy exits 0-7 on success, 8 and up on
+failure. Your passcode and settings are NOT in this folder (they live under
+`.claude\plugins\data\claude-remote-claude-remote`), so an update never
+touches them.
+
+The agent listens on `http://127.0.0.1:8790` and nothing else. To change the
+port set `CLAUDE_REMOTE_AGENT_PORT`; if you do, the serve command in step 5 has
+to use the same number in both places. The known limit of the at-logon trigger
+- a cold boot sitting at the lock screen has no agent - is in
+`docs/agent-autostart.md`.
 
 ### Does anything need to run before Claude starts?
 

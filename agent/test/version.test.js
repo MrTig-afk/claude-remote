@@ -1,9 +1,14 @@
-// Four copies of one version string live in files that no build step keeps in
-// step: .claude-plugin/plugin.json (truth), agent/package.json (what the
-// agent reads at boot), agent/public/app.js's SHELL_VERSION (what the cached
-// shell carries), and release-notes.json[0].version (what the newest entry
-// claims to describe). This file is the thing that keeps them in step -
-// adding a fifth copy anywhere means adding it here too.
+// Three copies of one version string live in files that no build step keeps in
+// step: agent/package.json (truth - what the agent reads at boot),
+// agent/public/app.js's SHELL_VERSION (what the cached shell carries), and
+// release-notes.json[0].version (what the newest entry claims to describe).
+// This file is the thing that keeps them in step - adding another copy
+// anywhere means adding it here too.
+//
+// .claude-plugin/plugin.json deliberately carries NO version (owner,
+// 2026-09-22). A version there PINS the plugin: Claude Code compares it, finds
+// it unchanged, and installed copies never receive a fix. Without it, updates
+// are tracked by commit. The last test below keeps it out.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -14,8 +19,8 @@ import { test, after } from 'node:test';
 import { readAgentVersion, AGENT_VERSION } from '../server.js';
 
 // Reaches outside agent/ on purpose: the test IS the drift detector, so it has
-// to see the truth file. The no-'../'-out-of-agent rule is a runtime rule for
-// the agent itself, not a rule for its tests - do not "fix" this away.
+// to see the files outside it. The no-'../'-out-of-agent rule is a runtime rule
+// for the agent itself, not a rule for its tests - do not "fix" this away.
 const PLUGIN_MANIFEST_PATH = new URL('../../.claude-plugin/plugin.json', import.meta.url);
 const AGENT_PACKAGE_PATH = new URL('../package.json', import.meta.url);
 const APP_JS_PATH = new URL('../public/app.js', import.meta.url);
@@ -25,27 +30,32 @@ function readJson(url) {
   return JSON.parse(fs.readFileSync(url, 'utf8'));
 }
 
-const pluginVersion = readJson(PLUGIN_MANIFEST_PATH).version;
+const agentVersion = readJson(AGENT_PACKAGE_PATH).version;
 const releaseNotes = readJson(RELEASE_NOTES_PATH);
 
-test('agent/package.json version equals plugin.json version', () => {
-  assert.equal(readJson(AGENT_PACKAGE_PATH).version, pluginVersion);
+test('agent/package.json version is valid semver', () => {
+  assert.match(agentVersion, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
 });
 
-test('app.js SHELL_VERSION equals plugin.json version', () => {
+test('app.js SHELL_VERSION equals agent/package.json version', () => {
   const source = fs.readFileSync(APP_JS_PATH, 'utf8');
   const match = source.match(/export const SHELL_VERSION = '([^']+)'/);
   assert.ok(match, 'app.js must declare SHELL_VERSION');
-  assert.equal(match[1], pluginVersion);
+  assert.equal(match[1], agentVersion);
 });
 
-test('plugin.json version is valid semver', () => {
-  assert.match(pluginVersion, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
+test('neither plugin manifest pins a version, so updates reach installed copies', () => {
+  assert.equal(readJson(PLUGIN_MANIFEST_PATH).version, undefined,
+    'plugin.json must not carry "version": it pins the plugin and installed copies stop updating');
+  const marketplace = readJson(new URL('../../.claude-plugin/marketplace.json', import.meta.url));
+  for (const entry of marketplace.plugins) {
+    assert.equal(entry.version, undefined, `marketplace entry "${entry.name}" must not carry "version" either`);
+  }
 });
 
-test('readAgentVersion() returns the version in plugin.json', () => {
-  assert.equal(readAgentVersion(), pluginVersion);
-  assert.equal(AGENT_VERSION, pluginVersion);
+test('readAgentVersion() returns the version in agent/package.json', () => {
+  assert.equal(readAgentVersion(), agentVersion);
+  assert.equal(AGENT_VERSION, agentVersion);
 });
 
 test('release-notes.json parses and is a non-empty array', () => {
@@ -68,8 +78,8 @@ test('every release-notes entry has a version, an ISO date, and non-empty note s
   });
 });
 
-test('release-notes.json newest entry version equals plugin.json version', () => {
-  assert.equal(releaseNotes[0].version, pluginVersion);
+test('release-notes.json newest entry version equals agent/package.json version', () => {
+  assert.equal(releaseNotes[0].version, agentVersion);
 });
 
 // Applied to the real file by the test below, and proved capable of failing by
