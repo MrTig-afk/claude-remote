@@ -29,21 +29,56 @@ part that was broken.
 Shipped, in the repo, doing nothing until run:
 - `agent/autostart/claude-remote-agent.task.xml` — the Scheduled Task
   definition, as a template with placeholders filled in at register time. Its
-  action is `conhost.exe --headless cmd.exe /s /c "... node.exe server.js >>
-  agent.log"`: headless conhost gives node a console that is never shown, and
-  cmd is there only for the log redirect. Two triggers: at logon (start now),
-  and a clock trigger every minute (start again if it died - see "Crash
-  recovery").
-- `agent/autostart/register-task.ps1` — renders the template, proves this
-  Windows honours `conhost --headless`, schema-validates the XML via the Task
-  Scheduler COM API, and (unless `-RenderOnly`) registers it. It refuses while
-  the task is running: use the next script.
+  action is `hidelaunch.exe cmd.exe /s /c "... node.exe server.js >>
+  agent.log"`: `hidelaunch` starts node with no console window, and cmd is
+  there only for the log redirect. Two triggers: at logon (start now), and a
+  clock trigger every minute (start again if it died - see "Crash recovery").
+- `agent/autostart/hidelaunch.cs` — the launcher, as SOURCE. No binary is
+  committed; `register-task.ps1` builds it with the C# compiler that ships
+  inside Windows (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`).
+  `/target:winexe` puts it in the GUI subsystem so it has no console of its
+  own, and it starts node with `CREATE_NO_WINDOW` so node has none either. It
+  WAITS for node and returns node's exit code.
+- `agent/autostart/register-task.ps1` — builds and proves the launcher,
+  renders the template, schema-validates the XML via the Task Scheduler COM
+  API, and (unless `-RenderOnly`) registers it. It refuses while the task is
+  running: use the next script.
 - `agent/autostart/update-agent.ps1` — the ONE way to stop, update, restart
   and verify the agent (see "Stopping, restarting, updating").
 
-The chain used to be `wscript.exe //B start-agent-hidden.vbs`. It was replaced
-on 2026-09-23: Microsoft is disabling VBScript by default (~2027) and then
-removing it, which would have silently stopped the agent starting at logon.
+WHERE THE LAUNCHER IS BUILT, and why it is not in the install folder. It goes
+in the DATA folder, named `hidelaunch-<12 hex of the source's SHA256>.exe`.
+`update-agent.ps1` swaps the install folder by RENAMING it, and a running .exe
+inside that folder would be locked and fail the rename. The data folder is
+never swapped. The hash in the name means a changed `hidelaunch.cs` compiles
+to a NEW path rather than trying to overwrite a copy a running agent still
+holds open, and an unchanged source is not rebuilt at all. Old builds are left
+behind on purpose: a sweep that deleted them ran before the `-RenderOnly`
+early return, so the documented read-only diagnostic could delete the 5KB exe
+the REGISTERED task still pointed at and leave both triggers naming a missing
+file forever. A few stale 5KB files is the cheaper failure. Each build is
+written to a temp name and moved into place, so an interrupted compile cannot
+leave a truncated exe that the "already exists" check would then skip forever.
+
+WHY IT WAITS, which is load-bearing rather than tidy. Crash recovery is the
+every-minute clock trigger plus `IgnoreNew`: the trigger is a no-op while the
+task is RUNNING and a restart once it is READY. A launcher that spawned node
+and exited would put the task back to Ready in milliseconds, and the trigger
+would start a SECOND agent a minute later. Measured 2026-09-23: with the
+launcher waiting, the task reads Running while node is up and Ready within
+half a second of node dying, and a second `Start-ScheduledTask` while it runs
+is ignored.
+
+The chain used to be `wscript.exe //B start-agent-hidden.vbs`, replaced on
+2026-09-23 because Microsoft is disabling VBScript by default (~2027) and then
+removing it, and then `conhost.exe --headless`, replaced the same day for
+three reasons: the flag is undocumented (`conhost /?` prints nothing at all,
+and it is absent from Microsoft Learn), it swallows the child's exit code
+(measured: `--headless cmd /c exit 42` reports 0; the launcher reports 42), and
+`conhost --headless` as the parent of `cmd.exe` is a catalogued attacker
+technique on LOLBAS with public Sigma and Splunk detection rules written
+against exactly that shape. The last one is what decided it: on one's own PC
+it is noise to whitelist, but this installs on other people's machines.
 
 Not shipped, and not run by anyone but the owner: the actual
 `Register-ScheduledTask` call. No JavaScript changed — the agent already
@@ -93,10 +128,11 @@ one elevated command that removes it.
 
 ## Stopping, restarting, updating
 
-Never with `Stop-ScheduledTask` alone. It ends the task's own process
-(conhost) and node survives it, still holding the port (measured 2026-09-22:
-the task went Ready, the node pid lived on). A new agent then dies on
-EADDRINUSE while the old version keeps serving.
+Never with `Stop-ScheduledTask` alone. It ends the task's own process (the
+launcher) and node survives it, still holding the port (measured 2026-09-22
+with conhost, and the chain still has that shape: the task went Ready, the
+node pid lived on). A new agent then dies on EADDRINUSE while the old version
+keeps serving.
 
 `update-agent.ps1` is the only supported way, and everything else calls it:
 
@@ -136,8 +172,8 @@ unarmed (measured the same night).
 Run on the owner's PC against the live task (each step a few seconds of PWA
 downtime; open sessions untouched):
 
-1. `register-task.ps1 -RenderOnly` — the headless probe passes, the XML
-   schema-validates, nothing is registered.
+1. `register-task.ps1 -RenderOnly` — the launcher builds and its probe passes,
+   the XML schema-validates, nothing is registered.
 2. A fresh `update-agent.ps1 -Source <repo> -Target "<temp>\cr install test"`
    (a path WITH SPACES) while the old checkout agent held the port: it killed
    that agent, installed, and the new one was serving in 3 seconds.
@@ -160,6 +196,24 @@ downtime; open sessions untouched):
    anything moved; the install stays intact and serving.
 7. No window appeared when conhost --headless first launched node (owner,
    watching the desk, 2026-09-22).
+8. 2026-09-23, replacing conhost with `hidelaunch.exe`, measured by
+   enumerating every visible top-level window on the desktop before and after
+   a start, at 25ms, with a positive control (a minimized node console, which
+   the same check DID catch) and an idle control (nothing started: 0 windows):
+   - task action = `node.exe` directly: ONE window, 130ms in, title
+     `C:\Program Files\nodejs\node.exe`, gone when node was killed. It belongs
+     to the WindowsTerminal PROCESS, not to node - Windows 11 delegates
+     console hosting - so an earlier check that only looked at node's own
+     windows reported "no window" and was WRONG. Anything measuring this must
+     enumerate by window, never by owning process.
+   - task action = `hidelaunch.exe cmd /s /c "node ..."`: ZERO windows, over
+     three repeats, with node running and the log redirect working.
+   - task Running while node lives, Ready 0.5s after it dies, launcher gone
+     with it; a second `Start-ScheduledTask` while running was ignored.
+   - `LastTaskResult` for a child exiting 42 was 42 (conhost gave 0).
+   - The launcher costs 13.1MB working set / 9MB private, against conhost's
+     smaller footprint. Accepted on a 7.74GB machine; it is the price of the
+     .NET Framework compiler being the one compiler guaranteed present.
 
 The first run of step 2 found a real bug: for a path with spaces the command
 line conhost hands on reads `...\cr" install "test\...`, so an exact-text
@@ -218,9 +272,17 @@ on 127.0.0.1:8790 (your port, if you moved it):
 Unregister-ScheduledTask -TaskName 'Claude Remote Agent' -Confirm:$false
 Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8790 -State Listen -ErrorAction SilentlyContinue |
     ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Remove-Item "$env:USERPROFILE\.claude\plugins\data\claude-remote-claude-remote\hidelaunch-*.exe" -Force -ErrorAction SilentlyContinue
 Get-ScheduledTask    -TaskName 'Claude Remote Agent' -ErrorAction SilentlyContinue   # must return nothing
 Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8790 -State Listen -ErrorAction SilentlyContinue  # must return nothing
 ```
+
+That `Remove-Item` line matters more than it looks: every distinct
+`hidelaunch.cs` compiles its own `hidelaunch-<hash>.exe` into the data folder
+and old builds are kept deliberately (see "What ships vs what the owner runs"),
+so without it an uninstall leaves one or more UNSIGNED executables sitting in
+the user's profile. That was acceptable to skip when the task's action was a
+signed binary in System32; it is not now.
 
 Nothing else is left behind except the log file, which is the owner's to
 delete, and the install folder if setup made one. Removing the task
@@ -243,6 +305,14 @@ does not touch `tailscale serve` — that is a separate command
   after a crash, which is required in the same breath as "no window."
 - **A VBScript shim (`wscript //B`).** Used until 2026-09-23. Microsoft is
   disabling VBScript by default (~2027) and then removing it.
+- **`conhost.exe --headless`.** Used for part of 2026-09-23. Works, and needs
+  nothing built - but the flag is undocumented, it loses the child's exit
+  code, and it is a catalogued attacker technique that EDR tools alert on.
+  Acceptable for one person's own PC; not for software other people install.
+- **A third-party hidden-launcher binary (RunHidden and similar).** Would
+  work, but it puts someone else's unsigned executable in the install path of
+  a tool whose whole pitch is that nothing leaves your machine. Building ~100
+  lines from source with a compiler already on the box is less to trust.
 - **A Windows Service.** Services run in session 0: every Claude Code window
   the agent opens would be invisible on the owner's desktop, and the whole
   point is a session typeable at the desk as well as from the phone. Getting
