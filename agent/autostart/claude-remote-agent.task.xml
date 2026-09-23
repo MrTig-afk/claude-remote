@@ -70,15 +70,31 @@
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <!-- conhost.exe - headless: node gets a console that is never shown.
-           It replaced a VBScript shim, which Microsoft is disabling by
-           default (~2027) and then removing. Measured 2026-09-22: no window,
-           and conhost exits when node does, so the task shows Ready and the
-           repetition above can start it again. Stop-ScheduledTask ends
-           conhost only and node survives it (measured): stop the agent with
-           update-agent.ps1, never with the task. cmd /s /c is there for the
-           log redirect and the data-folder md. -->
-      <Command>{{CONHOST}}</Command>
+      <!-- hidelaunch.exe: built from agent/autostart/hidelaunch.cs by the C#
+           compiler inside Windows, into the DATA folder (never the install
+           folder, which update-agent.ps1 swaps by rename). A GUI-subsystem
+           process, so it has no console of its own, and it starts node with
+           CREATE_NO_WINDOW so node has none either.
+
+           It WAITS for node and this line depends on that: the task stays
+           Running while the agent is up, so the every-minute repetition above
+           is a no-op, and goes Ready within half a second of node dying, so
+           the repetition restarts it (measured 2026-09-23). A launcher that
+           exited immediately would leave the task Ready and the repetition
+           would start a SECOND agent a minute later.
+
+           It replaced conhost.exe headless mode on 2026-09-23, which itself
+           replaced a VBScript shim. That flag (two hyphens, unwritable inside
+           an XML comment) is undocumented, it swallowed the child's exit code
+           (measured: exit 42 reported as 0, now 42), and headless conhost
+           parenting cmd.exe is a catalogued attacker technique with public
+           detection rules against that exact shape - fine on one machine, not
+           fine shipped to other people's.
+
+           Stop-ScheduledTask ends the launcher only and node survives it:
+           stop the agent with update-agent.ps1, never with the task. cmd /s /c
+           is there for the log redirect and the data-folder md. -->
+      <Command>{{LAUNCHER}}</Command>
       <Arguments>{{ARGUMENTS}}</Arguments>
       <WorkingDirectory>{{AGENT_DIR}}</WorkingDirectory>
     </Exec>

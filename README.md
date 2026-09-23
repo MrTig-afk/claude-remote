@@ -332,6 +332,10 @@ self-contained and does not need them.
 - Nothing reaps sessions or their MCP children automatically. On a memory-tight
   machine this bites at around 3-5 concurrent projects.
 - The launcher is a convenience, not a boundary (see the threat model above).
+- **Built for a personal machine, not a managed corporate one.** Setup
+  registers a Scheduled Task, compiles a small launcher from source, and opens
+  interactive windows as you. On a monitored work device that is a
+  conversation with your IT team, not a download.
 
 ## Contributing
 
