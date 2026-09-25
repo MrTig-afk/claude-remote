@@ -130,7 +130,7 @@ function readServeState(statePath) {
 }
 
 /**
- * D1 - one serve check per start, from the listen callback. Pushes
+ * One serve check per start, from the listen callback. Pushes
  * serve_missing ONLY on the present -> missing transition, recorded in one
  * persisted marker so a restart never re-sends the same alert while the
  * config stays missing. UNKNOWN never updates the marker and never pushes;

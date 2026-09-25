@@ -228,6 +228,7 @@ test('no API route can introduce or change pre_launch_command', async () => {
     const res = await authedFetch('/api/shared', {
       method: 'PUT',
       body: JSON.stringify({
+        passcode: '481902',
         shared_folders: [{ path: sharedRoot }],
         pre_launch_command: 'calc.exe',
       }),
@@ -271,7 +272,7 @@ test('B9 - PUT /api/shared does not clear a previously-set acknowledged_at', asy
   try {
     const res = await authedFetch('/api/shared', {
       method: 'PUT',
-      body: JSON.stringify({ shared_folders: [{ path: sharedRoot }] }),
+      body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: sharedRoot }] }),
     });
     assert.equal(res.status, 200);
     const onDisk = JSON.parse(fs.readFileSync(shareCtx.configPath, 'utf8'));
@@ -356,7 +357,7 @@ test('H2 - two real temp dirs shared -> both echoed, ctx order preserved, each w
     fs.mkdirSync(rootB);
     const put = await authedFetch('/api/shared', {
       method: 'PUT',
-      body: JSON.stringify({ shared_folders: [{ path: rootA }, { path: rootB }] }),
+      body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: rootA }, { path: rootB }] }),
     });
     assert.equal(put.status, 200);
 
@@ -388,7 +389,7 @@ test('H3 - share two temp dirs, delete one on disk, GET -> that one missing:true
     fs.mkdirSync(rootB);
     const put = await authedFetch('/api/shared', {
       method: 'PUT',
-      body: JSON.stringify({ shared_folders: [{ path: rootA }, { path: rootB }] }),
+      body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: rootA }, { path: rootB }] }),
     });
     assert.equal(put.status, 200);
 
@@ -429,7 +430,7 @@ test('H5 - a root whose lstat throws EACCES -> missing:false, 200, no throw', as
     fs.mkdirSync(root);
     const put = await authedFetch('/api/shared', {
       method: 'PUT',
-      body: JSON.stringify({ shared_folders: [{ path: root }] }),
+      body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: root }] }),
     });
     assert.equal(put.status, 200);
 
@@ -468,7 +469,7 @@ test('H6 - PUT /api/shared then GET /api/acknowledge reflects the new set, from 
     fs.mkdirSync(root);
     const put = await authedFetch('/api/shared', {
       method: 'PUT',
-      body: JSON.stringify({ shared_folders: [{ path: root }] }),
+      body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: root }] }),
     });
     assert.equal(put.status, 200);
 

@@ -19,7 +19,9 @@ import { putSharedFolders, describeSharedRoots } from './shared.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
-import { isConfigured, setPasscode, attemptUnlock, changePasscode, authStatus, authorize } from './auth.js';
+import {
+  isConfigured, setPasscode, attemptUnlock, changePasscode, authStatus, authorize, checkShareAuth, spendFirstRun,
+} from './auth.js';
 import {
   ensureVapid, readPushState, writePushState, publicDevices,
   validateSubscription, validateName, pushServiceOf, sendPush, dropEndpoints,
@@ -325,6 +327,18 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, parsed.status, { error: parsed.error });
         return;
       }
+      // Every share-changing write needs the current passcode, before the
+      // write itself is even attempted - the first-run token is the one
+      // exemption, spent below on its first success.
+      const authz = checkShareAuth(req, ctx, parsed.value.passcode);
+      if (!authz.ok) {
+        const body = { error: authz.error };
+        if (authz.failures !== undefined) body.failures = authz.failures;
+        if (authz.retryAfterMs !== undefined) body.retry_after_ms = authz.retryAfterMs;
+        const extraHeaders = authz.status === 429 ? { 'Retry-After': String(Math.ceil(authz.retryAfterMs / 1000)) } : {};
+        sendJson(res, authz.status, body, extraHeaders);
+        return;
+      }
       const result = await putSharedFolders(ctx, parsed.value);
       if (!result.ok) {
         const body = { error: result.error };
@@ -332,6 +346,7 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, result.status, body);
         return;
       }
+      if (authz.viaFirstRun) spendFirstRun(req, ctx);
       // The set every route reads is ctx.sharedFolders, not the file
       // putSharedFolders just wrote - rootsFrom(ctx) never re-reads disk.
       // ponytail: an agent restart is still needed if the file is ever
@@ -341,9 +356,9 @@ export async function handleRequest(req, res, ctx) {
       return;
     }
 
-    // R14-R18 - Web Push device registry and delivery. Every response carries
-    // only { endpoint, name, created_at } - never keys.p256dh, keys.auth or
-    // the VAPID private key.
+    // Web Push device registry and delivery. Every response carries only
+    // { endpoint, name, created_at } - never keys.p256dh, keys.auth or the
+    // VAPID private key.
     if (req.method === 'GET' && url.pathname === '/api/push') {
       const ensured = ensureVapid(ctx);
       if (!ensured.ok) { sendJson(res, 500, { error: 'push_unavailable' }); return; }
@@ -504,9 +519,9 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, result.status, { error: result.error });
         return;
       }
-      // R18 - watches a freshly launched session and pushes launch_failed if
-      // it is derived `failed` within the window (a crash after `running` is
-      // out of scope). Never awaited: the client's 202 must not
+      // Watches a freshly launched session and pushes launch_failed if it is
+      // derived `failed` within the window (a crash after `running` is out
+      // of scope). Never awaited: the client's 202 must not
       // wait out watchLaunch's own poll loop. watchLaunches is set only in
       // the real import.meta.main ctx, so no test ever triggers a real push
       // by accident.
@@ -610,7 +625,7 @@ if (import.meta.main) {
 
   server.listen(port, HOST, () => {
     console.log(`Local Agent listening on http://${HOST}:${port} (${sharedFolders.length} shared folder(s))`);
-    // D9 - once, from here. Any error/timeout/unparseable degrades to
+    // Runs once, from here. Any error/timeout/unparseable degrades to
     // 'unknown' and pushes nothing; see checkServeOnce.
     checkServeOnce(ctx, port).catch(() => {});
   });

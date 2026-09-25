@@ -305,19 +305,22 @@ test('goHome: with nothing else pushed, the settings branch traverses only what 
 function loadRemoveRoot({ shared = null,
                           result = { ok: true, status: 200, data: { shared_folders: [] } } } = {}) {
   const calls = [];
+  const bodies = [];
   const state = { shared };
   const fn = new Function(
     'state', 'withoutRoot', 'putShared',
     `let removingRoot = false;
-     ${slice('async function removeRoot(rootPath)', 'async function onRemoveRoot(rootPath)')}
+     ${slice('async function removeRoot(rootPath, passcode)', 'async function onRemoveRoot(rootPath, btn)')}
      return { removeRoot };`,
   );
   const mod = fn(
     state,
     withoutRoot,
-    async () => { calls.push('putShared'); return result; },
+    async (body) => { calls.push('putShared'); bodies.push(body); return result; },
   );
-  return { ...mod, calls, state };
+  return {
+    ...mod, calls, bodies, state,
+  };
 }
 
 test('removeRoot: an unknown shared set is REFUSED, and no PUT is sent', async () => {
@@ -340,6 +343,20 @@ test('removeRoot: a KNOWN set still writes, so the guard is not a blanket refusa
   const res = await r.removeRoot('F:\\Projects\\Example');
   assert.equal(res.ok, true);
   assert.deepEqual(r.calls, ['putShared'], 'the removal itself must still happen');
+});
+
+test('removeRoot: a passcode, when given, is carried in the PUT body', async () => {
+  // R17: the server reads it off exactly this key (parsed.value.passcode) -
+  // a client that named it differently would silently always be refused.
+  const r = loadRemoveRoot({ shared: [{ path: 'F:\\Projects\\Example', mode: 'single', excludes: [] }] });
+  await r.removeRoot('F:\\Projects\\Example', '481902');
+  assert.equal(r.bodies[0].passcode, '481902');
+});
+
+test('removeRoot: no passcode argument means no passcode key at all, not an undefined one', async () => {
+  const r = loadRemoveRoot({ shared: [{ path: 'F:\\Projects\\Example', mode: 'single', excludes: [] }] });
+  await r.removeRoot('F:\\Projects\\Example');
+  assert.ok(!('passcode' in r.bodies[0]));
 });
 
 // ------------------------------------------------------------ finishFolders

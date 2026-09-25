@@ -41,7 +41,10 @@ function makeDocument({ visibilityState = 'visible' } = {}) {
   const ids = ['picker', 'gate', 'gate-form', 'gate-label', 'gate-title',
     'gate-sub', 'gate-go', 'gate-msg', 'pin', 'field-confirm', 'pin-confirm',
     // The two eye toggles, found by the `<input id>-eye` convention.
-    'pin-eye', 'pin-confirm-eye'];
+    'pin-eye', 'pin-confirm-eye',
+    // Lane 19 step 15's notice and its four text nodes.
+    'gate-serve-missing', 'gate-serve-missing-banner', 'gate-serve-missing-lead',
+    'gate-serve-missing-cmd', 'gate-serve-missing-after'];
   const map = new Map(ids.map((id) => [id, makeEl()]));
   // document itself, not just its elements: the gate's own retry loop reads
   // visibilityState so it does not sit retrying in the background, and
@@ -83,8 +86,10 @@ let n = 0;
 const freshLock = () => import(`../public/lock.js?t=${++n}`);
 
 const realFetch = globalThis.fetch;
+const realLocation = globalThis.location;
 afterEach(() => {
   globalThis.fetch = realFetch;
+  globalThis.location = realLocation;
   // Parked HIDDEN rather than deleted. The gate now runs its own retry loop
   // when the agent is silent, and a test can end with one of its gaps still
   // pending; a browser never takes `document` away underneath that, so a
@@ -391,4 +396,59 @@ test('the eye is unwired on the way out, so a second showGate cannot stack a lis
   await gate;
 
   assert.equal(doc.el('pin-eye').listenerCount('click'), 0, 'the eye must be unwired with the rest');
+});
+
+// --- Lane 19 step 15: the serve_missing notice, under the waiting line -----
+
+test('showServeMissingNotice reveals the notice with SERVE_MISSING copy and serveCommand(port) - one source, not two', async () => {
+  // RED WHEN: this drifts from step 14's own copy.js constants (a second,
+  // hand-typed copy of the same words) or serveCommand stops being reused.
+  stubFetch({ '/api/auth/status': okStatus({ configured: true, retry_after_ms: 0 }) });
+  const doc = makeDocument();
+  globalThis.document = doc;
+  globalThis.location = { port: '8790', protocol: 'http:' };
+
+  const mod = await freshLock();
+  mod.showGate();
+  await flush();
+
+  mod.showServeMissingNotice();
+
+  assert.equal(doc.el('gate-serve-missing').hidden, false);
+  assert.equal(
+    doc.el('gate-serve-missing-banner').textContent,
+    'Your PC reported that its Tailscale sharing is switched off, so this phone can’t reach it.',
+  );
+  assert.equal(doc.el('gate-serve-missing-lead').textContent, 'At the PC, open a terminal and run:');
+  assert.equal(doc.el('gate-serve-missing-cmd').textContent, 'tailscale serve --bg --https=8790 8790');
+  assert.equal(doc.el('gate-serve-missing-after').textContent, 'This screen fills in on its own once the PC answers.');
+  // Under the existing waiting line, never replacing it.
+  assert.equal(doc.el('gate-msg').textContent, '');
+});
+
+test('once the PC answers, the serve_missing notice is hidden again - the gate is the ordinary unlock', async () => {
+  let statusCall = 0;
+  stubFetch({
+    '/api/auth/status': () => {
+      statusCall += 1;
+      if (statusCall === 1) throw new Error('offline'); // the first probe is the one showGate makes
+      return okStatus({ configured: true, retry_after_ms: 0 })();
+    },
+  });
+  const doc = makeDocument();
+  globalThis.document = doc;
+  globalThis.location = { port: '8790', protocol: 'http:' };
+
+  const mod = await freshLock();
+  mod.showGate();
+  await flush();
+  mod.showServeMissingNotice();
+  assert.equal(doc.el('gate-serve-missing').hidden, false, 'fixture: the notice is up before the PC answers');
+
+  // RETRY re-probes; this time the agent answers.
+  doc.el('gate-form').fire('submit');
+  await flush();
+
+  assert.equal(doc.el('gate-serve-missing').hidden, true, 'checkStatus succeeding must hide the notice');
+  assert.equal(doc.el('gate-go').textContent, 'UNLOCK', 'fixture: this really is the ordinary unlock again');
 });

@@ -946,6 +946,40 @@ select {
 .banner.set-warn { display: flex; align-items: flex-start; gap: 9px; margin: 16px 0 0; color: var(--warn); }
 .banner.set-warn .ico { margin-top: 2px; }
 
+/* Lane 19 step 14 - the command the owner runs at the PC, drawn once already
+   in the approved Artifact under this same class name. Monospace by
+   inheritance (body's own font-family), so the command reads as a command. */
+.cmd {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+/* Notifications (Lane 19) - the status row's own bell dims when off, lights
+   in the accent when on. Same rule the rest of the app uses for a live vs
+   idle state; nothing new here, just applied to this one row. */
+.notify-status .ico { color: var(--dim); }
+.notify-status.on .ico { color: var(--accent); }
+
+/* "You will hear about" - two fixed lines, never a list element elsewhere in
+   this app, so it gets its own minimal rule rather than reusing one built for
+   a different shape. */
+.hears { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; font-size: 11px; color: var(--muted); }
+
+/* Lane 20's reauth panel: a wrong-tries lockout dims the pin and the action
+   the same way the gate itself goes quiet, so the state reads the same way
+   twice in one app. */
+.set-btn:disabled,
+.pin:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .about-mark  { color: var(--accent); }
 .about-name  { font-size: 13px; font-weight: 700; margin-top: 9px; color: var(--text); }
 .about-ver   { font-size: 10px; color: var(--dim); margin-top: 5px; }

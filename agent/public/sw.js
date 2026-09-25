@@ -20,7 +20,7 @@
 const CACHE = 'claude-remote-shell-__SHELL_HASH__';
 const PRECACHE = [
   '/', '/index.html', '/app.css', '/app.js', '/api.js', '/lock.js', '/copy.js', '/folders-ui.js',
-  '/update-ui.js', '/handoff-ui.js',
+  '/update-ui.js', '/handoff-ui.js', '/push-ui.js',
   '/manifest.webmanifest', '/icons/icon.svg',
   '/icons/icon-192.png', '/icons/icon-512.png',
 ];
@@ -122,7 +122,7 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(staleWhileRevalidate(req, event));
 });
 
-// R18 - fixed text only, keyed by `type`; nothing else from the payload is
+// Fixed text only, keyed by `type`; nothing else from the payload is
 // ever read, so a future field (a project name) can never reach the lock
 // screen's notification tray.
 const PUSH_TEXT = {

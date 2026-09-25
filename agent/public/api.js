@@ -180,3 +180,23 @@ export function unlock(pc) {
 export function changePasscode(current, pc, confirm) {
   return post('/api/passcode', { current, passcode: pc, confirm });
 }
+
+export function getPush() {
+  return request('/api/push');
+}
+
+export function addPushDevice(subscription, name) {
+  return post('/api/push/devices', { endpoint: subscription.endpoint, keys: subscription.keys, name });
+}
+
+export function renamePushDevice(endpoint, name) {
+  return post('/api/push/devices/rename', { endpoint, name });
+}
+
+export function removePushDevice(endpoint) {
+  return post('/api/push/devices/remove', { endpoint });
+}
+
+export function sendTestPush(endpoint) {
+  return post('/api/push/test', { endpoint });
+}

@@ -284,6 +284,19 @@
 
         <button class="gate-go" id="gate-go" type="submit" disabled>UNLOCK</button>
         <div class="gate-msg" id="gate-msg" role="status" aria-live="polite"></div>
+
+        <!-- Lane 19 step 15 (sequence 11, owner: "Yes, show the fix"). Under
+             the waiting line above, never instead of it. Revealed by
+             lock.js's showServeMissingNotice(), hidden again once the PC
+             answers (checkStatus succeeds) - the same SERVE_MISSING copy and
+             serveCommand() step 14 uses, so there is one source for these
+             words, not two. -->
+        <div class="gate-serve-missing" id="gate-serve-missing" hidden>
+          <div class="banner set-warn"><span id="gate-serve-missing-banner"></span></div>
+          <div class="empty-body" id="gate-serve-missing-lead"></div>
+          <div class="cmd" id="gate-serve-missing-cmd"></div>
+          <div class="empty-body" id="gate-serve-missing-after"></div>
+        </div>
       </form>
     </main>
 
@@ -463,6 +476,94 @@
       </div>
       <div class="spacer"></div>
     </main>
+
+    <!-- Lane 19. renderNotify() draws every state from state.push; the two
+         inputs here are the only ones the Chrome input-zoom guard can see, so
+         both are static markup even though everything around them is built
+         by script. -->
+    <main id="set-notify" hidden>
+      <div class="set-head">
+        <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
+          <svg class="ico" width="13" height="13" aria-hidden="true"><use href="#i-back"/></svg><span>Settings</span>
+        </button>
+        <div class="set-label">Notifications</div>
+      </div>
+      <div class="set-body">
+        <div id="notify-status"></div>
+        <div class="banner set-warn" id="notify-alert" hidden><span id="notify-alert-text"></span></div>
+        <div class="gate-field" id="notify-name-field">
+          <label class="gate-fieldlabel" for="notify-name">Name this device &middot; optional</label>
+          <input id="notify-name" type="text" maxlength="64" placeholder="e.g. My iPhone" autocomplete="off">
+        </div>
+        <button class="set-btn set-btn-solid ripples" id="notify-on" type="button">TURN ON</button>
+        <section class="zone" id="notify-devices-zone" hidden>
+          <div class="allhdr"><span>DEVICES</span><span class="count" id="notify-devices-count">0</span></div>
+          <div class="rule"></div>
+          <div class="list" id="notify-devices"></div>
+        </section>
+        <div class="banner" id="notify-test-result" hidden><span id="notify-test-result-text"></span></div>
+        <button class="set-btn ripples" id="notify-test" type="button" hidden>SEND A TEST</button>
+        <div class="sec sp" id="notify-hears-label" hidden>You will hear about</div>
+        <div class="hears" id="notify-hears" hidden>
+          <span>A session that could not start</span>
+          <span>Your PC&rsquo;s connection needing attention</span>
+        </div>
+        <div class="banner set-note" id="notify-info" hidden>
+          <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg>
+          <span>Only that. No project names, so nothing private shows on your lock screen.</span>
+        </div>
+        <button class="set-btn" id="notify-off" type="button" hidden>TURN OFF ON THIS DEVICE</button>
+        <div class="gate-msg" id="notify-msg" role="status" aria-live="polite"></div>
+      </div>
+      <div class="spacer"></div>
+    </main>
+
+    <!-- Lane 19 states 8/9 - two panels, one open at a time, moved under
+         whichever device row raised them (openNotifyRename/openNotifyRemove). -->
+    <div class="set-confirm" id="notify-rename" hidden>
+      <div class="gate-field">
+        <input id="notify-rename-name" type="text" maxlength="64" autocomplete="off">
+      </div>
+      <div class="set-p" id="notify-rename-hint"></div>
+      <button class="set-btn set-btn-solid ripples" id="notify-rename-save" type="button">SAVE</button>
+      <button class="set-btn" id="notify-rename-cancel" type="button">CANCEL</button>
+    </div>
+    <div class="set-confirm" id="notify-remove" hidden>
+      <div class="banner set-danger">
+        <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-warn"/></svg>
+        <span id="notify-remove-prompt"></span>
+      </div>
+      <div class="banner set-warn">
+        <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-warn"/></svg>
+        <span>Lost it? Change your passcode too. Removing it here stops the pings; only a new passcode stops it opening the app.</span>
+      </div>
+      <button class="set-btn set-btn-danger ripples" id="notify-remove-go" type="button">REMOVE</button>
+      <button class="set-btn" id="notify-remove-cancel" type="button">CANCEL</button>
+    </div>
+
+    <!-- Lane 20 - the one inline passcode panel every share-changing action
+         opens (openReauth in app.js), moved to sit where its caller's own
+         buttons were. -->
+    <div class="set-confirm" id="reauth" hidden>
+      <div class="set-p" id="reauth-line"></div>
+      <div class="pin-row">
+        <input class="pin" id="reauth-pin" type="password" inputmode="numeric"
+               pattern="[0-9]*" maxlength="6" autocomplete="off"
+               enterkeyhint="go" aria-label="Passcode">
+        <button class="pin-eye" id="reauth-pin-eye" type="button" data-pin-name="passcode"
+                aria-pressed="false" aria-label="Show passcode">
+          <svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-eyeoff"/></svg>
+        </button>
+      </div>
+      <div class="gate-msg" id="reauth-msg" role="status" aria-live="polite"></div>
+      <button class="set-btn set-btn-solid ripples" id="reauth-action" type="button" disabled></button>
+      <button class="set-btn" id="reauth-cancel" type="button">CANCEL</button>
+    </div>
+
+    <!-- Where the three panels above park while not anchored beside a row or
+         button - never a re-rendered container, so a render that clears one
+         of those (innerHTML='') can never delete a panel along with it. -->
+    <div id="panel-home" hidden></div>
 
     <main id="set-passcode" hidden>
       <div class="set-head">

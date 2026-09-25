@@ -199,7 +199,7 @@ const defaultTokens = new Map();
  * Bearer, and that is accepted: the token is bound to no device or identity,
  * and lives only in one page's memory on one device for at most TOKEN_TTL_MS.
  */
-function issueToken(ctx) {
+function issueToken(ctx, firstRun = false) {
   const tokens = ctx.tokens || defaultTokens;
   const now = (ctx.now || Date.now)();
 
@@ -213,7 +213,7 @@ function issueToken(ctx) {
 
   const token = crypto.randomBytes(32).toString('base64url');
   const expiresAt = now + TOKEN_TTL_MS;
-  tokens.set(sha256hex(token), { expiresAt });
+  tokens.set(sha256hex(token), { expiresAt, firstRun });
   return { token, expiresAtIso: new Date(expiresAt).toISOString() };
 }
 
@@ -283,7 +283,10 @@ export function setPasscode(ctx, passcode, confirm) {
 
   writeAttempts(ctx, 0, 0);
 
-  const issued = issueToken(ctx);
+  // firstRun: true - this token may write PUT /api/shared once with no
+  // passcode, so the picker opened straight after setting one does not ask
+  // for the passcode it was just typed twice.
+  const issued = issueToken(ctx, true);
   return { ok: true, status: 201, token: issued.token, expiresAt: issued.expiresAtIso };
 }
 
@@ -383,6 +386,58 @@ export function changePasscode(ctx, current, next, confirm) {
   // holding the session they already had, on the passcode they still have.
   (ctx.tokens || defaultTokens).clear();
   return { ok: true, status: 200 };
+}
+
+/**
+ * Gate for a route that changes what is shared - shares changePasscode's
+ * counter and lockout, not a second guessing door on the same secret. A
+ * wrong passcode is 403 passcode_incorrect, never 401: the client re-locks
+ * on any 401, and a wrong guess here is not a lost session. With no
+ * passcode, accepted only for the one token minted by setPasscode, before it
+ * has spent its first successful write.
+ */
+export function checkShareAuth(req, ctx, passcode) {
+  if (passcode === undefined) {
+    const tokens = ctx.tokens || defaultTokens;
+    const raw = req.headers[TOKEN_HEADER];
+    const entry = typeof raw === 'string' ? tokens.get(sha256hex(raw)) : undefined;
+    if (entry && entry.firstRun === true) return { ok: true, viaFirstRun: true };
+    return { ok: false, status: 403, error: 'passcode_required' };
+  }
+
+  const stored = readPasscodeFile(ctx);
+  if (!stored) return { ok: false, status: 403, error: 'not_configured' };
+
+  const now = (ctx.now || Date.now)();
+  const { failures, lockedUntil } = readAttempts(ctx);
+  if (now < lockedUntil) {
+    return { ok: false, status: 429, error: 'too_many_attempts', retryAfterMs: lockedUntil - now };
+  }
+
+  if (!isSixDigits(passcode)) {
+    return { ok: false, status: 400, error: 'malformed_passcode' };
+  }
+
+  if (!verifyPasscode(passcode, stored)) {
+    const newFailures = failures + 1;
+    const wait = backoffMs(newFailures);
+    if (!writeAttempts(ctx, newFailures, wait > 0 ? now + wait : 0)) {
+      return { ok: false, status: 500, error: 'internal_error' };
+    }
+    return { ok: false, status: 403, error: 'passcode_incorrect', failures: newFailures, retryAfterMs: wait };
+  }
+
+  writeAttempts(ctx, 0, 0);
+  return { ok: true, viaFirstRun: false };
+}
+
+/** Clears the calling token's firstRun flag - spent on the first successful share-changing write it makes. */
+export function spendFirstRun(req, ctx) {
+  const tokens = ctx.tokens || defaultTokens;
+  const raw = req.headers[TOKEN_HEADER];
+  if (typeof raw !== 'string') return;
+  const entry = tokens.get(sha256hex(raw));
+  if (entry) entry.firstRun = false;
 }
 
 export function authStatus(ctx) {

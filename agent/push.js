@@ -192,7 +192,7 @@ export function validateName(value) {
 }
 
 /**
- * D6 - SSRF bound on a push endpoint: https only, no userinfo, no explicit
+ * SSRF bound on a push endpoint: https only, no userinfo, no explicit
  * port, a dotted non-IP non-localhost hostname, length capped.
  * ponytail: a DNS name resolving to a private address is not caught here -
  * the agent only ever POSTs opaque ciphertext with fixed headers to it.

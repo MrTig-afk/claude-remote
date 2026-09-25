@@ -2,6 +2,8 @@
 // api.js - api.js is the only module that talks to the network, and never
 // any project data. showGate() resolves only once a valid token is held.
 import { getAuthStatus, setPasscode, unlock, setToken } from './api.js';
+// Same copy and command builder as the project-list variant (app.js) - one source, not two.
+import { SERVE_MISSING, serveCommand } from './copy.js';
 
 const MESSAGES = {
   // The count stays: it is the only warning that the backoff is coming
@@ -81,6 +83,27 @@ export function setPinRevealed(inputId, revealed) {
   btn.setAttribute('aria-pressed', String(revealed));
   btn.setAttribute('aria-label', `${revealed ? 'Hide' : 'Show'} ${btn.dataset.pinName}`);
   btn.querySelector('use').setAttribute('href', revealed ? '#i-eye' : '#i-eyeoff');
+}
+
+/**
+ * Reveals the same four elements the project-list variant draws, under the
+ * gate's own "Waiting for the PC..." line - never instead of it.
+ */
+export function showServeMissingNotice() {
+  const el = document.getElementById('gate-serve-missing');
+  if (!el) return; // the gate markup is absent in a harness that does not model it
+  document.getElementById('gate-serve-missing-banner').textContent = SERVE_MISSING.banner;
+  document.getElementById('gate-serve-missing-lead').textContent = SERVE_MISSING.lead;
+  const port = location.port || (location.protocol === 'https:' ? '443' : '80');
+  document.getElementById('gate-serve-missing-cmd').textContent = serveCommand(port);
+  document.getElementById('gate-serve-missing-after').textContent = SERVE_MISSING.after;
+  el.hidden = false;
+}
+
+/** Once the PC answers, the gate is the ordinary unlock again - the notice goes with it. */
+function hideServeMissingNotice() {
+  const el = document.getElementById('gate-serve-missing');
+  if (el) el.hidden = true;
 }
 
 // The same retry ladder app.js uses, and it has to live here as well as
@@ -230,6 +253,7 @@ async function runGate() {
       statusUnknown = false;
       waitTries = 0;
       e.msg.textContent = ''; // the probe worked; drop any stale "cannot reach" line
+      hideServeMissingNotice(); // the PC answered - back to the ordinary unlock
       mode = res.data.configured ? 'lock' : 'setup';
       rateLimited = mode === 'lock' && res.data.retry_after_ms > 0;
       retext();
