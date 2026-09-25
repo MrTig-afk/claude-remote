@@ -39,6 +39,7 @@ export function makeAuthCtx({ now } = {}) {
     registryPath: path.join(dir, 'sessions.json'),
     pidDir: path.join(dir, 'session-pids'),
     configPath: path.join(dir, 'config.json'),
+    pushPath: path.join(dir, 'push.json'),
     sessionDirs: testSessionDirs(dir),
     // T94's PUT /api/shared writes through ctx.configPath. Omitting it here
     // is the exact same bug class the comment below already warns about, one
@@ -62,7 +63,7 @@ export function makeAuthCtx({ now } = {}) {
 // fixture missing configPath would write the owner's real shared folders.
 // That is the same class of accident registryPath and pidDir are here to
 // prevent, and it is why the M11 reasoning no longer applies.
-const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir', 'configPath'];
+const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir', 'configPath', 'pushPath'];
 
 // The fifth key that falls back to the real world, and the only one that is
 // not a path: sessions.js does `const { baseDir, spawner = spawn } = ctx`, so

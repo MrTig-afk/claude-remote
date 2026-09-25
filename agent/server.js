@@ -20,6 +20,12 @@ import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
 import { isConfigured, setPasscode, attemptUnlock, changePasscode, authStatus, authorize } from './auth.js';
+import {
+  ensureVapid, readPushState, writePushState, publicDevices,
+  validateSubscription, validateName, pushServiceOf, sendPush, dropEndpoints,
+  MAX_DEVICES, TEST_TTL_S,
+} from './push.js';
+import { watchLaunch, checkServeOnce } from './alerts.js';
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
@@ -335,6 +341,99 @@ export async function handleRequest(req, res, ctx) {
       return;
     }
 
+    // R14-R18 - Web Push device registry and delivery. Every response carries
+    // only { endpoint, name, created_at } - never keys.p256dh, keys.auth or
+    // the VAPID private key.
+    if (req.method === 'GET' && url.pathname === '/api/push') {
+      const ensured = ensureVapid(ctx);
+      if (!ensured.ok) { sendJson(res, 500, { error: 'push_unavailable' }); return; }
+      sendJson(res, 200, { public_key: ensured.state.vapid.publicKey, devices: publicDevices(ensured.state) });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/push/devices') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) { sendJson(res, parsed.status, { error: parsed.error }); return; }
+      const validated = validateSubscription(parsed.value);
+      if (!validated.ok) { sendJson(res, 400, { error: validated.error }); return; }
+
+      const ensured = ensureVapid(ctx);
+      if (!ensured.ok) { sendJson(res, 500, { error: 'push_unavailable' }); return; }
+      const state = ensured.state;
+      const nowIso = new Date((ctx.now || Date.now)()).toISOString();
+      const existingIndex = state.subscriptions.findIndex((s) => s.endpoint === validated.sub.endpoint);
+      const existing = state.subscriptions[existingIndex];
+      if (!existing && state.subscriptions.length >= MAX_DEVICES) { sendJson(res, 409, { error: 'too_many_devices' }); return; }
+
+      // A re-subscribe without a name keeps the one set by rename.
+      const name = validated.sub.name ?? existing?.name;
+      const row = { endpoint: validated.sub.endpoint, keys: validated.sub.keys, createdAt: existing?.createdAt ?? nowIso };
+      if (name) row.name = name;
+      if (existing) state.subscriptions[existingIndex] = row; else state.subscriptions.push(row);
+      if (!writePushState(ctx, state)) { sendJson(res, 500, { error: 'write_failed' }); return; }
+      sendJson(res, existing ? 200 : 201, { device: { endpoint: row.endpoint, name: row.name ?? null, created_at: row.createdAt } });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/push/devices/rename') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) { sendJson(res, parsed.status, { error: parsed.error }); return; }
+      const { endpoint } = parsed.value;
+      if (typeof endpoint !== 'string' || endpoint === '') { sendJson(res, 400, { error: 'invalid_request' }); return; }
+      const nameResult = validateName(parsed.value.name);
+      if (!nameResult.ok) { sendJson(res, 400, { error: 'invalid_name' }); return; }
+
+      const state = readPushState(ctx);
+      if (state.unreadable) { sendJson(res, 500, { error: 'push_unavailable' }); return; }
+      const row = state.subscriptions.find((s) => s.endpoint === endpoint);
+      if (!row) { sendJson(res, 404, { error: 'device_not_found' }); return; }
+      if (nameResult.name === null) delete row.name; else row.name = nameResult.name;
+      if (!writePushState(ctx, state)) { sendJson(res, 500, { error: 'write_failed' }); return; }
+      sendJson(res, 200, { device: { endpoint: row.endpoint, name: row.name ?? null, created_at: row.createdAt } });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/push/devices/remove') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) { sendJson(res, parsed.status, { error: parsed.error }); return; }
+      const { endpoint } = parsed.value;
+      if (typeof endpoint !== 'string' || endpoint === '') { sendJson(res, 400, { error: 'invalid_request' }); return; }
+
+      const state = readPushState(ctx);
+      if (state.unreadable) { sendJson(res, 500, { error: 'push_unavailable' }); return; }
+      const idx = state.subscriptions.findIndex((s) => s.endpoint === endpoint);
+      if (idx === -1) { sendJson(res, 404, { error: 'device_not_found' }); return; }
+      state.subscriptions.splice(idx, 1);
+      if (!writePushState(ctx, state)) { sendJson(res, 500, { error: 'write_failed' }); return; }
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/push/test') {
+      const parsed = await readJsonObject(req);
+      if (!parsed.ok) { sendJson(res, parsed.status, { error: parsed.error }); return; }
+      const { endpoint } = parsed.value;
+      if (typeof endpoint !== 'string' || endpoint === '') { sendJson(res, 400, { error: 'invalid_request' }); return; }
+
+      const ensured = ensureVapid(ctx);
+      if (!ensured.ok) { sendJson(res, 500, { error: 'push_unavailable' }); return; }
+      const state = ensured.state;
+      const sub = state.subscriptions.find((s) => s.endpoint === endpoint);
+      if (!sub) { sendJson(res, 404, { error: 'device_not_found' }); return; }
+
+      const service = pushServiceOf(endpoint);
+      const result = await sendPush(ctx, sub, state.vapid, 'test', TEST_TTL_S);
+      if (result.gone) {
+        dropEndpoints(ctx, new Set([endpoint]));
+        sendJson(res, 410, { error: 'device_gone', service });
+        return;
+      }
+      if (!result.ok) { sendJson(res, 502, { error: 'push_failed', service }); return; }
+      sendJson(res, 200, { accepted: true, service });
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/api/status') {
       const facts = readStatusFacts(ctx.configPath);
       const body = { version: AGENT_VERSION, acknowledged: facts.acknowledged, shared_count: facts.shared_count };
@@ -404,6 +503,15 @@ export async function handleRequest(req, res, ctx) {
       if (!result.ok) {
         sendJson(res, result.status, { error: result.error });
         return;
+      }
+      // R18 - watches a freshly launched session and pushes launch_failed if
+      // it is derived `failed` within the window (a crash after `running` is
+      // out of scope). Never awaited: the client's 202 must not
+      // wait out watchLaunch's own poll loop. watchLaunches is set only in
+      // the real import.meta.main ctx, so no test ever triggers a real push
+      // by accident.
+      if (!result.reused && ctx.watchLaunches === true) {
+        watchLaunch(ctx, result.session.session_name).catch(() => {});
       }
       sendJson(res, result.reused ? 200 : 202, result.session);
       return;
@@ -488,7 +596,9 @@ if (import.meta.main) {
     console.warn(`claude-remote agent: NO PASSCODE SET. Open http://${HOST}:${port} at this desk and set one - every API route returns 403 until you do. Do NOT run 'tailscale serve' before it is set.`);
   }
 
-  const server = createAgentServer({ sharedFolders });
+  const ctx = { sharedFolders, watchLaunches: true };
+  ensureVapid(ctx);
+  const server = createAgentServer(ctx);
 
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
@@ -500,5 +610,8 @@ if (import.meta.main) {
 
   server.listen(port, HOST, () => {
     console.log(`Local Agent listening on http://${HOST}:${port} (${sharedFolders.length} shared folder(s))`);
+    // D9 - once, from here. Any error/timeout/unparseable degrades to
+    // 'unknown' and pushes nothing; see checkServeOnce.
+    checkServeOnce(ctx, port).catch(() => {});
   });
 }
