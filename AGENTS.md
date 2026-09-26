@@ -27,8 +27,8 @@ node agent/server.js                          # serves http://127.0.0.1:8790
 The bare-directory form `node --test agent/test/` fails on Windows. Part of the
 suite drives a real headless Chrome to check no text input renders under 16px
 (iOS Safari zooms below that); set `CHROME=<path>` if Chrome is somewhere
-unusual - including a per-user install under `%LOCALAPPDATA%`, which the
-lookup does not search yet - or `ALLOW_NO_CHROME=1` to skip it knowingly. It
+unusual (it searches `Program Files` and a per-user install under
+`%LOCALAPPDATA%`), or `ALLOW_NO_CHROME=1` to skip it knowingly. It
 fails rather than skips by default, because a skipped guard is a green run.
 
 `static.test.js` creates a symlink, which Windows allows a normal account only
