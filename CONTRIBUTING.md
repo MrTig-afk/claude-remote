@@ -50,9 +50,9 @@ Windows:
   only lets a normal account create symlinks in Developer Mode. Without it that
   test fails with `EPERM`.
 - **Chrome it can find.** Part of the suite drives a real headless Chrome. It
-  looks in `Program Files`; if yours is a per-user install (under
-  `%LOCALAPPDATA%\Google\Chrome\`), set `CHROME=<path to chrome.exe>` until
-  that path is searched too. `ALLOW_NO_CHROME=1` skips the check knowingly.
+  looks in `Program Files` and in a per-user install under
+  `%LOCALAPPDATA%\Google\Chrome\`; set `CHROME=<path to chrome.exe>` if yours
+  is anywhere else. `ALLOW_NO_CHROME=1` skips the check knowingly.
 
 Some launcher tests start real PowerShell processes, so console windows
 flashing during a run is normal.
