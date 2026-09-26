@@ -489,6 +489,25 @@ export function stopSharingPrompt(row) {
   return `Stop sharing ${row.name}? ${effect} Nothing on disk is touched.`;
 }
 
+// Lane 20 - the inline passcode panel every share-changing action opens
+// through. `kind` names which sentence to show; `verb` (the action's own
+// button label) is drawn by the caller, not decided here.
+export function reauthLine(kind, name) {
+  if (kind === 'stop') return `Enter your passcode to stop sharing ${name}.`;
+  if (kind === 'share') return 'Enter your passcode to share these folders.';
+  return 'Enter your passcode to save this change.';
+}
+
+export const REAUTH_WRONG = '! That passcode is not right. Nothing was saved.';
+
+/** api.js's PUT result -> 'done' | 'wrong' | 'locked' | 'error'. */
+export function reauthOutcome(res) {
+  if (res.ok) return 'done';
+  if (res.code === 'passcode_incorrect') return 'wrong';
+  if (res.code === 'too_many_attempts') return 'locked';
+  return 'error';
+}
+
 /** Pure SAVE reducer: (share, apiResult) -> { done, ticks, message, errorIndex } */
 export function applySaveResult(share, res) {
   if (res.ok) {

@@ -285,7 +285,7 @@ test('H1 - two real temp dirs PUT through and round-trip through resolveSharedFo
       { path: rootA, name: 'root-a', newFolders: 'show' },
       { path: rootB, name: 'root-b', newFolders: 'hide' },
     ];
-    const res = await authedFetch('/api/shared', { method: 'PUT', body: JSON.stringify(sharedBody(ticks)) });
+    const res = await authedFetch('/api/shared', { method: 'PUT', body: JSON.stringify({ passcode: '481902', ...sharedBody(ticks) }) });
     assert.equal(res.status, 200);
     const resolved = resolveSharedFolders(ctx.configPath);
     assert.equal(resolved.length, 2);
@@ -312,7 +312,7 @@ test('H2 - an overlapping pair rejects 409 {error, index} mapping to the second 
       { path: parent, name: 'parent', newFolders: 'show' },
       { path: child, name: 'child', newFolders: 'show' },
     ];
-    const res = await authedFetch('/api/shared', { method: 'PUT', body: JSON.stringify(sharedBody(ticks)) });
+    const res = await authedFetch('/api/shared', { method: 'PUT', body: JSON.stringify({ passcode: '481902', ...sharedBody(ticks) }) });
     assert.equal(res.status, 409);
     const body = await res.json();
     assert.equal(body.error, 'overlapping_root');
@@ -360,7 +360,7 @@ test('H4 (OQ1) - GET /api/projects reflects a PUT /api/shared write on the SAME 
 
     const put = await authedFetch('/api/shared', {
       method: 'PUT',
-      body: JSON.stringify(sharedBody([{ path: root, name: 'shared-root', newFolders: 'show' }])),
+      body: JSON.stringify({ passcode: '481902', ...sharedBody([{ path: root, name: 'shared-root', newFolders: 'show' }]) }),
     });
     assert.equal(put.status, 200);
 

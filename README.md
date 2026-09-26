@@ -148,6 +148,10 @@ Good to know:
   a restart has **no agent running**, and the phone cannot reach it until you
   sign in. See `docs/agent-autostart.md` for why that trade was made. Once you
   are signed in, an agent that crashes is started again within a minute.
+- When the app says the agent hit an error, restart it by running
+  `/claude-remote:setup` in Claude Code on the PC. The agent runs with no
+  window; what it printed is in
+  `%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\agent.log`.
 - Port 8790 is the default, not a requirement: set a user environment variable
   `CLAUDE_REMOTE_AGENT_PORT` to move it, and tell setup, so the serve command
   uses the same number.

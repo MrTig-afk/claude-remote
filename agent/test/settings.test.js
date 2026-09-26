@@ -12,6 +12,7 @@ import { codeOnly } from './helper-source.js';
 
 import * as folders from '../public/folders-ui.js';
 import * as update from '../public/update-ui.js';
+import * as pushUi from '../public/push-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 
@@ -75,14 +76,15 @@ function readScreenMain() {
   return new Function(`${js.slice(start, end)}; return SCREEN_MAIN;`)();
 }
 
-test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the fourteen screens', () => {
+test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the fifteen screens', () => {
   // RED WHEN: a screen is added to the map with no <main>, or a <main> is
   // renamed - the router would then hide nothing and two screens stack.
-  // All six Lane 7 destinations are here now, Change passcode and Contact me included.
+  // All six Lane 7 destinations are here, Change passcode and Contact me
+  // included, plus Lane 19's Notifications.
   const SCREEN_MAIN = readScreenMain();
   assert.deepEqual(
     Object.keys(SCREEN_MAIN).sort(),
-    ['about', 'accept', 'agent', 'contact', 'folders', 'gate', 'list', 'passcode', 'reset', 'root', 'see', 'settings', 'shared', 'update'],
+    ['about', 'accept', 'agent', 'contact', 'folders', 'gate', 'list', 'notify', 'passcode', 'reset', 'root', 'see', 'settings', 'shared', 'update'],
   );
   const html = read('index.html');
   for (const id of Object.values(SCREEN_MAIN)) {
@@ -97,8 +99,11 @@ function loadShowScreen() {
   const src = js.slice(start, end);
   const doc = fakeDocument();
   const state = { screen: 'gate' };
-  const fn = new Function('document', 'state', 'renderConn', `${src}; return { SCREEN_MAIN, showScreen };`);
-  const mod = fn(doc, state, () => {});
+  const fn = new Function(
+    'document', 'state', 'renderConn', 'closeActiveReauth', 'closeNotifyRename', 'closeNotifyRemove',
+    `${src}; return { SCREEN_MAIN, showScreen };`,
+  );
+  const mod = fn(doc, state, () => {}, () => {}, () => {}, () => {});
   return { ...mod, doc, state };
 }
 
@@ -425,13 +430,13 @@ function loadRenderSettings(state, buildSettingsRowImpl) {
   const doc = fakeDocument({ 'settings-list': listEl });
   const fn = new Function(
     'document', 'state', 'sharedRowState', 'buildSettingsRow', 'agentStateLine', 'SHELL_VERSION',
-    'aboutRowState',
+    'aboutRowState', 'notifyRowState',
     `${src}; return renderSettings;`,
   );
   const renderSettings = fn(
     doc, state, folders.sharedRowState, buildSettingsRowImpl,
     (r) => (r === true ? 'reachable' : 'checking'), '0.1.0',
-    update.aboutRowState,
+    update.aboutRowState, pushUi.notifyRowState,
   );
   return { renderSettings, listEl };
 }
@@ -457,17 +462,19 @@ test('S12 - renderSettings draws the groups Lane 6 names, in order, each with an
   // RED WHEN: the root goes back to one hard-coded FOLDERS section holding a
   // single row. That is what shipped, and it is the deviation from Lane 6
   // that started this rebuild - so the shape is pinned, not just described.
-  const state = { shared: [{ path: 'F:\\A' }], reachable: true };
+  const state = {
+    shared: [{ path: 'F:\\A' }], reachable: true, push: { reason: null, mine: 'x', devices: [{ endpoint: 'x' }] },
+  };
   const { renderSettings, listEl } = loadRenderSettings(state, stubRow);
   renderSettings();
 
   const headings = [...listEl.children].map((sec) => sec.children[0].children[0].textContent);
-  assert.deepEqual(headings, ['FOLDERS', 'SECURITY', 'THIS APP']);
+  assert.deepEqual(headings, ['FOLDERS', 'ALERTS', 'SECURITY', 'THIS APP']);
 
   const rows = renderedRows(listEl);
   assert.deepEqual(
     rows.map((r) => r.dataset.settings),
-    ['shared', 'passcode', 'see', 'lock', 'agent', 'reset', 'about'],
+    ['shared', 'notify', 'passcode', 'see', 'lock', 'agent', 'reset', 'about'],
   );
   // Lane 7: 'No exceptions anywhere in the app.'
   for (const row of rows) {

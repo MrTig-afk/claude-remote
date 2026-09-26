@@ -162,10 +162,16 @@ function loadScreen({ shared, projects, removeRoot } = {}) {
   const doc = fakeDocument();
   const state = { shared: shared ?? null, projects: projects ?? [] };
   const calls = { removed: [], renderSettings: 0, load: 0 };
+  // Lane 20: confirmStopSharing no longer writes directly - it opens the
+  // reauth panel and waits. openReauth itself lives outside this slice (it is
+  // shared by every Lane 20 call site), so it is stubbed here: it captures
+  // `send`/`onDone` for the test's own submitReauth to drive, exactly what
+  // typing a passcode and tapping the action button does in the real panel.
+  let lastReauth = null;
   const fn = new Function(
     'document', 'state', 'sharedFolderRows', 'stopSharingPrompt', 'removeRoot',
     'shareErrorMessage', 'renderSettings', 'load', 'showScreen', 'render',
-    'history', 'onChooseFolders',
+    'history', 'onChooseFolders', 'openReauth',
     `${src}
      return { renderSharedScreen, askStopSharing, cancelStopSharing, confirmStopSharing };`,
   );
@@ -176,8 +182,18 @@ function loadScreen({ shared, projects, removeRoot } = {}) {
     () => { calls.renderSettings += 1; },
     () => { calls.load += 1; },
     () => {}, () => {}, { go() {} }, () => {},
+    (opts) => { lastReauth = opts; },
   );
-  return { ...mod, doc, state, calls };
+  return {
+    ...mod,
+    doc,
+    state,
+    calls,
+    submitReauth: async (passcode) => {
+      const res = await lastReauth.send(passcode);
+      lastReauth.onDone(res);
+    },
+  };
 }
 
 const rowsOf = (doc) => doc.getElementById('shared-rows').children;
@@ -242,6 +258,7 @@ test('L14 - confirming removes exactly that root and refreshes what depends on i
   s.renderSharedScreen();
   s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
+  await s.submitReauth('481902');
 
   assert.deepEqual(s.calls.removed, [WORKSPACE]);
   assert.equal(s.doc.getElementById('shared-confirm').hidden, true, 'the panel closes on success');
@@ -257,6 +274,7 @@ test('L15 - a refused removal keeps the root and says why ON THIS SCREEN', async
   s.renderSharedScreen();
   s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
+  await s.submitReauth('481902');
 
   assert.equal(s.doc.getElementById('shared-msg').textContent, 'err:write_failed');
   assert.equal(s.doc.getElementById('shared-confirm').hidden, false, 'the question stands until it is answered');
@@ -270,6 +288,7 @@ test('L16 - a 401 says nothing here: api.js has already re-locked the app', asyn
   s.renderSharedScreen();
   s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
+  await s.submitReauth('481902');
   assert.equal(s.doc.getElementById('shared-msg').textContent, '');
 });
 
@@ -280,6 +299,7 @@ test('L17 - a second confirm while one write is in flight is ignored', async () 
   s.renderSharedScreen();
   s.askStopSharing(WORKSPACE);
   await s.confirmStopSharing();
+  await s.submitReauth('481902');
   // null means "already writing" - the screen must not treat it as success.
   assert.equal(s.doc.getElementById('shared-confirm').hidden, false);
   assert.equal(s.calls.load, 0);

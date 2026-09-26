@@ -1,18 +1,24 @@
-import { getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, getStatus, setToken, onAuthLost, changePasscode } from './api.js';
+import {
+  getProjects, getSessions, launchSession, endSession, dismissEnded, createProject, getAcknowledged, acknowledge, getDrives, getFolders, putShared, getStatus, setToken, onAuthLost, changePasscode,
+  getPush, addPushDevice, renamePushDevice, removePushDevice, sendTestPush,
+} from './api.js';
 // setPinRevealed lives in lock.js because the gate needs it before
 // wireEvents() has run - see the note on it there.
-import { showGate, messageFor, setPinRevealed } from './lock.js';
+import {
+  showGate, messageFor, setPinRevealed, showServeMissingNotice,
+} from './lock.js';
 import {
   TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
   CHOOSE_FOLDERS_BUTTON, PICKER_SKIP, PICKER_CANCEL, REMOVE_BUTTON, RETRY_BUTTON,
   NOTHING_SHARED, SHARED_UNKNOWN, ALL_ROOTS_GONE, ROOT_GONE_BODY, rootGoneTitle, PHONE_OFFLINE, CANNOT_REACH,
-  emptyDayOneTitle, EMPTY_DAY_ONE_BODY,
+  emptyDayOneTitle, EMPTY_DAY_ONE_BODY, SERVE_MISSING, serveCommand,
 } from './copy.js';
 import {
   projectSections, crumbSegments, sharedBody, coverageOf, driveRowState, truncatedNote, shareErrorMessage, applySaveResult, MAX_SHARED_ROOTS,
   listZoneState, missingRoots, withoutRoot, sharedToTicks, sharedRowState,
   sharedFolderRows, stopSharingPrompt,
   rootEditRows, excludesFrom, withRootExcludes, orphanWarning, modeSwitchWarning,
+  reauthLine, REAUTH_WRONG, reauthOutcome,
 } from './folders-ui.js';
 import {
   updateAvailable, releaseOf, releaseLines, readyLine, fallbackReadyLine, aboutRowState, updateWaiting,
@@ -20,6 +26,15 @@ import {
 import {
   CLAUDE_APP_LINK, handoffReady, handoffCopy, SHEET_SEEN_KEY, SHEET,
 } from './handoff-ui.js';
+import {
+  cantTurnOnReason, isIphoneOrIpad, notifyScreenState, notifyRowState, otherDevicesLine, addedDate, deviceRows,
+  testAcceptedCopy, testFailedCopy, b64uToBytes, removePrompt, renameHint,
+  CANT_NAME, NOT_STANDALONE_SUB, NO_PUSH_SUB, NO_PUSH_SUB_BROWSER, DENIED_SUB, DENIED_SUB_BROWSER,
+  NOT_STANDALONE_BANNER, NO_PUSH_BANNER, NO_PUSH_BANNER_BROWSER, DENIED_BANNER, DENIED_BANNER_BROWSER,
+  OFF_NAME, ON_NAME, ON_SUB, ENABLING_NAME, ENABLING_SUB, TURNING_ON, TURN_ON, TRY_AGAIN,
+  ENABLE_FAILED_SUB, ENABLE_FAILED_PC, ENABLE_FAILED_PHONE,
+  SEND_A_TEST, SENDING, TURN_OFF, STOPPED_WARN, SAVE, REMOVE,
+} from './push-ui.js';
 
 // The version baked into whatever copy of the shell the phone has cached.
 // Keep it a plain single-quoted literal: the version test reads it out of
@@ -68,6 +83,13 @@ const state = {
   // { path, mode, excludes, new_folders, missing }, or null = it has not told
   // us. null and absent mean the same thing everywhere - see listZoneState.
   shared: null,
+  // Lane 19. null = refreshPush has not answered yet. Otherwise
+  // { reason, mine, devices, publicKey } - see refreshPush.
+  push: null,
+  // Lane 19 step 14/15 - set when the page is opened from the serve_missing
+  // notification (the URL fragment, or the service worker's postMessage on an
+  // already-open tab), cleared by the next successful load().
+  serveMissing: false,
 };
 
 // Ended records announced this open. Announcing also dismisses at the agent,
@@ -95,19 +117,27 @@ const SCREEN_MAIN = {
   reset: 'set-reset',
   about: 'set-about',
   contact: 'set-contact',  // two deep, About -> Contact me; the settingsSubs stack carries it
+  notify: 'set-notify',    // Lane 19 - Settings > Alerts > Notifications
 };
 
 // The screens that are BELOW the settings root. Membership is what tells
 // onPopState which of the two entries just popped, so a screen added to
 // SCREEN_MAIN above must be added here too or its back gesture will fall
 // through and close Settings entirely.
-const SETTINGS_SUBS = new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update', 'root', 'contact']);
+const SETTINGS_SUBS = new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'about', 'update', 'root', 'contact', 'notify']);
 
 // The one place a screen changes. Sets `hidden` on every <main> in
 // SCREEN_MAIN so two of them can never render stacked (the failure the
 // hideAccept() comment in boot() describes), records which screen the app is
 // on, and keeps the two pieces of header chrome that depend on it honest.
 function showScreen(name, direction = null) {
+  // Leaving a screen closes whatever Lane 20/19 panel was open on it, the
+  // same way CANCEL does - a panel left wired behind a screen that is no
+  // longer showing is a stale listener set waiting to fire on the wrong
+  // target the next time one of these opens.
+  closeActiveReauth();
+  closeNotifyRename();
+  closeNotifyRemove();
   state.screen = name;
   for (const [screen, id] of Object.entries(SCREEN_MAIN)) {
     const el = document.getElementById(id);
@@ -136,7 +166,7 @@ const ERROR_COPY = {
   invalid_project: "The agent won't accept that project name. Tap REFRESH; if it keeps happening, rename the folder on the PC.",
   invalid_request: 'The agent rejected the request. This is a bug in the app - note what you tapped.',
   payload_too_large: 'The request was too big to send. This is a bug in the app - note what you tapped.',
-  internal_error: 'The agent hit an internal error. Check its terminal window on the PC.',
+  internal_error: 'The agent hit an internal error. Restart it on the PC, and check agent.log if it happens again.',
   bad_response: "The agent replied with something this app doesn't understand. It may be a different version.",
   session_not_running: "That session isn't running yet, or is already being ended. Tap REFRESH.",
   // A 403 the gate flow has not already caught: the agent lost its passcode
@@ -145,20 +175,20 @@ const ERROR_COPY = {
   setup_required: 'This agent has no passcode yet. Reload the app to set one.',
   // The two failures POST /api/acknowledge can return - see agent/config.js's
   // acknowledge().
-  config_unreadable: 'The agent could not read its config file on the PC. Check its terminal window.',
-  write_failed: 'The agent could not save that on the PC. Check its terminal window.',
+  config_unreadable: 'The agent could not read its config file. Restart it on the PC, and check agent.log if it happens again.',
+  write_failed: 'The agent could not save that. Restart it on the PC, and check agent.log if it happens again.',
   // Owner-approved 2026-09-05. Rare by construction - the picker only draws
   // NON-container folders as tappable - so this needs a race to reach: the list
   // is drawn, the folder gains a child on disk, then the row is tapped. Until
   // now it fell through to the generic "The agent refused the request (status
   // 400)", which tells the owner nothing about what to do. Says nothing about
-  // the PC terminal, because unlike internal_error there is nothing wrong there
-  // to look at.
+  // restarting the agent, because unlike internal_error there is nothing wrong
+  // there to fix.
   project_is_container: 'That folder holds your projects rather than being one. Tap REFRESH, then pick a project inside it.',
 };
 
 function errorCopy(code, status) {
-  return ERROR_COPY[code] || `The agent refused the request (status ${status}). Check its terminal window on the PC.`;
+  return ERROR_COPY[code] || `The agent refused the request (status ${status}). Restart it on the PC, and check agent.log if it happens again.`;
 }
 
 // Copy for POST /api/projects only - distinct from ERROR_COPY above, which
@@ -579,6 +609,41 @@ function buildEmptyState({ title, body }, action) {
     btn.textContent = action === 'retry' ? RETRY_BUTTON : CHOOSE_FOLDERS_BUTTON;
     el.appendChild(btn);
   }
+  return el;
+}
+
+// Lane 19 step 14, drawn only while state.serveMissing holds: the PC's own
+// warning, the command it already told the phone to run, and the same TRY
+// AGAIN control the ordinary CANNOT_REACH screen carries (onProjectTap's
+// [data-retry] branch answers both).
+function buildServeMissingState() {
+  const el = document.createElement('div');
+  el.className = 'empty';
+  const banner = document.createElement('div');
+  banner.className = 'banner set-warn';
+  const bannerText = document.createElement('span');
+  bannerText.textContent = SERVE_MISSING.banner;
+  banner.appendChild(bannerText);
+  el.appendChild(banner);
+  const lead = document.createElement('div');
+  lead.className = 'empty-body';
+  lead.textContent = SERVE_MISSING.lead;
+  el.appendChild(lead);
+  const cmd = document.createElement('div');
+  cmd.className = 'cmd';
+  const port = location.port || (location.protocol === 'https:' ? '443' : '80');
+  cmd.textContent = serveCommand(port);
+  el.appendChild(cmd);
+  const after = document.createElement('div');
+  after.className = 'empty-body';
+  after.textContent = SERVE_MISSING.after;
+  el.appendChild(after);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'empty-action';
+  btn.dataset.retry = '1';
+  btn.textContent = RETRY_BUTTON;
+  el.appendChild(btn);
   return el;
 }
 
@@ -1371,7 +1436,10 @@ function renderProjects() {
     // go and check a working machine (2026-09-04). It retries either way, so
     // TRY AGAIN just repeats what is already happening rather than offering
     // something new.
-    listEl.appendChild(buildEmptyState(CANNOT_REACH, 'retry'));
+    // Lane 19 step 14: when the app was opened from the serve_missing PC
+    // alert, this screen additionally carries the fix the PC already named -
+    // it knows which end is broken, so the app stops guessing.
+    listEl.appendChild(state.serveMissing ? buildServeMissingState() : buildEmptyState(CANNOT_REACH, 'retry'));
   } else if (zone.kind === 'folder-empty') {
     // a marked container can legitimately hold no project folders
     const msg = document.createElement('div');
@@ -1607,6 +1675,8 @@ async function load() {
     state.projects = p.data.projects;
     state.reachable = true;
     state.waitTries = 0;
+    // The PC answered, so whatever sent the serve_missing alert is over.
+    state.serveMissing = false;
   } else if (state.offline) {
     // Deliberately NOT 'waiting': waitForAgent retries on a backing-off
     // ladder against a PC that is almost certainly fine, and the line would
@@ -1680,7 +1750,7 @@ async function onProjectTap(e) {
   const choose = e.target.closest('[data-choose]');
   if (choose) { onChooseFolders(); return; }
   const remove = e.target.closest('[data-remove-root]');
-  if (remove) { onRemoveRoot(remove.dataset.removeRoot); return; }
+  if (remove) { onRemoveRoot(remove.dataset.removeRoot, remove); return; }
 
   // A tap on a folder row while a confirm is open answers the question
   // instead of opening the folder: the history invariant (see folderPushed)
@@ -1761,7 +1831,7 @@ let removingRoot = false;
  * exists rather than a filter at the call site: a removal must not quietly
  * rewrite a sibling's mode or drop its excludes.
  */
-async function removeRoot(rootPath) {
+async function removeRoot(rootPath, passcode) {
   if (removingRoot) return null;
   const body = withoutRoot(state.shared, rootPath);
   // REFUSE rather than guess. The notice this is tapped from was drawn from a
@@ -1770,6 +1840,7 @@ async function removeRoot(rootPath) {
   // all roots". onChooseFolders already refuses to "enter blind"; this is the
   // same rule on the way out.
   if (body === null) return { ok: false, status: 0, code: 'shared_unknown' };
+  if (passcode !== undefined) body.passcode = passcode;
   removingRoot = true;
   const res = await putShared(body);
   removingRoot = false;
@@ -1777,17 +1848,34 @@ async function removeRoot(rootPath) {
   return res;
 }
 
-async function onRemoveRoot(rootPath) {
-  const res = await removeRoot(rootPath);
-  if (res === null) return;
-  if (res.ok) {
-    await load();
-    return;
-  }
-  // The existing banner channel, no new one. write_failed and
-  // config_unreadable are already in ERROR_COPY; a 401 is handled by api.js
-  // re-locking, exactly as everywhere else.
-  setErrorBanner(res.code, res.status);
+// Lane 20: the project list's own REMOVE, on the "<folder> is not on the PC
+// any more" notice, asks for the passcode exactly like every other
+// share-changing action. `btn` is the tapped REMOVE button - openReauth hides
+// it. Anchored just above #projects, never next to the button: that list is
+// rebuilt wholesale on every render (every 5s while a session runs), and the
+// panel must not be. The gone notices sit at the top of the list, so the
+// panel still lands right beside the one it is about.
+async function onRemoveRoot(rootPath, btn) {
+  const name = crumbSegments(rootPath).at(-1).label;
+  openReauth({
+    buttons: [btn],
+    before: document.getElementById('projects'),
+    kind: 'stop',
+    name,
+    verb: REMOVE,
+    send: async (passcode) => (await removeRoot(rootPath, passcode))
+      || { ok: false, status: 0, code: 'shared_unknown' },
+    onDone: async (res) => {
+      if (res.ok) {
+        await load();
+        return;
+      }
+      // The existing banner channel, no new one. write_failed and
+      // config_unreadable are already in ERROR_COPY; a 401 is handled by
+      // api.js re-locking, exactly as everywhere else.
+      setErrorBanner(res.code, res.status);
+    },
+  });
 }
 
 // Same order and same reason as onTileTap's CANCEL branch: mutate and render
@@ -2062,7 +2150,7 @@ async function runStop(name) {
   } else if (res.ok && res.data.result === 'kill_failed') {
     setBanner('error', [{ text: '! Could not end ' }, { b: name }, { text: '. It is still running - close it at the desk.' }]);
   } else if (res.ok) {
-    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a result this app doesn't know. Check its terminal window on the PC." }]);
+    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a result this app doesn't know. Restart it on the PC, and check agent.log if it happens again." }]);
   } else {
     setErrorBanner(res.code, res.status);
   }
@@ -2186,6 +2274,8 @@ const share = {
   error: null,      // { text, retry } | null - the one banner this screen owns
   busy: false,      // a PUT is in flight
   pushed: 0,        // history entries THIS run pushed
+  firstRun: false,  // Lane 20: only the genuine ensureAccepted() first-run
+                     // open may SAVE with no passcode; set by showFolders.
 };
 
 function hideFolders() {
@@ -2678,6 +2768,149 @@ async function openPath(p, opts = {}) {
 // unactionable message behind the passcode gate.
 function shareAuthLost(res) { return !res.ok && res.status === 401; }
 
+// ---------------------------------------------------------------------------
+// Lane 20 - the inline passcode panel every share-changing action opens
+// through. One shared implementation, `#reauth`, moved to wherever it is
+// needed rather than five copies of the same six-digit field.
+// ---------------------------------------------------------------------------
+
+// Where a movable panel (#reauth, #notify-rename, #notify-remove) parks while
+// it is not anchored beside a row or button - a fixed parent no render ever
+// clears, so a panel that was moved into a container later wiped with
+// innerHTML='' is not torn out of the document along with it. appendChild
+// moves an already-attached node, it does not clone it.
+function parkPanel(panel) {
+  document.getElementById('panel-home').appendChild(panel);
+}
+
+// At most one reauth session lives at a time. Holds that session's own
+// restore(), so opening a second one (any caller, same or different target)
+// or leaving the screen can tear the first down without the caller needing
+// to know one was open.
+let activeReauth = null;
+
+function closeActiveReauth() {
+  if (!activeReauth) return;
+  const restore = activeReauth;
+  activeReauth = null;
+  restore();
+}
+
+/**
+ * Opens the Lane 20 panel in place of `buttons` (each hidden for the
+ * duration). It is inserted right before `before` (default `buttons[0]`) -
+ * a caller whose buttons live inside a container some render rebuilds
+ * wholesale passes an element outside it, so the panel itself never is.
+ * `send(passcode)` performs the actual PUT; `onDone(res)` runs once on a
+ * done/error outcome, after the panel has already closed and the buttons are
+ * already back - exactly what the caller's existing success/error handling
+ * expects. CANCEL restores the buttons and calls `onCancel()`; nothing on
+ * screen is written. The passcode is never kept past one request either way.
+ */
+function openReauth({
+  buttons, before = buttons[0], kind, name, verb, send, onDone, onCancel,
+}) {
+  // A session already open - for this caller or a different one - is torn
+  // down first, so a stray submit can never run against a target the owner
+  // has already moved past.
+  closeActiveReauth();
+
+  const panel = document.getElementById('reauth');
+  const line = document.getElementById('reauth-line');
+  const pin = document.getElementById('reauth-pin');
+  const eye = document.getElementById('reauth-pin-eye');
+  const msg = document.getElementById('reauth-msg');
+  const action = document.getElementById('reauth-action');
+  const cancelBtn = document.getElementById('reauth-cancel');
+
+  before.parentElement.insertBefore(panel, before);
+  for (const b of buttons) b.hidden = true;
+  panel.hidden = false;
+  line.textContent = reauthLine(kind, name);
+  action.textContent = verb;
+  action.disabled = true;
+  msg.textContent = '';
+  pin.disabled = false;
+  pin.value = '';
+  setPinRevealed('reauth-pin', false);
+
+  let inFlight = false;
+
+  function updateEnabled() {
+    action.disabled = !/^[0-9]{6}$/.test(pin.value);
+  }
+
+  function unwire() {
+    pin.removeEventListener('input', updateEnabled);
+    eye.removeEventListener('click', onEye);
+    action.removeEventListener('click', onSubmit);
+    cancelBtn.removeEventListener('click', onCancelClick);
+  }
+
+  function restore() {
+    if (activeReauth === restore) activeReauth = null;
+    unwire();
+    panel.hidden = true;
+    pin.value = ''; // never kept past this session either way
+    setPinRevealed('reauth-pin', false);
+    parkPanel(panel);
+    for (const b of buttons) b.hidden = false;
+  }
+
+  function onEye() {
+    setPinRevealed('reauth-pin', eye.getAttribute('aria-pressed') !== 'true');
+  }
+
+  function onCancelClick() {
+    restore();
+    if (onCancel) onCancel();
+  }
+
+  async function onSubmit() {
+    if (inFlight) return;
+    inFlight = true;
+    action.disabled = true;
+    const passcode = pin.value;
+    pin.value = ''; // never kept past this one request
+    const res = await send(passcode);
+    inFlight = false;
+    // A newer session may have opened (and this one been torn down) while
+    // send() was in flight - its reply must never touch that one's screen.
+    if (activeReauth !== restore) return;
+    const outcome = reauthOutcome(res);
+
+    if (outcome === 'done' || outcome === 'error') {
+      restore();
+      onDone(res);
+      return;
+    }
+    if (outcome === 'wrong') {
+      setPinRevealed('reauth-pin', false);
+      msg.textContent = REAUTH_WRONG;
+      updateEnabled();
+      return;
+    }
+    // 'locked' - same words as the lock screen's own lockout (Lane 12).
+    msg.textContent = messageFor('too_many_attempts', 429, res.data);
+    pin.disabled = true;
+    action.disabled = true;
+    await sleep((res.data && res.data.retry_after_ms) || 0);
+    if (activeReauth !== restore) return; // same check, after the wait too
+    pin.disabled = false;
+    pin.value = '';
+    setPinRevealed('reauth-pin', false);
+    msg.textContent = '';
+    updateEnabled();
+  }
+
+  pin.addEventListener('input', updateEnabled);
+  eye.addEventListener('click', onEye);
+  action.addEventListener('click', onSubmit);
+  cancelBtn.addEventListener('click', onCancelClick);
+
+  activeReauth = restore;
+}
+
 // The current level, re-fetched. RETRY and the post-401 re-entry are the same
 // action: whatever level the screen is showing was never loaded.
 function reloadShareLevel() {
@@ -2731,16 +2964,11 @@ function finishFolders() {
   if (resolve) resolve();
 }
 
-async function onSave() {
-  if (share.busy) return;
-  share.error = null;
-  share.errorIndex = null;
-  share.busy = true;
-  shareEls().save.disabled = true;
-  const res = await putShared(sharedBody(share.ticks));
-  if (shareAuthLost(res)) { share.busy = false; return; } // onAuthLost owns the recovery
+// Pure application of a PUT result onto share's own state - shared by
+// onSave's first-run direct write and its Lane 20 reauth path, so the two
+// ways of getting here leave the screen in the same shape.
+function finishSave(res) {
   const result = applySaveResult(share, res);
-  share.busy = false;
   if (result.done) {
     finishFolders();
     return;
@@ -2750,6 +2978,47 @@ async function onSave() {
   share.errorIndex = result.errorIndex;
   share.error = { text: result.message, retry: false };
   renderShare();
+}
+
+function openSaveReauth() {
+  openReauth({
+    buttons: [shareEls().skip, shareEls().save],
+    kind: 'share',
+    name: null,
+    verb: SAVE,
+    send: (passcode) => putShared({ ...sharedBody(share.ticks), passcode }),
+    onDone: (res) => { if (!shareAuthLost(res)) finishSave(res); }, // 401: onAuthLost owns the recovery
+  });
+}
+
+async function onSave() {
+  if (share.busy) return;
+  share.error = null;
+  share.errorIndex = null;
+
+  // Lane 20: only the genuine first-run picker may try a passcode-less
+  // write at all - everyone else goes straight through the panel below.
+  if (!share.firstRun) {
+    openSaveReauth();
+    return;
+  }
+
+  share.busy = true;
+  shareEls().save.disabled = true;
+  const res = await putShared(sharedBody(share.ticks));
+  share.busy = false;
+  if (shareAuthLost(res)) return; // onAuthLost owns the recovery
+
+  // The token that opened this picker turned out not to carry the first-run
+  // exemption (it came from an ordinary unlock, not from setting a passcode -
+  // reachable by reloading mid-first-run). The panel is the honest next step.
+  if (!res.ok && res.code === 'passcode_required') {
+    shareEls().save.disabled = false; // openReauth is about to hide it anyway, but restore() must not find it stuck
+    openSaveReauth();
+    return;
+  }
+
+  finishSave(res);
 }
 
 // SKIP is finishFolders() and nothing else - it must not call putShared. Same
@@ -2802,12 +3071,14 @@ function onShareUpClick() {
  */
 let pendingFolders = null;
 
-function showFolders(initial) {
+function showFolders(initial, { firstRun = false } = {}) {
   showScreen('folders');
   document.getElementById('folders').hidden = false;
   // The fetch that 401'd is why the current level is empty - revealing it
   // with no error and no RETRY would be the same dead end in a different
   // costume, so a re-entrant call reloads before handing back the same promise.
+  // `initial` and `firstRun` are BOTH ignored on a re-entrant call: the
+  // in-flight run already owns share.ticks and share.firstRun.
   if (pendingFolders) { reloadShareLevel(); return pendingFolders; }
 
   // mode/excludes are carried through ONLY when the caller supplied them
@@ -2829,6 +3100,7 @@ function showFolders(initial) {
   share.error = null;
   share.busy = false;
   share.pushed = 0;
+  share.firstRun = firstRun;
 
   const els = shareEls();
   // Entering with nothing shared is a skip; entering from state 4 with roots
@@ -2992,6 +3264,10 @@ function renderSettingsSub(key) {
   if (key === 'see') { renderSections(document.getElementById('see-sections')); return; }
   if (key === 'about') { renderAbout(); return; }
   if (key === 'agent') { renderAgentStatus(); return; }
+  // Lane 19. renderNotify() draws whatever state.push already holds (loading,
+  // most likely, on the first open); refreshPush() then asks the agent and
+  // re-renders when it answers.
+  if (key === 'notify') { renderNotify(); refreshPush(); return; }
   // 'reset' and 'contact' are static markup: reset's only moving part is
   // the button, and contact's two rows are plain links in index.html.
 }
@@ -3195,6 +3471,456 @@ async function refreshAgentStatus() {
   if (currentSub() === 'agent') renderAgentStatus();
 }
 
+// ---------------------------------------------------------------------------
+// Lane 19 - Settings > Alerts > Notifications. state.push is the agent's own
+// answer (null until refreshPush has run once); notifyTransient and the test/
+// rename/remove locals below hold the phone-only states that answer has no
+// room for - mid-enable, a failed attempt with its typed name kept, an
+// in-flight test and its result, and which device row is open for editing.
+// ---------------------------------------------------------------------------
+
+const DEVICE_NAME_KEY = 'claude-remote.push-name';
+
+/** The phone's own last-used device name, read only for the 'stopped' state. */
+function storedDeviceName() {
+  try {
+    return localStorage.getItem(DEVICE_NAME_KEY) || '';
+  } catch {
+    return ''; // private mode, or storage disabled - not fatal, just unremembered
+  }
+}
+
+function storeDeviceName(name) {
+  try {
+    localStorage.setItem(DEVICE_NAME_KEY, name || '');
+  } catch { /* as above */ }
+}
+
+/**
+ * The capability facts cantTurnOnReason checks, in its order. The Home
+ * Screen (standalone) check applies on iPhone/iPad only - elsewhere
+ * `standalone: true` is passed so that check can never fire.
+ */
+function pushEnv() {
+  const homeScreenApplies = isIphoneOrIpad(navigator);
+  return {
+    standalone: homeScreenApplies ? isInstalled() : true,
+    hasPush: 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined',
+    permission: typeof Notification === 'undefined' ? 'default' : Notification.permission,
+  };
+}
+
+/**
+ * Asks the agent what it knows, and re-renders whatever is showing. Called
+ * from the settings-open listener (not inside openSettings, which a test
+ * slices) and whenever the Notifications screen itself is opened.
+ */
+async function refreshPush() {
+  const reason = cantTurnOnReason(pushEnv());
+  let mine = null;
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      // Never .ready - it hangs forever with no worker registered.
+      const sub = reg && (await reg.pushManager.getSubscription());
+      mine = sub ? sub.endpoint : null;
+    }
+  } catch { /* no worker, or the API refused it - mine stays unknown */ }
+
+  const res = await getPush();
+  state.push = {
+    reason,
+    mine,
+    devices: res.ok ? res.data.devices : null,
+    publicKey: res.ok ? res.data.public_key : null,
+  };
+
+  if (currentSub() === 'notify') {
+    renderNotify();
+    document.getElementById('notify-msg').textContent = res.ok ? '' : errorCopy(res.code, res.status);
+  } else if (state.screen === 'settings') {
+    renderSettings();
+  }
+}
+
+// Mid-enable and a failed enable's own retryable banner - not reflected in
+// state.push, so a plain local overlays it. null outside those two windows.
+let notifyTransient = null; // null | 'enabling' | { failed: 'pc' | 'phone' }
+let notifyOnInFlight = false;
+let notifyTestInFlight = false;
+let notifyTestResult = null; // null | { kind: 'good' | 'bad', service }
+
+async function onNotifyOn() {
+  if (notifyOnInFlight) return;
+  notifyOnInFlight = true;
+  const typedName = document.getElementById('notify-name').value;
+  notifyTransient = 'enabling';
+  renderNotify();
+
+  // FIRST await, deliberately - iOS drops a permission prompt that is not
+  // tied directly to the tap that triggered it.
+  const permission = await Notification.requestPermission();
+  if (permission !== 'granted') {
+    notifyOnInFlight = false;
+    notifyTransient = null;
+    await refreshPush(); // denied lands on state 2; dismissed, back on state 1
+    return;
+  }
+
+  let sub;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const existing = reg && (await reg.pushManager.getSubscription());
+    if (existing) {
+      try { await existing.unsubscribe(); } catch { /* best effort */ }
+    }
+    sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64uToBytes(state.push.publicKey),
+    });
+  } catch {
+    notifyOnInFlight = false;
+    notifyTransient = { failed: 'phone' };
+    renderNotify();
+    return;
+  }
+
+  const res = await addPushDevice(sub.toJSON(), typedName);
+  notifyOnInFlight = false;
+  if (!res.ok) {
+    // Undo the phone-side subscribe either way - a 401 is still a device the
+    // PC never saved, and leaving it subscribed is what misreads as state 10
+    // ("it stopped working") for a device that never worked at all.
+    try { await sub.unsubscribe(); } catch { /* best effort */ }
+    if (res.status === 401) { notifyTransient = null; return; } // the re-lock owns the rest
+    notifyTransient = { failed: 'pc' };
+    renderNotify();
+    return;
+  }
+  notifyTransient = null;
+  storeDeviceName(res.data.device.name || typedName);
+  await refreshPush();
+}
+
+async function onSendTest() {
+  if (notifyTestInFlight || !state.push || !state.push.mine) return;
+  notifyTestInFlight = true;
+  notifyTestResult = null;
+  renderNotify();
+  const res = await sendTestPush(state.push.mine);
+  notifyTestInFlight = false;
+
+  if (res.ok) {
+    notifyTestResult = { kind: 'good', service: res.data.service };
+    renderNotify();
+    return;
+  }
+  if (res.code === 'device_gone') {
+    // The PC has already deleted the row; refreshPush() lands on state 10.
+    await refreshPush();
+    return;
+  }
+  if (res.code === 'push_failed') {
+    notifyTestResult = { kind: 'bad', service: res.data.service };
+    renderNotify();
+    return;
+  }
+  document.getElementById('notify-msg').textContent = errorCopy(res.code, res.status);
+  renderNotify();
+}
+
+async function onTurnOffThisDevice() {
+  if (!state.push || !state.push.mine) return;
+  const endpoint = state.push.mine;
+  const res = await removePushDevice(endpoint);
+  if (res.ok || res.status === 404) {
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && (await reg.pushManager.getSubscription());
+      if (sub) await sub.unsubscribe();
+    } catch { /* best effort */ }
+  }
+  notifyTestResult = null;
+  await refreshPush();
+  // AFTER refreshPush, which clears #notify-msg - written before it, the
+  // error vanished and TURN OFF looked like it did nothing.
+  if (!res.ok && res.status !== 404 && res.status !== 401) {
+    document.getElementById('notify-msg').textContent = errorCopy(res.code, res.status);
+  }
+}
+
+// The two static panels state 8/9 move under whichever device row raised
+// them. One open at a time - opening one closes the other.
+let notifyRenameFor = null;
+let notifyRemoveFor = null;
+
+function closeNotifyRename() {
+  notifyRenameFor = null;
+  const panel = document.getElementById('notify-rename');
+  panel.hidden = true;
+  parkPanel(panel);
+}
+
+function closeNotifyRemove() {
+  notifyRemoveFor = null;
+  const panel = document.getElementById('notify-remove');
+  panel.hidden = true;
+  parkPanel(panel);
+}
+
+function openNotifyRename(endpoint, row) {
+  closeNotifyRemove();
+  notifyRenameFor = endpoint;
+  const device = (state.push.devices || []).find((d) => d.endpoint === endpoint);
+  document.getElementById('notify-rename-name').value = (device && device.name) || '';
+  document.getElementById('notify-rename-hint').textContent = renameHint(addedDate(device.created_at));
+  const panel = document.getElementById('notify-rename');
+  row.insertAdjacentElement('afterend', panel);
+  panel.hidden = false;
+}
+
+function openNotifyRemove(endpoint, row) {
+  closeNotifyRename();
+  notifyRemoveFor = endpoint;
+  const device = (state.push.devices || []).find((d) => d.endpoint === endpoint);
+  const name = (device && device.name) || `Added ${addedDate(device.created_at)}`;
+  document.getElementById('notify-remove-prompt').textContent = removePrompt(name);
+  const panel = document.getElementById('notify-remove');
+  row.insertAdjacentElement('afterend', panel);
+  panel.hidden = false;
+}
+
+async function onNotifyRenameSave() {
+  if (!notifyRenameFor) return;
+  const endpoint = notifyRenameFor;
+  const name = document.getElementById('notify-rename-name').value;
+  const res = await renamePushDevice(endpoint, name);
+  if (!res.ok) {
+    if (res.status !== 401) document.getElementById('notify-msg').textContent = errorCopy(res.code, res.status);
+    return;
+  }
+  if (endpoint === state.push.mine) storeDeviceName(res.data.device.name || '');
+  closeNotifyRename();
+  await refreshPush();
+}
+
+async function onNotifyRemoveGo() {
+  if (!notifyRemoveFor) return;
+  const endpoint = notifyRemoveFor;
+  const res = await removePushDevice(endpoint);
+  if (!res.ok) {
+    if (res.status !== 401) document.getElementById('notify-msg').textContent = errorCopy(res.code, res.status);
+    return;
+  }
+  closeNotifyRemove();
+  await refreshPush();
+}
+
+function buildNotifyStatusRow(name, sub, on) {
+  const el = document.getElementById('notify-status');
+  el.className = on ? 'row folder set-row notify-status on' : 'row folder set-row notify-status';
+  el.innerHTML = '';
+  const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  ico.querySelector('use').setAttribute('href', '#i-bell');
+  el.appendChild(ico);
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = name;
+  main.appendChild(nameEl);
+  if (sub) {
+    const subEl = document.createElement('span');
+    subEl.className = 'row-status';
+    subEl.textContent = sub;
+    main.appendChild(subEl);
+  }
+  el.appendChild(main);
+}
+
+function buildNotifyDeviceRow(row) {
+  const el = document.createElement('div');
+  el.className = 'row folder set-row notify-device';
+
+  const ico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+  ico.querySelector('use').setAttribute('href', '#i-bell');
+  el.appendChild(ico);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'notify-device-name';
+  btn.dataset.renameDevice = row.endpoint;
+  const main = document.createElement('span');
+  main.className = 'row-main';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'row-name';
+  nameEl.textContent = row.name;
+  main.appendChild(nameEl);
+  if (row.sub) {
+    const subEl = document.createElement('span');
+    subEl.className = 'row-status';
+    subEl.textContent = row.sub;
+    main.appendChild(subEl);
+  }
+  btn.appendChild(main);
+  el.appendChild(btn);
+
+  // This device has no X - TURN OFF ON THIS DEVICE does that job, so no two
+  // controls do the one thing.
+  if (!row.current) {
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'shared-remove';
+    x.dataset.removeDevice = row.endpoint;
+    x.setAttribute('aria-label', `Stop notifications on ${row.name}`);
+    const xico = document.getElementById('tpl-row-ico').content.firstElementChild.cloneNode(true);
+    xico.querySelector('use').setAttribute('href', '#i-x');
+    x.appendChild(xico);
+    el.appendChild(x);
+  }
+  return el;
+}
+
+function renderNotifyDevices() {
+  const host = document.getElementById('notify-devices');
+  // #notify-rename/#notify-remove can be descendants of #notify-devices at
+  // the moment ANY render reaches here - SEND A TEST, refreshPush, a
+  // background visibilitychange load - not only after a panel has already
+  // closed. Closing both first, every time, means the wipe below can never
+  // delete either along with the row it was anchored to.
+  closeNotifyRename();
+  closeNotifyRemove();
+  host.innerHTML = '';
+  const rows = deviceRows(state.push.devices, state.push.mine);
+  document.getElementById('notify-devices-count').textContent = String(rows.length);
+  for (const row of rows) host.appendChild(buildNotifyDeviceRow(row));
+}
+
+/** Every Lane 19 state, from state.push and the transients above. */
+function renderNotify() {
+  const els = {
+    nameField: document.getElementById('notify-name-field'),
+    nameInput: document.getElementById('notify-name'),
+    onBtn: document.getElementById('notify-on'),
+    alert: document.getElementById('notify-alert'),
+    alertText: document.getElementById('notify-alert-text'),
+    devicesZone: document.getElementById('notify-devices-zone'),
+    testResult: document.getElementById('notify-test-result'),
+    testResultText: document.getElementById('notify-test-result-text'),
+    testBtn: document.getElementById('notify-test'),
+    hearsLabel: document.getElementById('notify-hears-label'),
+    hears: document.getElementById('notify-hears'),
+    info: document.getElementById('notify-info'),
+    offBtn: document.getElementById('notify-off'),
+  };
+
+  // Reset every optional block; each branch below reveals only its own.
+  els.alert.hidden = true;
+  els.alert.className = 'banner set-warn';
+  els.devicesZone.hidden = true;
+  els.testResult.hidden = true;
+  els.testBtn.hidden = true;
+  els.hearsLabel.hidden = true;
+  els.hears.hidden = true;
+  els.info.hidden = true;
+  els.offBtn.hidden = true;
+  els.nameField.hidden = false;
+  els.onBtn.hidden = false;
+  els.onBtn.disabled = false;
+  els.onBtn.classList.add('set-btn-solid');
+  els.onBtn.textContent = TURN_ON;
+  els.nameInput.disabled = false;
+
+  const display = notifyTransient === 'enabling'
+    ? 'enabling'
+    : (notifyTransient && notifyTransient.failed) ? 'enable-failed' : notifyScreenState(state.push);
+
+  const otherCount = state.push && Array.isArray(state.push.devices)
+    ? state.push.devices.filter((d) => d.endpoint !== state.push.mine).length
+    : 0;
+
+  if (display === 'loading') {
+    buildNotifyStatusRow('', '');
+    els.nameField.hidden = true;
+    els.onBtn.hidden = true;
+    return;
+  }
+
+  if (display === 'unavailable') {
+    const reason = state.push.reason;
+    const onApple = isIphoneOrIpad(navigator);
+    const deniedSub = onApple ? DENIED_SUB : DENIED_SUB_BROWSER;
+    const deniedBanner = onApple ? DENIED_BANNER : DENIED_BANNER_BROWSER;
+    const noPushSub = onApple ? NO_PUSH_SUB : NO_PUSH_SUB_BROWSER;
+    const noPushBanner = onApple ? NO_PUSH_BANNER : NO_PUSH_BANNER_BROWSER;
+    const sub = reason === 'not_standalone' ? NOT_STANDALONE_SUB : reason === 'no_push' ? noPushSub : deniedSub;
+    const bannerText = reason === 'not_standalone' ? NOT_STANDALONE_BANNER : reason === 'no_push' ? noPushBanner : deniedBanner;
+    buildNotifyStatusRow(CANT_NAME, sub);
+    els.alert.hidden = false;
+    els.alertText.textContent = bannerText;
+    // Lane 19 step 2: no name field, and TURN ON drawn quiet and off.
+    els.nameField.hidden = true;
+    els.onBtn.classList.remove('set-btn-solid');
+    els.onBtn.disabled = true;
+    els.hearsLabel.hidden = false;
+    els.hears.hidden = false;
+    return;
+  }
+
+  if (display === 'enabling') {
+    buildNotifyStatusRow(ENABLING_NAME, ENABLING_SUB);
+    els.nameInput.disabled = true;
+    els.onBtn.disabled = true;
+    els.onBtn.textContent = TURNING_ON;
+    return;
+  }
+
+  if (display === 'enable-failed') {
+    buildNotifyStatusRow(OFF_NAME, ENABLE_FAILED_SUB);
+    els.alert.hidden = false;
+    els.alert.className = 'banner set-danger';
+    els.alertText.textContent = notifyTransient.failed === 'pc' ? ENABLE_FAILED_PC : ENABLE_FAILED_PHONE;
+    els.onBtn.textContent = TRY_AGAIN;
+    return;
+  }
+
+  if (display === 'off') {
+    buildNotifyStatusRow(OFF_NAME, otherDevicesLine(otherCount));
+    els.hearsLabel.hidden = false;
+    els.hears.hidden = false;
+    els.info.hidden = false;
+    return;
+  }
+
+  if (display === 'stopped') {
+    buildNotifyStatusRow(OFF_NAME, otherDevicesLine(otherCount));
+    els.alert.hidden = false;
+    els.alertText.textContent = STOPPED_WARN;
+    if (!els.nameInput.value) els.nameInput.value = storedDeviceName();
+    return;
+  }
+
+  // 'on'
+  buildNotifyStatusRow(ON_NAME, ON_SUB, true);
+  els.nameField.hidden = true;
+  els.onBtn.hidden = true;
+  els.devicesZone.hidden = false;
+  renderNotifyDevices();
+  els.testBtn.hidden = false;
+  els.testBtn.disabled = notifyTestInFlight;
+  els.testBtn.textContent = notifyTestInFlight ? SENDING : SEND_A_TEST;
+  if (notifyTestResult) {
+    els.testResult.hidden = false;
+    els.testResult.className = notifyTestResult.kind === 'good' ? 'banner set-ready' : 'banner set-danger';
+    els.testResultText.textContent = notifyTestResult.kind === 'good'
+      ? testAcceptedCopy(notifyTestResult.service, isIphoneOrIpad(navigator))
+      : testFailedCopy(notifyTestResult.service);
+  }
+  els.hearsLabel.hidden = false;
+  els.hears.hidden = false;
+  els.offBtn.hidden = false;
+}
+
 // Ends the session on THIS device. The token is memory-only by design (see
 // api.js), so dropping it and showing the gate IS the lock - there is no
 // server-side session to end, and claiming to sign other devices out would be
@@ -3377,27 +4103,34 @@ function cancelStopSharing() {
  */
 async function confirmStopSharing() {
   if (pendingRemoval === null) return;
-  const btn = document.getElementById('shared-stop');
-  btn.disabled = true;
-  const res = await removeRoot(pendingRemoval);
-  btn.disabled = false;
-  if (res === null) return;   // a write was already in flight
+  const rootPath = pendingRemoval;
+  const row = sharedFolderRows(state.shared, state.projects).find((r) => r.path === rootPath);
+  const name = row ? row.name : crumbSegments(rootPath).at(-1).label;
+  openReauth({
+    buttons: [document.getElementById('shared-stop'), document.getElementById('shared-cancel')],
+    kind: 'stop',
+    name,
+    verb: 'STOP SHARING',
+    send: async (passcode) => (await removeRoot(rootPath, passcode))
+      || { ok: false, status: 0, code: 'shared_unknown' },
+    onDone: (res) => {
+      if (!res.ok) {
+        // 401 has already re-locked via api.js and there is no screen left to
+        // write on; anything else is the agent refusing, and the owner needs
+        // the words for it HERE, not on the project list behind this screen.
+        if (res.status !== 401) {
+          document.getElementById('shared-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
+        }
+        return;
+      }
 
-  if (!res.ok) {
-    // 401 has already re-locked via api.js and there is no screen left to
-    // write on; anything else is the agent refusing, and the owner needs the
-    // words for it HERE, not on the project list behind this screen.
-    if (res.status !== 401) {
-      document.getElementById('shared-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
-    }
-    return;
-  }
-
-  pendingRemoval = null;
-  document.getElementById('shared-msg').textContent = '';
-  renderSharedScreen();
-  renderSettings();  // the settings root's own row carries the count
-  load();            // the project list loses that root's projects
+      pendingRemoval = null;
+      document.getElementById('shared-msg').textContent = '';
+      renderSharedScreen();
+      renderSettings();  // the settings root's own row carries the count
+      load();            // the project list loses that root's projects
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -3572,20 +4305,25 @@ async function saveRootEdit() {
       : 'Lost track of your shared folders while the app was in the background. Tap REFRESH on the project list, then try again.';
     return;
   }
-  btn.disabled = true;
-  const res = await putShared(body);
-  btn.disabled = false;
-
-  if (!res.ok) {
-    if (res.status !== 401) {
-      document.getElementById('root-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
-    }
-    return;
-  }
-  state.shared = res.data.shared_folders;
-  document.getElementById('root-msg').textContent = '';
-  closeSettingsSub();   // saved, so the screen has nothing left to say
-  load();               // the project list gains or loses those children
+  openReauth({
+    buttons: [btn, document.getElementById('root-stop')],
+    kind: 'save',
+    name: null,
+    verb: SAVE,
+    send: (passcode) => putShared({ ...body, passcode }),
+    onDone: (res) => {
+      if (!res.ok) {
+        if (res.status !== 401) {
+          document.getElementById('root-msg').textContent = shareErrorMessage(res.code, res.status, null, null).text;
+        }
+        return;
+      }
+      state.shared = res.data.shared_folders;
+      document.getElementById('root-msg').textContent = '';
+      closeSettingsSub();   // saved, so the screen has nothing left to say
+      load();               // the project list gains or loses those children
+    },
+  });
 }
 
 // STOP SHARING THIS FOLDER, from inside the folder. Hands off to the same
@@ -3721,10 +4459,8 @@ function buildSettingsRow({
 
 /**
  * Lane 6 of the userflow artifact, as data. Groups and their order come
- * straight off the drawn frame; the only departure is the ALERTS group, whose
- * single row is Notifications - cut from v1 by the artifact's own Decided
- * table ("Web Push and VAPID are cut from v1 entirely"). A group with no rows
- * renders nothing, so restoring it is one entry here.
+ * straight off the drawn frame, ALERTS included (Lane 19, M22) - its single
+ * row is Notifications.
  *
  * `state(facts)` returns the sub-line, or '' for a row that has no fact worth
  * showing. Keeping it a function rather than a string is what lets the sub-
@@ -3733,12 +4469,20 @@ function buildSettingsRow({
 function settingsGroups(facts) {
   const shared = sharedRowState(state.shared);
   const about = aboutRowState(SHELL_VERSION, state.status, state.shellStale);
+  const notify = notifyRowState(state.push);
   return [
     {
       heading: 'FOLDERS',
       rows: [{
         id: 'shared', icon: 'i-folder', name: 'Shared folders',
         state: shared.text, enterable: shared.enterable,
+      }],
+    },
+    {
+      heading: 'ALERTS',
+      rows: [{
+        id: 'notify', icon: 'i-bell', name: 'Notifications',
+        state: notify.text, enterable: notify.enterable,
       }],
     },
     {
@@ -3905,7 +4649,7 @@ async function ensureAccepted() {
   // is the truth.
   const reopen = pendingFolders !== null;
   if (reopen || (firstRun && knownShared !== null)) {
-    await showFolders(reopen ? share.ticks : sharedToTicks(knownShared));
+    await showFolders(reopen ? share.ticks : sharedToTicks(knownShared), { firstRun: !reopen });
   }
   picker.hidden = false;
   showScreen('list');
@@ -4041,7 +4785,13 @@ function wireEvents() {
     closeFolderScreen();
   });
   document.getElementById('home').addEventListener('click', goHome);
-  document.getElementById('settings-open').addEventListener('click', openSettings);
+  document.getElementById('settings-open').addEventListener('click', () => {
+    openSettings();
+    // Not inside openSettings: a background load() must not refetch push
+    // state every time it happens to re-render the settings root, only when
+    // a person actually opens Settings.
+    refreshPush();
+  });
   // The Settings root's own way out. closeSettings, not goHome: this leaves
   // Settings the way its own entry came on, popping exactly one entry.
   document.getElementById('settings-close').addEventListener('click', closeSettings);
@@ -4134,6 +4884,22 @@ function wireEvents() {
   document.getElementById('reset-cancel').addEventListener('click', closeSettingsSub);
   document.getElementById('reset-go').addEventListener('click', resetApp);
   document.getElementById('agent-recheck').addEventListener('click', refreshAgentStatus);
+  // Lane 19 - Notifications.
+  document.getElementById('notify-on').addEventListener('click', onNotifyOn);
+  document.getElementById('notify-test').addEventListener('click', onSendTest);
+  document.getElementById('notify-off').addEventListener('click', onTurnOffThisDevice);
+  document.getElementById('notify-rename-save').addEventListener('click', onNotifyRenameSave);
+  document.getElementById('notify-rename-cancel').addEventListener('click', closeNotifyRename);
+  document.getElementById('notify-remove-go').addEventListener('click', onNotifyRemoveGo);
+  document.getElementById('notify-remove-cancel').addEventListener('click', closeNotifyRemove);
+  // One delegated handler for the device list, same idiom as #shared-rows:
+  // rows are rebuilt on every render, so their controls cannot be wired once.
+  document.getElementById('notify-devices').addEventListener('click', (e) => {
+    const remove = e.target.closest('[data-remove-device]');
+    if (remove) { openNotifyRemove(remove.dataset.removeDevice, remove.closest('.notify-device')); return; }
+    const rename = e.target.closest('[data-rename-device]');
+    if (rename) openNotifyRename(rename.dataset.renameDevice, rename.closest('.notify-device'));
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     load();
@@ -4188,12 +4954,12 @@ let installPromptUsed = false;
 // above the gate for the same class of reason.
 // preventDefault stops Chromium's own mini-infobar, which is the interruption
 // the owner rejected; the saved event is raised only from the About row.
-// THE DOM GUARD (T104). Every line above this point is a declaration; these two
-// listeners and the boot() call at the end of the file are the ONLY things that
-// RUN when this module is imported. Guarding them is the whole cost of making
-// app.js importable under node - without it the import throws on `window` here,
-// before a test can reach a single function. In a browser IN_BROWSER is always
-// true, so nothing about the running app changes.
+// THE DOM GUARD (T104). Every line above this point is a declaration; these
+// listeners and the boot() call at the end of the file are the ONLY things
+// that RUN when this module is imported. Guarding them is the whole cost of
+// making app.js importable under node - without it the import throws on
+// `window` here, before a test can reach a single function. In a browser
+// IN_BROWSER is always true, so nothing about the running app changes.
 const IN_BROWSER = typeof window !== 'undefined';
 
 if (IN_BROWSER) window.addEventListener('beforeinstallprompt', (e) => {
@@ -4203,6 +4969,20 @@ if (IN_BROWSER) window.addEventListener('beforeinstallprompt', (e) => {
 // A real install. isInstalled() drops the row on the next render anyway, but
 // releasing the stale event keeps the two in step.
 if (IN_BROWSER) window.addEventListener('appinstalled', () => { installPrompt = null; });
+
+// Lane 19 step 14/15: sw.js's notificationclick handler postMessages this tab
+// for a serve_missing notification when a window was already open (it has no
+// window to openWindow into then). Module-scope so it fires whichever screen
+// is up: the list re-renders its own variant, the gate reveals its notice in
+// place (showServeMissingNotice touches static markup directly - it needs no
+// render() of its own).
+if (IN_BROWSER && 'serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'serve_missing') {
+    state.serveMissing = true;
+    if (state.screen === 'list') render();
+    else if (state.screen === 'gate') showServeMissingNotice();
+  }
+});
 
 /** Already running as an installed app? Then there is nothing to offer. */
 function isInstalled() {
@@ -4307,6 +5087,22 @@ async function maybeResetCache() {
 
 async function boot() {
   if (await maybeResetCache()) return;
+  // Lane 19 step 14/15: `#serve_missing` is the fragment sw.js's openWindow
+  // uses when no window was already open. AFTER maybeResetCache - a
+  // ?reset-cache open never carries this fragment, so the order does not
+  // matter there, but reading location before the one thing that might
+  // replace the page is the safer habit. A fragment, not a query: cache
+  // matching ignores fragments, so the cached shell still answers with the
+  // tunnel down. Consumed once: the URL is cleaned so a reload does not
+  // replay it.
+  if (location.hash === '#serve_missing') {
+    state.serveMissing = true;
+    history.replaceState(history.state, '', location.pathname + location.search);
+    // The common case (PRD/Lane 19 step 15): the restart that sent this
+    // alert dropped every token, so the tap almost always lands here, on the
+    // gate, rather than on the list variant below.
+    showServeMissingNotice();
+  }
   // BEFORE THE GATE, but AFTER maybeResetCache, and both halves are load
   // bearing. Before the gate because the header sits outside the screen
   // <main>s with no hide rule, so it shows behind the gate and accept screens,

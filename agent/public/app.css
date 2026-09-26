@@ -946,6 +946,86 @@ select {
 .banner.set-warn { display: flex; align-items: flex-start; gap: 9px; margin: 16px 0 0; color: var(--warn); }
 .banner.set-warn .ico { margin-top: 2px; }
 
+/* Lane 19 step 14 - the command the owner runs at the PC, drawn once already
+   in the approved Artifact under this same class name. Monospace by
+   inheritance (body's own font-family), so the command reads as a command. */
+.cmd {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+/* Notifications (Lane 19) - the status row's own bell dims when off, lights
+   in the accent when on. Same rule the rest of the app uses for a live vs
+   idle state; nothing new here, just applied to this one row. */
+.notify-status .ico { color: var(--dim); }
+.notify-status.on .ico { color: var(--accent); }
+
+/* "You will hear about" - two fixed lines, never a list element elsewhere in
+   this app, so it gets its own minimal rule rather than reusing one built for
+   a different shape. */
+.hears { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; font-size: 11px; color: var(--muted); }
+.hears span::before { content: "\2022  "; color: var(--accent-2); }
+
+/* The artifact's .sec.sp: the small uppercase label over a group. Without it
+   "You will hear about" took the body font at full size, flush to the button. */
+.sec { font-size: 10px; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; margin: 0 0 8px; }
+.sec.sp { margin-top: 22px; }
+
+/* Lane 19's name fields - the artifact's .field/.fld-lbl. With no rule they
+   were the UA field: bright white on iOS, the placeholder shouting. Same box
+   as the new-project name; its own rule because pwa-assets.test.js pins that
+   selector. font-size after `font: inherit`, for the 16px iOS zoom floor. */
+#notify-name-field { margin-top: 16px; }
+#notify-name,
+#notify-rename-name {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  font: inherit;
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  appearance: none;
+}
+#notify-name::placeholder { color: var(--dim); }
+
+/* A device row's name is a <button> (tap to rename); strip the UA button so
+   it reads as the row, not a grey box inside it. 44px like .shared-open: the
+   row centres its children, so without it the tap target is the text alone. */
+.notify-device-name {
+  flex-grow: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  appearance: none;
+  cursor: pointer;
+}
+#notify-devices-zone { margin-top: 12px; }
+
+/* Lane 20's reauth panel: a wrong-tries lockout dims the pin and the action
+   the same way the gate itself goes quiet, so the state reads the same way
+   twice in one app. */
+.set-btn:disabled,
+.pin:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .about-mark  { color: var(--accent); }
 .about-name  { font-size: 13px; font-weight: 700; margin-top: 9px; color: var(--text); }
 .about-ver   { font-size: 10px; color: var(--dim); margin-top: 5px; }

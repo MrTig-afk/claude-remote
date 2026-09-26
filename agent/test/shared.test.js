@@ -91,8 +91,12 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const authedFetch = makeAuthedFetch(origin, token);
 
+// R17: every authenticated PUT in this file carries the current passcode -
+// seeded '481902' above - so the new gate never intercepts a test written
+// before it existed. Merged in, never overridden: a call testing a specific
+// passcode value passes its own.
 function putShared(body) {
-  return authedFetch('/api/shared', { method: 'PUT', body: JSON.stringify(body) });
+  return authedFetch('/api/shared', { method: 'PUT', body: JSON.stringify({ passcode: '481902', ...body }) });
 }
 
 after(() => {
@@ -347,7 +351,7 @@ test('22 - system-dir check is computed on the CANONICAL path: an intermediate j
   await new Promise((resolve) => server22.listen(0, '127.0.0.1', resolve));
   try {
     const fetch22 = makeAuthedFetch(`http://127.0.0.1:${server22.address().port}`, token22);
-    const res = await fetch22('/api/shared', { method: 'PUT', body: JSON.stringify({ shared_folders: [{ path: p('home', 'link', 'child') }] }) });
+    const res = await fetch22('/api/shared', { method: 'PUT', body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: p('home', 'link', 'child') }] }) });
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { error: 'system_directory', index: 0 });
   } finally {
@@ -392,7 +396,7 @@ test('25 - listDrives failing -> 503 drives_unavailable, config byte-identical, 
   await new Promise((resolve) => server25.listen(0, '127.0.0.1', resolve));
   try {
     const fetch25 = makeAuthedFetch(`http://127.0.0.1:${server25.address().port}`, token25);
-    const res = await fetch25('/api/shared', { method: 'PUT', body: JSON.stringify({ shared_folders: [{ path: p('two') }] }) });
+    const res = await fetch25('/api/shared', { method: 'PUT', body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: p('two') }] }) });
     assert.equal(res.status, 503);
     assert.deepEqual(await res.json(), { error: 'drives_unavailable' });
     assert.deepEqual(fs.readFileSync(ctx.configPath), before);
@@ -548,7 +552,7 @@ test('32b - the PRODUCTION systemDirs fallback fires when ctx carries no systemD
   await new Promise((resolve) => server32b.listen(0, '127.0.0.1', resolve));
   try {
     const fetch32b = makeAuthedFetch(`http://127.0.0.1:${server32b.address().port}`, token32b);
-    const res = await fetch32b('/api/shared', { method: 'PUT', body: JSON.stringify({ shared_folders: [{ path: p('two') }] }) });
+    const res = await fetch32b('/api/shared', { method: 'PUT', body: JSON.stringify({ passcode: '481902', shared_folders: [{ path: p('two') }] }) });
     assert.equal(res.status, 400);
     assert.deepEqual(await res.json(), { error: 'system_directory', index: 0 });
   } finally {

@@ -20,7 +20,7 @@
 const CACHE = 'claude-remote-shell-__SHELL_HASH__';
 const PRECACHE = [
   '/', '/index.html', '/app.css', '/app.js', '/api.js', '/lock.js', '/copy.js', '/folders-ui.js',
-  '/update-ui.js', '/handoff-ui.js',
+  '/update-ui.js', '/handoff-ui.js', '/push-ui.js',
   '/manifest.webmanifest', '/icons/icon.svg',
   '/icons/icon-192.png', '/icons/icon-512.png',
 ];
@@ -120,4 +120,44 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   event.respondWith(staleWhileRevalidate(req, event));
+});
+
+// Fixed text only, keyed by `type`; nothing else from the payload is
+// ever read, so a future field (a project name) can never reach the lock
+// screen's notification tray.
+const PUSH_TEXT = {
+  launch_failed: 'A session couldn’t start. Open claude-remote to see why.',
+  launch_unconfirmed: 'A session hasn’t confirmed it started. Open claude-remote to check.',
+  serve_missing: 'This phone can’t reach your PC right now. It needs fixing at the PC.',
+  test: 'Test from claude-remote. Notifications work on this device.',
+};
+
+self.addEventListener('push', (event) => {
+  let type;
+  try {
+    type = event.data.json().type;
+  } catch {
+    return;
+  }
+  if (!PUSH_TEXT[type]) return;
+  event.waitUntil(self.registration.showNotification('claude-remote', {
+    body: PUSH_TEXT[type],
+    icon: '/icons/icon-192.png',
+    data: { type },
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const type = event.notification.data && event.notification.data.type;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((all) => {
+      if (all.length > 0) {
+        all[0].focus();
+        if (type === 'serve_missing') all[0].postMessage({ type: 'serve_missing' });
+        return undefined;
+      }
+      return self.clients.openWindow(type === 'serve_missing' ? '/#serve_missing' : '/');
+    }),
+  );
 });

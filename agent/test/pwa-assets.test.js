@@ -11,6 +11,7 @@ import * as folders from '../public/folders-ui.js';
 import * as copy from '../public/copy.js';
 import * as update from '../public/update-ui.js';
 import { handoffReady } from '../public/handoff-ui.js';
+import * as pushUi from '../public/push-ui.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -396,7 +397,7 @@ const NAV_LINK = /<a\b[^>]*\bhref="https?:\/\/[^"]*"[^>]*>/g;
 const REPO_CONST = /^const REPO_URL = 'https:\/\/github\.com\/[^']+';\r?$/m;  // \r: app.js is CRLF
 
 test('no shipped asset embeds an absolute http(s) URL', () => {
-  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js', 'copy.js']) {
+  for (const f of ['index.html', 'app.css', 'app.js', 'api.js', 'sw.js', 'lock.js', 'copy.js', 'push-ui.js']) {
     let source = read(f);
     if (f === 'app.js') {
       assert.match(source, REPO_CONST, 'app.js may carry the repo URL only as the REPO_URL constant');
@@ -1875,6 +1876,10 @@ function makeRenderProjectsIntegration(stubs) {
     // Lane 9's grouping runs inside renderProjects now, so the row zone's own
     // dependency comes in here too.
     'projectSections',
+    // Lane 19 step 14, and the C1 fix: buildServeMissingState is read only on
+    // the serveMissing branch (dormant for every pre-existing test here);
+    // closeActiveReauth runs unconditionally at the top of every call.
+    'buildServeMissingState', 'closeActiveReauth',
     src + '; return renderProjects;',
   )(
     stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar,
@@ -1891,6 +1896,8 @@ function makeRenderProjectsIntegration(stubs) {
     stubs.EMPTY_DAY_ONE_BODY || copy.EMPTY_DAY_ONE_BODY,
     stubs.emptyDayOneTitle || copy.emptyDayOneTitle,
     stubs.projectSections || folders.projectSections,
+    stubs.buildServeMissingState || (() => makeStubEl()),
+    stubs.closeActiveReauth || (() => {}),
   );
 }
 
@@ -2701,6 +2708,17 @@ function makeShareStubEl(tag) {
       this.children.push(child);
       return child;
     },
+    // Lane 20's openReauth moves #reauth to sit beside whichever buttons it
+    // hid, via the real DOM's parentElement/insertBefore - so the stub needs
+    // both, not just appendChild.
+    get parentElement() { return el.parent || null; },
+    insertBefore(newNode, refNode) {
+      newNode.parent = el;
+      const i = this.children.indexOf(refNode);
+      if (i === -1) this.children.push(newNode);
+      else this.children.splice(i, 0, newNode);
+      return newNode;
+    },
     // buildSettingsRow clones an <svg> out of #tpl-row-ico and points its
     // <use> at an icon id. Both happen on the CLONE, so no row assertion
     // anywhere in this file is affected by them.
@@ -2905,6 +2923,13 @@ function loadDoor({
   }
   const render = () => {};
 
+  // .share-actions, per the real markup: openReauth needs SAVE and SKIP to
+  // share a real parent so it can insertBefore(reauth, save) the way the
+  // browser does.
+  const shareActions = doc.createElement('div');
+  shareActions.appendChild(doc.getElementById('share-skip'));
+  shareActions.appendChild(doc.getElementById('share-save'));
+
   const fn = new Function(
     'document', 'window', 'history',
     'getDrives', 'getFolders', 'putShared',
@@ -2912,7 +2937,8 @@ function loadDoor({
     'truncatedNote', 'shareErrorMessage', 'applySaveResult', 'MAX_SHARED_ROOTS',
     'sharedToTicks', 'sharedRowState',
     'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
-    'SHELL_VERSION', 'agentStateLine', 'aboutRowState',
+    'SHELL_VERSION', 'agentStateLine', 'aboutRowState', 'notifyRowState',
+    'reauthLine', 'REAUTH_WRONG', 'reauthOutcome', 'setPinRevealed', 'messageFor', 'sleep', 'SAVE',
     'state', 'render', 'load',
     `${onChooseSrc}
 ${pickerSrc}
@@ -2930,7 +2956,9 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     copy.PICKER_SKIP, copy.PICKER_CANCEL, showScreenSpy,
     // settingsGroups reads both: the About row's sub-line is the shell
     // version, and the Agent status row's is the connection state.
-    '0.1.0', (r) => (r === true ? 'reachable' : 'checking'), update.aboutRowState,
+    '0.1.0', (r) => (r === true ? 'reachable' : 'checking'), update.aboutRowState, pushUi.notifyRowState,
+    folders.reauthLine, folders.REAUTH_WRONG, folders.reauthOutcome,
+    () => {}, () => '', () => Promise.resolve(), pushUi.SAVE,
     state, render, loadSpy,
   );
   door.document = doc;
@@ -2939,6 +2967,14 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
   door.state = state;
   door.screens = screens;
   door.puts = puts;
+  // Lane 20: SAVE from this door always opens the panel (share.firstRun is
+  // false here, as it is for the real Settings door) - types the passcode
+  // into it and submits.
+  door.submitReauth = async (passcode) => {
+    doc.getElementById('reauth-pin').value = passcode;
+    doc.getElementById('reauth-action').fire('click');
+    await flush();
+  };
   Object.defineProperty(door, 'loadCalls', { get: () => loadCalls });
   return door;
 }
@@ -3189,7 +3225,9 @@ test('A16 - finishFolders removes all six listeners and nulls pendingFolders', a
   const putShared = async () => ({ ok: true, status: 200, data: {} });
   const picker = loadPicker({ getDrives, putShared });
 
-  picker.showFolders([]);
+  // firstRun: true - this test is about finishFolders' own teardown, not
+  // about Lane 20; the first-run picker still writes directly.
+  picker.showFolders([], { firstRun: true });
   await flush();
   picker.share.ticks = [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }];
 
@@ -3413,10 +3451,16 @@ test('F4 - SAVE writes the right PUT body, and the list reload runs only after t
   tick.checked = true;
   door.onShareListChange({ target: tick });
 
+  // Lane 20: SAVE from this door opens the passcode panel first - nothing is
+  // written until it is submitted.
   door.document.getElementById('share-save').fire('click');
   await flush();
+  assert.equal(door.puts.length, 0, 'no PUT before the passcode is submitted');
+
+  await door.submitReauth('481902');
 
   assert.deepEqual(door.puts.at(-1), {
+    passcode: '481902',
     shared_folders: [{
       path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show',
     }],
@@ -3500,6 +3544,7 @@ test('F7 - a gone root re-entered: a rejected SAVE marks the row and keeps every
 
   door.document.getElementById('share-save').fire('click');
   await flush();
+  await door.submitReauth('481902');
   await flush();
 
   assert.equal(door.document.getElementById('folders').hidden, false, 'the picker must stay open on a rejected SAVE');
@@ -3551,9 +3596,11 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
 
   door.document.getElementById('share-save').fire('click');
   await flush();
+  await door.submitReauth('481902');
   await flush();
 
   assert.deepEqual(door.puts.at(-1), {
+    passcode: '481902',
     shared_folders: [{
       path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show',
     }],

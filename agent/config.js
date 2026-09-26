@@ -250,6 +250,16 @@ export function getAttemptsFilePath() {
   return path.join(path.dirname(getConfigFilePath()), 'passcode-attempts.json');
 }
 
+/** Absolute path of the Web Push state file (VAPID keys + subscriptions), beside the config. */
+export function getPushFilePath() {
+  return path.join(path.dirname(getConfigFilePath()), 'push.json');
+}
+
+/** Absolute path of the one-field tailscale-serve dedupe marker, beside the config. */
+export function getServeStatePath() {
+  return path.join(path.dirname(getConfigFilePath()), 'serve-state.json');
+}
+
 /**
  * Reads and parses the claude-remote config file with no schema opinions -
  * the shared read/parse T87, T91 and T94 all need, so a corrupt config is

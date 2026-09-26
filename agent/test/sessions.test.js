@@ -120,6 +120,7 @@ function makeRegCtx(extra = {}) {
     passcodePath: path.join(dir, 'passcode.json'),
     attemptsPath: path.join(dir, 'passcode-attempts.json'),
     configPath: path.join(dir, 'config.json'),
+    pushPath: path.join(dir, 'push.json'),
     tokens: new Map(),
     ...extra,
   };

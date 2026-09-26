@@ -151,6 +151,19 @@ export const PHONE_OFFLINE = {
   body: 'Nothing is wrong with your PC. Check your connection, then check Tailscale is on.',
 };
 
+// Lane 19 step 14/15 - the PC's own warning, opened from its serve_missing
+// notification. Verbatim from the approved Artifact.
+export const SERVE_MISSING = {
+  banner: 'Your PC reported that its Tailscale sharing is switched off, so this phone can’t reach it.',
+  lead: 'At the PC, open a terminal and run:',
+  after: 'This screen fills in on its own once the PC answers.',
+};
+
+/** The exact command line the banner above tells the owner to run. */
+export function serveCommand(port) {
+  return `tailscale serve --bg --https=${port} ${port}`;
+}
+
 export const SHARED_UNKNOWN = {
   title: 'The agent did not say which folders are shared.',
   body: 'Tap REFRESH. If it keeps happening, check the agent on the PC.',

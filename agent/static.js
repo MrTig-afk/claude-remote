@@ -44,7 +44,7 @@ const STATIC_HEADERS = {
 // than "fixed" by adding the entry, which would not have worked.
 const SHELL_FILES = [
   'index.html', 'app.css', 'app.js', 'api.js', 'lock.js', 'copy.js', 'folders-ui.js',
-  'update-ui.js', 'handoff-ui.js',
+  'update-ui.js', 'handoff-ui.js', 'push-ui.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 
