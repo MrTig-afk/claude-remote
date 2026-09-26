@@ -998,10 +998,14 @@ select {
 #notify-name::placeholder { color: var(--dim); }
 
 /* A device row's name is a <button> (tap to rename); strip the UA button so
-   it reads as the row, not a grey box inside it. */
+   it reads as the row, not a grey box inside it. 44px like .shared-open: the
+   row centres its children, so without it the tap target is the text alone. */
 .notify-device-name {
   flex-grow: 1;
+  display: flex;
+  align-items: center;
   min-width: 0;
+  min-height: 44px;
   padding: 0;
   font: inherit;
   color: inherit;

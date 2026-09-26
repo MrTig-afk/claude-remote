@@ -29,6 +29,8 @@ export const NOT_STANDALONE_BANNER = 'Notifications only work when claude-remote
 export const NO_PUSH_BANNER = 'This iPhone’s iOS can’t get notifications from web apps. It needs iOS 16.4 or later.';
 export const DENIED_BANNER = 'Notifications for claude-remote are off in iOS Settings. Turn them on in Settings › Notifications › claude-remote, then come back.';
 // Off Apple devices there are no iOS Settings; the browser holds the permission.
+export const NO_PUSH_SUB_BROWSER = 'not supported in this browser';
+export const NO_PUSH_BANNER_BROWSER = 'This browser can’t get notifications from web apps.';
 export const DENIED_SUB_BROWSER = 'blocked in this browser';
 export const DENIED_BANNER_BROWSER = 'Notifications for claude-remote are blocked in this browser. Allow them in this site’s settings, then come back.';
 

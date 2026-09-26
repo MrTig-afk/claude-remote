@@ -15,7 +15,7 @@ const MESSAGES = {
   passcode_too_weak: () => '! Too easy to guess. Pick something less obvious.',
   already_configured: () => '! A passcode is already set on this agent. Reload the app.',
   not_configured: () => '! No passcode is set yet. Reload the app to set one.',
-  internal_error: () => '! The agent could not save it. Check its terminal window on the PC.',
+  internal_error: () => '! The agent could not save it. Restart it on the PC, and check agent.log if it happens again.',
   network: () => '! Cannot reach the agent. Check the PC is awake and Tailscale is connected.',
   timeout: () => '! Cannot reach the agent. Check the PC is awake and Tailscale is connected.',
 };

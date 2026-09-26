@@ -13,6 +13,7 @@ import {
   testAcceptedCopy, testFailedCopy, b64uToBytes, removePrompt, renameHint,
   ROW_OFF, ROW_CANT, OFF_NAME, ON_NAME, ON_SUB, CANT_NAME,
   NOT_STANDALONE_SUB, NO_PUSH_SUB, DENIED_SUB, DENIED_SUB_BROWSER, DENIED_BANNER_BROWSER,
+  NO_PUSH_SUB_BROWSER, NO_PUSH_BANNER_BROWSER,
   NOT_STANDALONE_BANNER, NO_PUSH_BANNER, DENIED_BANNER,
   ENABLING_NAME, ENABLING_SUB, TURNING_ON, TURN_ON, TRY_AGAIN,
   ENABLE_FAILED_SUB, ENABLE_FAILED_PC, ENABLE_FAILED_PHONE, ENABLE_INFO,
@@ -211,6 +212,9 @@ test('every Lane 19 string constant matches the approved Artifact verbatim', () 
     'Notifications only work when claude-remote is opened from your Home Screen. In Safari, tap Share, then Add to Home Screen, then open it from there.',
   );
   assert.equal(NO_PUSH_BANNER, 'This iPhone’s iOS can’t get notifications from web apps. It needs iOS 16.4 or later.');
+  // Sequence 14 (owner 2026-09-26, "Browser line"): off iPhone/iPad.
+  assert.equal(NO_PUSH_SUB_BROWSER, 'not supported in this browser');
+  assert.equal(NO_PUSH_BANNER_BROWSER, 'This browser can’t get notifications from web apps.');
   assert.equal(
     DENIED_BANNER,
     'Notifications for claude-remote are off in iOS Settings. Turn them on in Settings › Notifications › claude-remote, then come back.',
@@ -371,6 +375,10 @@ test('app.js picks the permission and test-result lines by DEVICE, not by push s
   assert.match(code, /onApple = isIphoneOrIpad\(navigator\)/);
   assert.match(code, /onApple \? DENIED_SUB : DENIED_SUB_BROWSER/);
   assert.match(code, /onApple \? DENIED_BANNER : DENIED_BANNER_BROWSER/);
+  assert.match(code, /onApple \? NO_PUSH_SUB : NO_PUSH_SUB_BROWSER/);
+  assert.match(code, /onApple \? NO_PUSH_BANNER : NO_PUSH_BANNER_BROWSER/);
+  // Step 2 draws no name field and a quiet TURN ON (owner's iPhone pass, 2026-09-26).
+  assert.match(code, /els\.nameField\.hidden = true;\s*els\.onBtn\.classList\.remove\('set-btn-solid'\);\s*els\.onBtn\.disabled = true;/);
   assert.match(code, /testAcceptedCopy\(notifyTestResult\.service, isIphoneOrIpad\(navigator\)\)/);
 });
 
@@ -391,4 +399,10 @@ test('showScreen closes any open Lane 19/20 panel - leaving a screen must never 
     fn.indexOf('closeActiveReauth();') < fn.indexOf('state.screen = name;'),
     'the panel must close before the new screen is recorded as current',
   );
+});
+
+test('a device row name keeps the 44px tap floor, like .shared-open (M22-C3-C1)', () => {
+  const rule = read('app.css').replace(/\r/g, '').match(/\n\.notify-device-name \{([^}]*)\}/);
+  assert.ok(rule, 'expected a .notify-device-name rule in app.css');
+  assert.match(rule[1], /min-height: 44px;/);
 });

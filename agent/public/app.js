@@ -29,8 +29,8 @@ import {
 import {
   cantTurnOnReason, isIphoneOrIpad, notifyScreenState, notifyRowState, otherDevicesLine, addedDate, deviceRows,
   testAcceptedCopy, testFailedCopy, b64uToBytes, removePrompt, renameHint,
-  CANT_NAME, NOT_STANDALONE_SUB, NO_PUSH_SUB, DENIED_SUB, DENIED_SUB_BROWSER,
-  NOT_STANDALONE_BANNER, NO_PUSH_BANNER, DENIED_BANNER, DENIED_BANNER_BROWSER,
+  CANT_NAME, NOT_STANDALONE_SUB, NO_PUSH_SUB, NO_PUSH_SUB_BROWSER, DENIED_SUB, DENIED_SUB_BROWSER,
+  NOT_STANDALONE_BANNER, NO_PUSH_BANNER, NO_PUSH_BANNER_BROWSER, DENIED_BANNER, DENIED_BANNER_BROWSER,
   OFF_NAME, ON_NAME, ON_SUB, ENABLING_NAME, ENABLING_SUB, TURNING_ON, TURN_ON, TRY_AGAIN,
   ENABLE_FAILED_SUB, ENABLE_FAILED_PC, ENABLE_FAILED_PHONE,
   SEND_A_TEST, SENDING, TURN_OFF, STOPPED_WARN, SAVE, REMOVE,
@@ -166,7 +166,7 @@ const ERROR_COPY = {
   invalid_project: "The agent won't accept that project name. Tap REFRESH; if it keeps happening, rename the folder on the PC.",
   invalid_request: 'The agent rejected the request. This is a bug in the app - note what you tapped.',
   payload_too_large: 'The request was too big to send. This is a bug in the app - note what you tapped.',
-  internal_error: 'The agent hit an internal error. Check its terminal window on the PC.',
+  internal_error: 'The agent hit an internal error. Restart it on the PC, and check agent.log if it happens again.',
   bad_response: "The agent replied with something this app doesn't understand. It may be a different version.",
   session_not_running: "That session isn't running yet, or is already being ended. Tap REFRESH.",
   // A 403 the gate flow has not already caught: the agent lost its passcode
@@ -175,20 +175,20 @@ const ERROR_COPY = {
   setup_required: 'This agent has no passcode yet. Reload the app to set one.',
   // The two failures POST /api/acknowledge can return - see agent/config.js's
   // acknowledge().
-  config_unreadable: 'The agent could not read its config file on the PC. Check its terminal window.',
-  write_failed: 'The agent could not save that on the PC. Check its terminal window.',
+  config_unreadable: 'The agent could not read its config file. Restart it on the PC, and check agent.log if it happens again.',
+  write_failed: 'The agent could not save that. Restart it on the PC, and check agent.log if it happens again.',
   // Owner-approved 2026-09-05. Rare by construction - the picker only draws
   // NON-container folders as tappable - so this needs a race to reach: the list
   // is drawn, the folder gains a child on disk, then the row is tapped. Until
   // now it fell through to the generic "The agent refused the request (status
   // 400)", which tells the owner nothing about what to do. Says nothing about
-  // the PC terminal, because unlike internal_error there is nothing wrong there
-  // to look at.
+  // restarting the agent, because unlike internal_error there is nothing wrong
+  // there to fix.
   project_is_container: 'That folder holds your projects rather than being one. Tap REFRESH, then pick a project inside it.',
 };
 
 function errorCopy(code, status) {
-  return ERROR_COPY[code] || `The agent refused the request (status ${status}). Check its terminal window on the PC.`;
+  return ERROR_COPY[code] || `The agent refused the request (status ${status}). Restart it on the PC, and check agent.log if it happens again.`;
 }
 
 // Copy for POST /api/projects only - distinct from ERROR_COPY above, which
@@ -2150,7 +2150,7 @@ async function runStop(name) {
   } else if (res.ok && res.data.result === 'kill_failed') {
     setBanner('error', [{ text: '! Could not end ' }, { b: name }, { text: '. It is still running - close it at the desk.' }]);
   } else if (res.ok) {
-    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a result this app doesn't know. Check its terminal window on the PC." }]);
+    setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a result this app doesn't know. Restart it on the PC, and check agent.log if it happens again." }]);
   } else {
     setErrorBanner(res.code, res.status);
   }
@@ -3827,6 +3827,7 @@ function renderNotify() {
   els.nameField.hidden = false;
   els.onBtn.hidden = false;
   els.onBtn.disabled = false;
+  els.onBtn.classList.add('set-btn-solid');
   els.onBtn.textContent = TURN_ON;
   els.nameInput.disabled = false;
 
@@ -3850,11 +3851,16 @@ function renderNotify() {
     const onApple = isIphoneOrIpad(navigator);
     const deniedSub = onApple ? DENIED_SUB : DENIED_SUB_BROWSER;
     const deniedBanner = onApple ? DENIED_BANNER : DENIED_BANNER_BROWSER;
-    const sub = reason === 'not_standalone' ? NOT_STANDALONE_SUB : reason === 'no_push' ? NO_PUSH_SUB : deniedSub;
-    const bannerText = reason === 'not_standalone' ? NOT_STANDALONE_BANNER : reason === 'no_push' ? NO_PUSH_BANNER : deniedBanner;
+    const noPushSub = onApple ? NO_PUSH_SUB : NO_PUSH_SUB_BROWSER;
+    const noPushBanner = onApple ? NO_PUSH_BANNER : NO_PUSH_BANNER_BROWSER;
+    const sub = reason === 'not_standalone' ? NOT_STANDALONE_SUB : reason === 'no_push' ? noPushSub : deniedSub;
+    const bannerText = reason === 'not_standalone' ? NOT_STANDALONE_BANNER : reason === 'no_push' ? noPushBanner : deniedBanner;
     buildNotifyStatusRow(CANT_NAME, sub);
     els.alert.hidden = false;
     els.alertText.textContent = bannerText;
+    // Lane 19 step 2: no name field, and TURN ON drawn quiet and off.
+    els.nameField.hidden = true;
+    els.onBtn.classList.remove('set-btn-solid');
     els.onBtn.disabled = true;
     els.hearsLabel.hidden = false;
     els.hears.hidden = false;
