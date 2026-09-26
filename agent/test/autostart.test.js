@@ -22,7 +22,9 @@ import { test, after } from 'node:test';
 
 const AUTOSTART = fileURLToPath(new URL('../autostart/', import.meta.url));
 const AGENT = path.dirname(path.dirname(AUTOSTART + 'x'));
-const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-autostart-'));
+// Canonical from the start: PowerShell reports the long name, so a TEMP given
+// as an 8.3 short path (CI's RUNNER~1) would never equal the paths built here.
+const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-autostart-')));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 const launcherDir = path.join(dir, 'launcher');

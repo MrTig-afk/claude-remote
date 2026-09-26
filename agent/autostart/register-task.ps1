@@ -73,7 +73,13 @@ if (-not (Test-Path -LiteralPath $csc)) {
 }
 
 $null = New-Item -ItemType Directory -Path $LauncherDir -Force
-$srcHash = (Get-FileHash -LiteralPath $launcherSrc -Algorithm SHA256).Hash.Substring(0, 12).ToLower()
+# .NET, not Get-FileHash: Get-FileHash loads on demand from a module, and
+# under a PowerShell 7 parent PSModulePath lists PowerShell 7's copy of that
+# module first, which Windows PowerShell cannot load - "Get-FileHash is not
+# recognized" (GitHub CI, and anyone who starts Claude Code from pwsh 7).
+$sha = [System.Security.Cryptography.SHA256]::Create()
+try { $srcHash = -join ($sha.ComputeHash([System.IO.File]::ReadAllBytes($launcherSrc))[0..5] | ForEach-Object { $_.ToString('x2') }) }
+finally { $sha.Dispose() }
 $launcher = Join-Path $LauncherDir "hidelaunch-$srcHash.exe"
 
 if (-not (Test-Path -LiteralPath $launcher)) {
