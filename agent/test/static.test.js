@@ -198,7 +198,7 @@ test('GET /api/projects/ (trailing slash) still 404', async () => {
 
 const TRAVERSAL_CASES = [
   '/../server.js',
-  '/../../CLAUDE.md',
+  '/../../README.md',
   '/../../../Windows/win.ini',
   '/..%2fserver.js',
   '/%2e%2e/server.js',
@@ -319,7 +319,7 @@ describe('serveStatic() called directly: traversal targets that really exist on 
     '/%2e%2e/static.js', // same target, percent-encoded
     '/a/../../package.json', // agent/package.json, via a real subsegment first
     '/C:/Windows/win.ini', // Windows drive-letter form, not on disk regardless
-    '/../../CLAUDE.md', // repo-root CLAUDE.md - two levels above public/
+    '/../../README.md', // repo-root README.md - two levels above public/, tracked so it exists in every clone
   ];
 
   for (const p of DIRECT_TRAVERSAL_CASES) {
@@ -329,7 +329,7 @@ describe('serveStatic() called directly: traversal targets that really exist on 
   test('sanity: the real target files this block relies on actually exist', () => {
     assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', 'static.js')));
     assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', 'package.json')));
-    assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', '..', 'CLAUDE.md')));
+    assert.ok(fs.existsSync(path.join(PUBLIC_DIR, '..', '..', 'README.md')));
   });
 });
 

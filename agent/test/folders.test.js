@@ -15,7 +15,9 @@ import {
 // blocked system drive. The fixture makes the temp drive an ALLOWED fixed
 // drive and blocks a letter nothing uses, so route tests never need to leave
 // os.tmpdir() and never need to touch a real system folder.
-const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-folders-'));
+// Canonical from the start: a TEMP given as an 8.3 short path (CI's RUNNER~1)
+// would otherwise never equal the long-name `real` the junction tests expect.
+const tmpRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-folders-')));
 // T92 normal form: path.parse().root is "C:\\" WITH the separator; strip it.
 const tmpLetter = path.parse(path.resolve(tmpRoot)).root.replace(/[\\/]+$/, '').toUpperCase();
 const [blockedLetter, unknownLetter] = ['Q:', 'Y:', 'X:', 'W:'].filter((l) => l !== tmpLetter);
