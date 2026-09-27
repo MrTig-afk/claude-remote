@@ -113,12 +113,30 @@ keeping.
 | | |
 |---|---|
 | **PC** (runs the agent) | Windows 10 or 11 (tested on 11) |
-| **Phone** (the remote) | Any iPhone, iPad or Android device, or another computer's browser |
+| **Phone** (the remote) | Any iPhone, iPad or Android device, or another computer's browser, with the Tailscale app signed in to the same account as the PC |
 | **Software on the PC** | Tailscale installed and logged in, Node >= 24.2.0, the Claude Code CLI on `PATH` |
 
 macOS and Linux PCs are not supported yet - see the [FAQ](#faq).
 
 ## Install
+
+### Before you start
+
+Your phone reaches the PC through [Tailscale](https://tailscale.com), a free
+private network between your own devices. You need it in two places, signed in
+to the **same** Tailscale account on both:
+
+1. **On the PC:** install Tailscale from
+   [tailscale.com/download](https://tailscale.com/download) and sign in.
+2. **On the phone:** install the Tailscale app from the
+   [App Store](https://apps.apple.com/app/tailscale/id1470499037) (iPhone,
+   iPad) or [Google Play](https://play.google.com/store/apps/details?id=com.tailscale.ipn)
+   (Android), and sign in with the same account.
+
+If Tailscale is missing on the PC, the install stops and says so before
+changing anything.
+
+### Then install
 
 Two ways, and you only need one.
 

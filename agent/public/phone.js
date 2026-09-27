@@ -48,8 +48,16 @@ async function copyAddress(url, button, text) {
   }
 }
 
+// Lane 23 step 3b: Tailscale Inc.'s own store pages, behind "No Tailscale on
+// your phone?" under every address code.
+export const STORES = {
+  ios: ['https://apps.apple.com/app/tailscale/id1470499037', 'QR code of Tailscale on the App Store'],
+  android: ['https://play.google.com/store/apps/details?id=com.tailscale.ipn', 'QR code of Tailscale on Google Play'],
+};
+
 function fillAddress(prefix, url) {
   document.getElementById(`${prefix}-qr`).innerHTML = qrSvg(url);   // numbers only - see qr.js
+  for (const [store, [link, label]] of Object.entries(STORES)) document.getElementById(`${prefix}-${store}-qr`).innerHTML = qrSvg(link, label);
   const text = document.getElementById(`${prefix}-url`);
   text.textContent = url;
   const copy = document.getElementById(`${prefix}-copy`);

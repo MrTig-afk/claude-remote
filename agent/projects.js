@@ -324,8 +324,20 @@ export function validateProjectName(name) {
   if (sessionName === '' || sessionName.startsWith('-')) {
     return { ok: false, status: 400, error: 'name_not_launchable' };
   }
+  if (!PLAIN_NAME_RE.test(name) || VARIATION_SELECTOR_RE.test(name)) {
+    return { ok: false, status: 400, error: 'name_not_plain' };
+  }
   return { ok: true };
 }
+
+// PRD R22 (Artifact Lane 11 step 3b): a name typed in the app is letters from
+// any language, decimal digits, spaces and - _ . - nothing else. Not \p{M} or
+// \p{N} whole: an enclosing mark (\p{Me}) and a digit make the keycap emoji
+// 1️⃣, and \p{N} lets ① and ² in. Variation selectors are Mn but only ever
+// turn a character into an emoji. Checked last, so the rules above keep
+// their own, more specific lines.
+const PLAIN_NAME_RE = /^[\p{L}\p{Mn}\p{Mc}\p{Nd} ._-]+$/u;
+const VARIATION_SELECTOR_RE = /\p{Variation_Selector}/u;
 
 /**
  * Validates, confines to baseDir, then creates one empty directory.

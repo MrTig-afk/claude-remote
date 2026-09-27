@@ -426,8 +426,9 @@ if ($PreLaunch) {
 # the --channels failure left the session working perfectly and removed only the
 # row, so "it launched fine" is not evidence. It took a person looking at the
 # app. If a positional is ever changed here, that check is owed again.
-# A switch that only ever SUPPRESSES; absent means report. The default and why
-# it fails in that direction live on resolveOpeningReport in config.js.
+# A switch that only ever SUPPRESSES. The agent passes it unless the config
+# says `opening_report: true` - OFF by default; resolveOpeningReport in
+# config.js says why.
 $openingReport = @()
 if (-not $NoOpeningReport -and (Test-Path -LiteralPath (Join-Path $ProjectPath 'HANDOFF.md'))) {
     $openingReport = @('"Read HANDOFF.md and give the opening report."')

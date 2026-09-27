@@ -53,7 +53,7 @@ import { qrMatrix } from '../agent/public/qr.js';
 
 // Lane 23, verbatim.
 export const SETTING_UP = 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.';
-export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale running on this PC before it can set itself up. Start Tailscale and sign in, then restart Claude.';
+export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then restart Claude.';
 export const NOT_WINDOWS = 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.';
 export const NEEDS_NODE = 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then restart Claude.';
 export const UPDATED = 'Claude Remote updated itself on this PC. The app on your phone picks it up the next time it opens.';

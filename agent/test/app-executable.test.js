@@ -6,6 +6,7 @@ import { test } from 'node:test';
 // BETWEEN the two functions - "withoutRoot answers null, so removeRoot must not
 // write" - and a stub would let the pair drift apart with both sides green.
 import { withoutRoot, plusMenuItems } from '../public/folders-ui.js';
+import { validateProjectName } from '../projects.js';
 
 // THE FIRST TESTS THAT RUN app.js's ACTUAL LOGIC (T104 step 3).
 //
@@ -643,7 +644,7 @@ test('Lane 22: the re-lock puts the menu away with no traversal and drops a pend
 
 // ---------------------------------------------------------- onCreateProject
 
-function loadOnCreateProject({ loadSetsBanner = false } = {}) {
+function loadOnCreateProject({ loadSetsBanner = false, result = { ok: true, data: { project: { name: 'v2' } } }, names = ['v2'] } = {}) {
   const calls = [];
   const els = {
     'newproj-error': { hidden: true, textContent: '' },
@@ -659,8 +660,8 @@ function loadOnCreateProject({ loadSetsBanner = false } = {}) {
   );
   const mod = fn(
     { getElementById: (id) => els[id] },
-    () => 'v2', () => null, (c) => c,
-    async () => ({ ok: true, data: { project: { name: 'v2' } } }),
+    () => (names.length > 1 ? names.shift() : names[0]), () => null, (c) => c,
+    async () => result,
     () => calls.push('close'),
     (tone) => { els.banner.hidden = false; calls.push(`banner:${tone}`); },
     async () => {
@@ -668,9 +669,11 @@ function loadOnCreateProject({ loadSetsBanner = false } = {}) {
       calls.push('load');
       if (loadSetsBanner) { els.banner.hidden = false; calls.push('banner:error'); }
     },
-    () => {}, calls,
+    // The real updateNewProjectTarget hides the error for a name the phone
+    // thinks valid; the stub does the same so the ORDER is what is tested.
+    () => { els['newproj-error'].hidden = true; els['newproj-error'].textContent = ''; }, calls,
   );
-  return { ...mod, calls };
+  return { ...mod, calls, els };
 }
 
 test('onCreateProject: the "created" banner goes up after load(), not before it where load() wipes it', async () => {
@@ -680,6 +683,27 @@ test('onCreateProject: the "created" banner goes up after load(), not before it 
   const { onCreateProject, calls } = loadOnCreateProject();
   await onCreateProject();
   assert.deepEqual(calls, ['close', 'load', 'banner:info']);
+});
+
+// RED WHEN: updateNewProjectTarget() runs after the error is written again -
+// it hides the error for a name the phone thinks valid, so the PC's refusal
+// (409 project_exists, 400 name_not_plain) showed nothing (TS-C1-02).
+test('onCreateProject: a refusal from the PC stays on screen', async () => {
+  const { onCreateProject, els, calls } = loadOnCreateProject({ result: { ok: false, code: 'project_exists' } });
+  await onCreateProject();
+  assert.equal(els['newproj-error'].hidden, false);
+  assert.equal(els['newproj-error'].textContent, 'project_exists');
+  assert.deepEqual(calls, [], 'no close, no reload: the name stays to be corrected');
+});
+
+// RED WHEN: the PC's refusal is written without checking the field still
+// holds the name that was sent - edited mid-request, the old name's error
+// would sit under the new one (TS-C1-D2-01).
+test('onCreateProject: a refusal about a name the user has since edited is not shown', async () => {
+  const { onCreateProject, els } = loadOnCreateProject({ result: { ok: false, code: 'project_exists' }, names: ['foo', 'foo2'] });
+  await onCreateProject();
+  assert.equal(els['newproj-error'].hidden, true);
+  assert.equal(els['newproj-error'].textContent, '');
 });
 
 test('onCreateProject: a banner load() raised itself (a failed refresh) is not overwritten', async () => {
@@ -702,4 +726,19 @@ test('Lane 22: a render whose choices differ from the open menu closes it; the s
   const n = loadPlusMenu();
   n.syncPlusMenu([]);
   assert.equal(n.history.backs, 0, 'closed menu, empty list: nothing to do');
+});
+
+// ------------------------------------------------------- clientValidateName
+
+// R22 (Artifact Lane 11 step 3b). The phone's check is a hand-kept copy of
+// validateProjectName; this runs both on the same names so the copy cannot
+// drift. RED WHEN either side drops or loosens the plain-name rule.
+test('R22: the phone and the PC give the same answer for every name', () => {
+  const clientValidateName = new Function(`${slice('function clientValidateName(', '// Time since session start')} return clientValidateName;`)();
+  for (const n of ['email-lint', 'Pull Requests', 'café', '東京', 'rocket 🚀', '1️⃣', 'x;y', "it's", '①',
+    'foo<bar', 'a/b', '50%', 'CON', '.hidden']) {
+    const server = validateProjectName(n);
+    assert.equal(clientValidateName(n), server.ok ? null : server.error, JSON.stringify(n));
+  }
+  assert.equal(clientValidateName('rocket 🚀'), 'name_not_plain', 'positive control: the rule is present on the phone');
 });

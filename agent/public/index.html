@@ -364,9 +364,20 @@
         <div class="phone-sec">Last step</div>
         <div class="phone-title">Open it on your phone</div>
         <div id="phone-ready" hidden>
-          <p class="phone-lede">Your phone needs Tailscale too, signed in to the same account. Then scan this with its camera, or type the address.</p>
+          <p class="phone-lede">Your phone needs the Tailscale app too, from tailscale.com/download, signed in to the same Tailscale account as this PC. Then scan this with its camera, or type the address.</p>
           <div class="phone-qr" id="phone-qr"></div>
           <div class="phone-url"><span id="phone-url"></span><button class="phone-copy" id="phone-copy" type="button">COPY</button></div>
+          <!-- Lane 23 step 3b (Artifact sequence 24): closed by default. -->
+          <details class="ts-more">
+            <summary><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg><span>No Tailscale on your phone?</span><svg class="ico chev" width="14" height="14" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+            <div class="ts-panel">
+              <div class="ts-stores">
+                <div><div class="ts-qr" id="phone-ios-qr"></div><b>iPhone or iPad</b>App Store</div>
+                <div><div class="ts-qr" id="phone-android-qr"></div><b>Android</b>Google Play</div>
+              </div>
+              <p class="ts-note">Install it, sign in with the same Tailscale account as this PC, then scan the code above.</p>
+            </div>
+          </details>
           <div class="phone-howto">
             <div><b>iPhone or iPad</b>Open it in Safari, tap Share, then Add to Home Screen.</div>
             <div><b>Android</b>Open it in Chrome, tap ⋮, then Add to Home screen.</div>
@@ -713,6 +724,16 @@
           </div>
           <div class="phone-qr" id="agent-phone-qr"></div>
           <div class="phone-url"><span id="agent-phone-url"></span><button class="phone-copy" id="agent-phone-copy" type="button">COPY</button></div>
+          <details class="ts-more">
+            <summary><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg><span>No Tailscale on your phone?</span><svg class="ico chev" width="14" height="14" aria-hidden="true"><use href="#i-chev"/></svg></summary>
+            <div class="ts-panel">
+              <div class="ts-stores">
+                <div><div class="ts-qr" id="agent-phone-ios-qr"></div><b>iPhone or iPad</b>App Store</div>
+                <div><div class="ts-qr" id="agent-phone-android-qr"></div><b>Android</b>Google Play</div>
+              </div>
+              <p class="ts-note">Install it, sign in with the same Tailscale account as this PC, then scan the code above.</p>
+            </div>
+          </details>
         </div>
         <button class="set-btn ripples" id="agent-recheck" type="button">TEST CONNECTION</button>
       </div>

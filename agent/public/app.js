@@ -211,6 +211,7 @@ const NEW_PROJECT_ERROR_COPY = {
   name_trailing_dot: "Names can't end with a dot.",
   name_reserved: "That's a reserved Windows device name.",
   name_not_launchable: "That name can't be used as a session name.",
+  name_not_plain: 'Use only letters, numbers, spaces, and - _ . in a project name.',
   name_collision: 'Another project already maps to the same session name.',
   project_exists: 'A project with that name already exists.',
   base_unavailable: "The agent can't reach its projects folder.",
@@ -247,8 +248,9 @@ function clientValidateName(name) {
   if (name.startsWith('.')) return 'name_dot_prefixed';
   if (name.endsWith('.')) return 'name_trailing_dot';
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name.split('.')[0].trim())) return 'name_reserved';
-  const s = name.replace(/[\s.]+/g, '-').toLowerCase();
+  const s = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');   // sessions.js slugSegment
   if (s === '' || s.startsWith('-')) return 'name_not_launchable';
+  if (!/^[\p{L}\p{Mn}\p{Mc}\p{Nd} ._-]+$/u.test(name) || /\p{Variation_Selector}/u.test(name)) return 'name_not_plain';
   return null;
 }
 
@@ -2253,10 +2255,15 @@ async function onCreateProject() {
     return;
   }
 
-  // Name stays in the field so it can be corrected.
+  // Name stays in the field so it can be corrected. The target line is
+  // refreshed FIRST: for a name the phone thinks valid it hides the error,
+  // which swallowed every refusal from the PC until 2026-09-27 (TS-C1-02).
+  // The refusal is about the name that was SENT; if the field was edited
+  // while the PC answered, it describes nothing on screen (TS-C1-D2-01).
+  updateNewProjectTarget();
+  if (currentNameTrimmed() !== name) return;
   errorEl.textContent = newProjectErrorCopy(res.code);
   errorEl.hidden = false;
-  updateNewProjectTarget();
 }
 
 // ============================================================================

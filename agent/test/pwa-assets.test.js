@@ -3868,7 +3868,10 @@ test('the summary keeps the platform disclosure triangle: no list-style:none, no
   const body = rule[1];
   assert.ok(!/list-style\s*:\s*none/.test(body), 'list-style:none removes the only affordance the collapsed screen has that says "tappable"');
   assert.ok(!/display\s*:\s*(flex|block)/.test(body), 'Chrome drops the disclosure marker the moment display is not list-item');
-  assert.ok(!/::-webkit-details-marker\s*\{\s*display\s*:\s*none/.test(css), 'the marker must not be hidden via the webkit pseudo-element either');
+  // Only .ts-more (Lane 23 step 3b) may hide it: the Artifact draws a chevron
+  // there instead. A bare `summary::-webkit-details-marker` would reach this one.
+  const hiders = [...css.matchAll(/([^{}]*)::-webkit-details-marker\s*\{\s*display\s*:\s*none/g)].map((m) => m[1].trim());
+  assert.ok(hiders.every((sel) => sel === '.ts-more > summary'), `the marker must not be hidden via the webkit pseudo-element either: ${hiders}`);
 });
 
 test('E2 - after showAccept(), #accept-more-sum.textContent is SECTIONS_TOGGLE', () => {
