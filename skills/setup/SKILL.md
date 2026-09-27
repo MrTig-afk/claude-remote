@@ -26,6 +26,23 @@ If you can only do part of this, stop after step 4. A machine that is set up
 but not yet exposed is a working machine. A machine exposed but not configured
 is an open door.
 
+## How to talk to the person installing this
+
+Most of this file is for you, not for them. They are setting up an app, not
+reading its internals. Found on the install test, 2026-09-27: the step-4 message
+was a wall of venv, conda, poetry, `-NoProfile` and `.err` files, and the one
+thing to do was buried under it.
+
+- **Lead with the one thing they have to do**, in a sentence or two. Then stop.
+- Short sentences, plain words. No file names, flags or error internals unless
+  they ask, or something failed and they need them to fix it.
+- **Ask before explaining.** The environment question in step 3 is one yes/no
+  question; only a "yes" earns the details.
+- **Do not assume an iPhone.** Say "your phone or another device", and give the
+  install steps for iPhone and Android both (step 5).
+- When something fails: what failed, then the one command or action that fixes
+  it.
+
 ---
 
 ## 1. Tailscale must be up. HALT if it is not.
@@ -85,7 +102,7 @@ measured; `list --json` does):
 ```powershell
 $src = $env:CLAUDE_PLUGIN_ROOT   # the copy Claude Code actually loaded, when set
 if (-not $src) {
-    $paths = @(claude.cmd plugin list --json | ConvertFrom-Json |
+    $paths = @((claude.cmd plugin list --json | ConvertFrom-Json) |
                Where-Object id -eq 'claude-remote@claude-remote' |
                ForEach-Object installPath | Select-Object -Unique)
     if ($paths.Count -gt 1) {
@@ -101,6 +118,14 @@ if (-not $src -or -not (Test-Path "$src\agent\server.js")) {
 The throw is load-bearing: with an empty `$src`, `"$src\agent"` is `\agent` at
 the root of the current drive, and the install below would copy whatever is
 there and register ITS script to run at every logon.
+
+The brackets around `claude.cmd plugin list --json | ConvertFrom-Json` are
+load-bearing too. Windows PowerShell 5.1's `ConvertFrom-Json` sends a JSON array
+down the pipe as ONE object, so without them `Where-Object` never matches and
+setup stops with "plugin folder not found" on a stock Windows PC (found on the
+Dell install test, 2026-09-27; `agent/test/setup-skill.test.js` runs it).
+`CLAUDE_PLUGIN_ROOT` is not set in your shell, so this is the path a real
+install takes.
 
 Then install it. One script does the whole update - run the copy that ships
 with the NEW version, from the plugin folder:
@@ -143,7 +168,18 @@ to use the same number in both places. The known limit of the at-logon trigger
 ### Does anything need to run before Claude starts?
 
 ASK THE OWNER THIS - do not assume, and do not skip it because their machine
-happens to look like a plain Python project. When a session launches, the
+happens to look like a plain Python project. But ask it as ONE short question
+and nothing else, then wait:
+
+```
+Does your project need anything set up before Claude starts, like conda,
+poetry or uv? If you're not sure, the answer is probably no.
+```
+
+"No" (or a plain venv / .venv folder): say it is handled automatically and move
+on. Only a "yes" gets the details below, and then only the part that applies.
+
+The details, for you. When a session launches, the
 launcher `cd`s into the project and then activates an environment. Out of the
 box it checks two things, in order: a `venv` or `.venv` folder holding
 `Scripts\python.exe`, which it puts first on `PATH` itself (it never runs the
@@ -210,8 +246,15 @@ Print the loopback URL and stop:
 http://127.0.0.1:8790
 ```
 
-Tell the owner to open it **at the desk**, set a six-digit passcode, and accept
-the folder-access screen. The passcode is asked every time the app opens; it is
+Tell the owner, in about this many words:
+
+```
+Open http://127.0.0.1:8790 in a browser on this PC. Set a six-digit passcode,
+read the screen about what the app can see, and pick the folders your projects
+are in. Tell me when that's done.
+```
+
+The passcode is asked every time the app opens; it is
 stored only as a hash, and it is never typed into this session, never echoed,
 never logged. **Do not ask the owner for the value and do not offer to set it
 for them.**
@@ -241,6 +284,21 @@ shows a white screen and then "server stopped responding" (measured 2026-09-22,
 iPhone, both the Safari and the Chrome home-screen app). Let this request pay
 that wait instead. `curl.exe`, not `curl`: in Windows PowerShell 5.1 `curl` is
 an alias for `Invoke-WebRequest`.
+
+Then hand it over. Do not assume an iPhone - say it about this plainly:
+
+```
+Done. On your phone, or any other device signed in to your Tailscale, open:
+https://<machine>.<tailnet>.ts.net:8790
+
+To keep it like an app:
+- iPhone or iPad: open it in Safari, tap Share, then Add to Home Screen.
+- Android: open it in Chrome, tap the three-dot menu, then Add to Home screen
+  (or Install app).
+
+Enter your passcode, tap a project, and the session shows up in the Claude
+app's Code tab.
+```
 
 To take it down again:
 

@@ -611,7 +611,7 @@ if (import.meta.main) {
     console.warn(`claude-remote agent: NO PASSCODE SET. Open http://${HOST}:${port} at this desk and set one - every API route returns 403 until you do. Do NOT run 'tailscale serve' before it is set.`);
   }
 
-  const ctx = { sharedFolders, watchLaunches: true };
+  const ctx = { sharedFolders, watchLaunches: true, trustFolders: true };
   ensureVapid(ctx);
   const server = createAgentServer(ctx);
 

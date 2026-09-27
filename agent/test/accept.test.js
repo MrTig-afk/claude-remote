@@ -498,9 +498,10 @@ test('C1 - copy.js imports successfully under node (no DOM access at module top 
   assert.ok(Array.isArray(copy.SECTIONS));
 });
 
-test('C2 - SECTIONS headings match the four reviewed literals, in order', () => {
+test('C2 - SECTIONS headings match the five reviewed literals, in order', () => {
   assert.deepEqual(copy.SECTIONS.map((s) => s.heading), [
-    'WHAT IT CAN SEE', 'WHAT IT CANNOT SEE', 'WHO CAN REACH IT', 'WHAT LEAVES THIS MACHINE',
+    // WHAT IT CHANGES ON THIS PC: Artifact sequence 15, 2026-09-27 (T140).
+    'WHAT IT CAN SEE', 'WHAT IT CANNOT SEE', 'WHAT IT CHANGES ON THIS PC', 'WHO CAN REACH IT', 'WHAT LEAVES THIS MACHINE',
   ]);
 });
 
@@ -521,10 +522,14 @@ test('C3 - every items line and every top-level string pins to its reviewed lite
     'Your C: drive. It is blocked and cannot be shared.',
   ]);
   assert.deepEqual(copy.SECTIONS[2].items, [
+    // Owner-approved 2026-09-27 (Artifact sequence 15, T140).
+    'When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask.',
+  ]);
+  assert.deepEqual(copy.SECTIONS[3].items, [
     'Any device on your private network that knows your passcode.',
     'It is not on the public internet.',
   ]);
-  assert.deepEqual(copy.SECTIONS[3].items, [
+  assert.deepEqual(copy.SECTIONS[4].items, [
     'Nothing. There is no account and no server of ours.',
     'If you turn notifications on later, an encrypted ping goes out through Apple or Google. They can see that one was sent, not what it says.',
   ]);
@@ -562,7 +567,7 @@ test('C6 - copy.js matches design/accept-screen-copy.txt verbatim, when that fil
   }
 });
 
-test('C7 - index.html carries none of the four headings, either LEDE line, or SECTIONS_TOGGLE as literal text', () => {
+test('C7 - index.html carries none of the headings, either LEDE line, or SECTIONS_TOGGLE as literal text', () => {
   const html = fs.readFileSync(new URL('index.html', PUBLIC_DIR), 'utf8');
   const start = html.indexOf('<main id="accept"');
   const end = html.indexOf('<main id="gate"');
@@ -576,7 +581,7 @@ test('C7 - index.html carries none of the four headings, either LEDE line, or SE
   assert.ok(!block.includes(copy.SECTIONS_TOGGLE), 'index.html must not hardcode SECTIONS_TOGGLE - it would drift from copy.js');
 });
 
-test('C9 - SECTIONS_TOGGLE is exported, exact, and names all four sections\' subjects', () => {
+test('C9 - SECTIONS_TOGGLE is exported, exact, and names the four original sections\' subjects', () => {
   assert.equal(copy.SECTIONS_TOGGLE, 'What it can see, what it cannot, who can reach it, what leaves this machine');
   const lower = copy.SECTIONS_TOGGLE.toLowerCase();
   for (const subject of ['what it can see', 'what it cannot', 'who can reach it', 'what leaves this machine']) {

@@ -1906,6 +1906,7 @@ function makeStubEl() {
     innerHTML: '', textContent: '', children: [],
     classList: { toggle() {}, add() {} },
     appendChild(c) { this.children.push(c); return c; },
+    replaceChildren(...c) { this.children = c; },
   };
 }
 
@@ -1922,7 +1923,7 @@ test('renderProjects: with a folder open, only that folder\'s children render an
     ],
     launching: new Set(), stopping: new Set(), results: new Map(), confirmName: null, focusName: null,
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(), 'pane-empty': makeStubEl(), 'pane-empty-body': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const rowsSeen = [];
   const tilesSeen = [];
@@ -2171,7 +2172,7 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
     ],
     launching: new Set(), stopping: new Set(), results: new Map(),
   };
-  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl() };
+  const els = { tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(), 'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(), 'pane-empty': makeStubEl(), 'pane-empty-body': makeStubEl() };
   const document = { getElementById: (id) => els[id] };
   const seen = [];
   const buildRow = (p) => { seen.push(p); return { tag: 'ROW' }; };
@@ -2255,7 +2256,7 @@ function makeProjectsEls() {
     tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
     // Lane 9's row zone renames or hides the ALL PROJECTS header depending on
     // how many shared folders there are, so these three are read every render.
-    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(),
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(), 'pane-empty': makeStubEl(), 'pane-empty-body': makeStubEl(),
   };
 }
 
@@ -2295,6 +2296,31 @@ test('D1 - state 1: #projects holds exactly one [data-choose] and zero rows', ()
 
   assert.equal(countByDataset(els.projects, 'choose'), 1, 'the empty project list must have exactly one way out');
   assert.equal(countByDataset(els.projects, 'project'), 0);
+});
+
+// Lane 21 step 5 (Artifact sequence 15): at desktop width the nothing-shared
+// prompt is also drawn in the wide pane. Only for THAT state - the other empty
+// states keep it hidden, and it is rebuilt, not appended to, on every render.
+test('D1b - nothing shared fills #pane-empty with its own CHOOSE FOLDERS; every other state hides it', () => {
+  const { buildEmptyState, buildGoneNotice } = makeEmptyGoneBuilders();
+  function run(stateOverrides, renders = 1) {
+    const state = baseEmptyListState(stateOverrides);
+    const els = makeProjectsEls();
+    const document = makeProjectsDocument(els);
+    const renderProjects = makeRenderProjectsIntegration({
+      document, state, buildTile: () => makeStubEl(), buildRow: () => makeStubEl(), renderBackBar: () => {}, buildEmptyState, buildGoneNotice,
+    });
+    for (let i = 0; i < renders; i += 1) renderProjects();
+    return els;
+  }
+  const nothing = run({ shared: [] }, 2);
+  assert.equal(nothing['pane-empty'].hidden, false);
+  assert.equal(countByDataset(nothing['pane-empty-body'], 'choose'), 1, 'two renders must not leave two buttons');
+  for (const other of [{ shared: null }, { shared: [{ path: 'F:/p', mode: 'container' }] }, { shared: [], reachable: 'waiting' }]) {
+    const els = run(other);
+    assert.equal(els['pane-empty'].hidden, true, JSON.stringify(other));
+    assert.equal(countByDataset(els['pane-empty-body'], 'choose'), 0, JSON.stringify(other));
+  }
 });
 
 test("D2 - state 4 also renders [data-choose], and its title text differs from state 1's", () => {
@@ -3611,7 +3637,7 @@ test('F8 - the owner\'s exact failure, end to end: wrong root shared, fixed from
   const rowsSeen = [];
   const els = {
     tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
-    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(),
+    'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(), 'pane-empty': makeStubEl(), 'pane-empty-body': makeStubEl(),
   };
   const projDocument = {
     getElementById: (id) => els[id],
@@ -3787,17 +3813,17 @@ test('E2 - after showAccept(), #accept-more-sum.textContent is SECTIONS_TOGGLE',
   assert.equal(doc.getElementById('accept-more-sum').textContent, copy.SECTIONS_TOGGLE);
 });
 
-test('E3 - collapsed, #accept-sections still holds four .copy-section children', () => {
+test('E3 - collapsed, #accept-sections still holds one .copy-section per copy.SECTIONS entry', () => {
   const { showAccept, document: doc } = loadAccept();
   showAccept();
   const more = doc.getElementById('accept-more');
   assert.ok(!more.open, 'the <details> must not be opened by showAccept() itself');
   const sections = doc.getElementById('accept-sections');
   const wraps = sections.children.filter((c) => c.className === 'copy-section');
-  assert.equal(wraps.length, 4, 'rendering only on open would lose the sections from find-in-page and a screen reader');
+  assert.equal(wraps.length, copy.SECTIONS.length, 'rendering only on open would lose the sections from find-in-page and a screen reader');
 });
 
-test('E4 - collapsed, all four headings and all eight item strings are reachable as text under #accept-sections, matching copy.SECTIONS itself', () => {
+test('E4 - collapsed, every heading and every item string is reachable as text under #accept-sections, matching copy.SECTIONS itself', () => {
   const { showAccept, document: doc } = loadAccept();
   showAccept();
   const sections = doc.getElementById('accept-sections');

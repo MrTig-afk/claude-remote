@@ -1424,6 +1424,16 @@ function renderProjects() {
     for (const root of missingRoots(state.shared)) listEl.appendChild(buildGoneNotice(root));
   }
 
+  // Lane 21 step 5 (sequence 15): at desktop width the NOTHING-SHARED prompt
+  // is drawn in the wide pane too, where the eye lands, instead of only in the
+  // 264px sidebar beside a pane saying "tap a project" to someone who has
+  // none. Hidden for every other state; app.css shows it only at >=900px.
+  const paneEmpty = document.getElementById('pane-empty');
+  const paneEmptyBody = document.getElementById('pane-empty-body');
+  paneEmptyBody.replaceChildren();
+  paneEmpty.hidden = zone.kind !== 'nothing-shared';
+  if (!paneEmpty.hidden) paneEmptyBody.appendChild(buildEmptyState(NOTHING_SHARED, 'choose'));
+
   if (zone.kind === 'offline') {
     // The one empty state with a retry rather than a picker: there is nothing
     // to choose, only something to fix, and it is on this device.
@@ -2833,6 +2843,10 @@ function openReauth({
   pin.disabled = false;
   pin.value = '';
   setPinRevealed('reauth-pin', false);
+  // Lane 21 step 4: at the desk the next thing is typing, so the field takes
+  // focus. Not on a touch screen, where focusing would throw up the keyboard
+  // unasked - a landscape tablet is wider than 900px too, hence the pointer.
+  if (globalThis.matchMedia?.('(min-width: 900px) and (pointer: fine)')?.matches) pin.focus();
 
   let inFlight = false;
 
@@ -4772,6 +4786,8 @@ function showAccept() {
 
 function wireEvents() {
   document.getElementById('projects').addEventListener('click', onProjectTap);
+  // Its CHOOSE FOLDERS is the same [data-choose] control, so the same delegate.
+  document.getElementById('pane-empty').addEventListener('click', onProjectTap);
   document.getElementById('tiles').addEventListener('click', onTileTap);
   document.getElementById('newproj').addEventListener('click', onNewProject);
   // R2. GOT IT is the sheet's only control and its only exit.

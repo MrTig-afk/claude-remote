@@ -2908,3 +2908,48 @@ test('R-7 - a single-mode root launched by its bare root slug survives two polls
     fs.rmSync(singleRoot, { recursive: true, force: true });
   }
 });
+
+// T140: a launch answers Claude Code's workspace-trust modal for the folder
+// first, but ONLY when ctx opts in (the real server does; see server.js).
+test('launchSession - trusts the folder in the configured profile before spawning, when ctx opts in', () => {
+  const order = [];
+  const { spawner, calls } = makeFakeSpawner();
+  const spawnAndNote = (...a) => { order.push('spawn'); return spawner(...a); };
+  const trusted = [];
+  const trustFolder = (folder, configDir) => { order.push('trust'); trusted.push({ folder, configDir }); return true; };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-profile-'));
+  perTestDirs.push(dir);
+  launchSession({
+    baseDir: base, spawner: spawnAndNote, claudeConfigDir: dir, trustFolders: true, trustFolder, ...makeRegCtx(),
+  }, 'Video Editing');
+  assert.deepEqual(trusted, [{ folder: path.join(base, 'Video Editing'), configDir: dir }]);
+  assert.deepEqual(order, ['trust', 'spawn']);
+  assert.equal(calls.length, 1);
+});
+
+test('launchSession - no trust write without the opt-in, and a failed trust still launches', () => {
+  const { spawner, calls } = makeFakeSpawner();
+  let called = 0;
+  launchSession({
+    baseDir: base, spawner, claudeConfigDir: null, trustFolder: () => { called += 1; }, ...makeRegCtx(),
+  }, 'Video Editing');
+  assert.equal(called, 0);
+  assert.equal(calls.length, 1);
+
+  const second = makeFakeSpawner();
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (m) => warnings.push(String(m));
+  let r;
+  try {
+    r = launchSession({
+      baseDir: base, spawner: second.spawner, claudeConfigDir: null, trustFolders: true, trustFolder: () => false, ...makeRegCtx(),
+    }, 'email-lint');
+  } finally {
+    console.warn = realWarn;
+  }
+  assert.equal(r.ok, true);
+  assert.equal(second.calls.length, 1);
+  // RF2-C02: the miss is logged, so a tile stuck on the modal has a cause in agent.log.
+  assert.ok(warnings.some((w) => w.includes('could not mark') && w.includes('email-lint')), warnings.join('\n'));
+});

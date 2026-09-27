@@ -1148,9 +1148,11 @@ select {
 /* .accept's 14px flex gap does not reach inside the <details>. */
 .accept-more > .accept-sections { padding-bottom: 14px; }
 
-/* Same type as .allhdr's section label - this app has one section-heading
-   voice and these are section headings. */
-.copy-heading { font-size: 9px; letter-spacing: 0.09em; color: var(--dim); margin-bottom: 5px; }
+/* Same size as .allhdr's section label. The ACCENT, not .allhdr's --dim, since
+   Artifact sequence 15 (Lane 21, 2026-09-27): on the Dell the disabled grey
+   made the one screen that must be read the hardest to read. Every size, and
+   Settings > What this app can see too, which draws the same elements. */
+.copy-heading { font-size: 9px; font-weight: 700; letter-spacing: 0.09em; color: var(--accent); margin-bottom: 5px; }
 .copy-item { font-size: 11px; line-height: 1.5; color: var(--muted); }
 .copy-item + .copy-item { margin-top: 3px; }
 
@@ -1177,7 +1179,8 @@ select {
    it keeps the platform's own focus ring, keyboard behaviour and hit testing. */
 .accept-consent input { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); margin: 0; }
 
-.accept-note { font-size: 10px; line-height: 1.5; color: var(--dim); }
+/* --muted, not --dim (Lane 21): it is an instruction, not disabled text. */
+.accept-note { font-size: 10px; line-height: 1.5; color: var(--muted); }
 
 .accept-msg { font-size: 11px; line-height: 1.5; color: var(--text); }
 
@@ -1350,6 +1353,13 @@ select {
   border-top: 1px solid var(--line);
 }
 .share-save { flex-grow: 1; }
+/* The Lane 20 panel opens INSIDE this row, in place of SKIP and SAVE. As a
+   flex item of a row it shrank to its content and sat at the left edge (seen
+   on the Dell at desktop width); it takes the whole row instead. */
+.share-actions > #reauth { flex: 1 1 100%; }
+
+/* Lane 21 step 5. Only ever shown at >=900px - see the desktop block. */
+.pane-empty { display: none; }
 
 /* At 320px the toggle drops to a second line instead of crushing the name -
    scoped to the SELECTED row only, so a plain tickable row never wraps. */
@@ -1587,6 +1597,80 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   /* The + button is fixed to the viewport and was positioned against the
      430px column; at this width it belongs at the main column's right edge. */
   .newproj { right: max(13px, calc(50% - 520px + 13px)); }
+
+  /* -------------------------------------------------------------------------
+     Lane 21 (Artifact sequence 15, 2026-09-27) - the desk comes first. Until
+     the app is on a phone, the passcode, the warning and the picker all happen
+     HERE, so at this width they are one readable centred column instead of a
+     small phone-sized one. Same words, same elements; only size and place.
+     ------------------------------------------------------------------------- */
+
+  /* 1. Passcode set / unlock. Vertically centred: the keyboard-jump reason for
+     top-anchoring on the phone does not exist at a desk. */
+  .gate { max-width: 520px; margin-block: auto; padding: 24px 20px; gap: 20px; }
+  .gate-label, .gate-fieldlabel { font-size: 12px; color: var(--accent); }
+  .gate-title { font-size: 20px; }
+  .gate-sub { font-size: 15px; }
+  .gate .pin { min-height: 48px; padding-inline: 52px; }   /* both sides: the digits stay centred */
+  /* The eye inside the field, as the frame draws it. */
+  .gate .pin-row { position: relative; }
+  .gate .pin-eye { position: absolute; right: 2px; }
+  .gate-go { min-height: 48px; font-size: 13px; }
+  .gate-msg { font-size: 13px; }
+
+  /* 2. The warning. */
+  .accept { max-width: 640px; margin-block: auto; gap: 18px; }
+  .accept-title { font-size: 20px; }
+  .accept-lede { font-size: 15px; }
+  .accept-more > summary { font-size: 13px; }
+  .accept .copy-heading { font-size: 12px; }
+  .accept .copy-item { font-size: 15px; }
+  .accept-consent { font-size: 15px; }
+  .accept-note { font-size: 13px; }
+  .accept-go { min-height: 48px; font-size: 13px; }
+
+  /* 3. The picker: one centred column, SKIP and SAVE side by side. */
+  #folders { width: 100%; max-width: 720px; margin-inline: auto; }
+  #folders .row-name { font-size: 15px; }
+  #folders .share-skip, #folders .share-save { flex: 1 1 0; min-height: 48px; font-size: 12px; }
+
+  /* 4. The passcode panel in that column: its line on one line, CANCEL and
+     SAVE side by side under the field (the phone stacks them). */
+  .share-actions > #reauth {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 8px;
+  }
+  .share-actions > #reauth > * { grid-column: 1 / -1; }
+  .share-actions > #reauth > #reauth-cancel { grid-column: 1; grid-row: 4; }
+  .share-actions > #reauth > #reauth-action { grid-column: 2; grid-row: 4; }
+  .share-actions > #reauth .set-p { max-width: none; font-size: 13px; color: var(--text-2); }
+
+  /* 5. Nothing shared yet: the prompt fills the wide pane, the sidebar keeps a
+     line, and "nothing running / tap a project" goes - there is no project. */
+  .pane-empty:not([hidden]) {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 72px 20px 24px;
+    text-align: center;
+  }
+  .pane-empty .empty { align-items: center; gap: 12px; }
+  .pane-empty .empty-title { font-size: 18px; font-weight: 700; }
+  .pane-empty .empty-body { font-size: 14px; color: var(--text-2); max-width: 36ch; }
+  .pane-empty .empty-action {
+    width: auto;
+    margin-top: 6px;
+    padding: 0 28px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--accent-ink);
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  #picker:has(#pane-empty:not([hidden])) #zone-run { display: none; }
+  #picker:has(#pane-empty:not([hidden])) #projects .empty > :not(.empty-title) { display: none; }
+  #picker:has(#pane-empty:not([hidden])) #projects .empty-title { font-size: 11px; color: var(--dim); }
 }
 
 /* The stop confirm's warning and its way out, per Artifact Lane 2. The app

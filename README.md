@@ -113,13 +113,28 @@ CLI on `PATH`.
 
 ## Install
 
-In Claude Code, at the PC:
+In Claude Code, at the PC, run these **one at a time**. Paste them together and
+Claude Code reads all three as one marketplace name. Wait for each to finish
+before the next:
 
-```
-/plugin marketplace add MrTig-afk/claude-remote
-/plugin install claude-remote@claude-remote
-/claude-remote:setup
-```
+1. Add the marketplace:
+
+   ```
+   /plugin marketplace add MrTig-afk/claude-remote
+   ```
+
+2. Install the plugin:
+
+   ```
+   /plugin install claude-remote@claude-remote
+   ```
+
+3. Run setup (if Claude Code says the command is not found, restart it once so
+   it loads the new plugin, then run it again):
+
+   ```
+   /claude-remote:setup
+   ```
 
 Setup walks you through the rest, in this order, and **the order matters**:
 
@@ -135,8 +150,10 @@ Setup walks you through the rest, in this order, and **the order matters**:
 4. **Only then** does it make the agent reachable from your tailnet, with
    `tailscale serve`. The app is at `https://<machine>.<tailnet>.ts.net:8790`.
 
-On the phone, open that address in Safari, tap Share, then **Add to Home
-Screen**.
+Open that address on your phone, or any other device signed in to your
+Tailscale. To keep it like an app: on an iPhone or iPad, open it in Safari, tap
+Share, then **Add to Home Screen**; on Android, open it in Chrome, tap the
+three-dot menu, then **Add to Home screen** (or **Install app**).
 
 Good to know:
 
@@ -258,6 +275,41 @@ box reachable from your phone would turn the six-digit passcode into a way to
 run anything on your PC - the exact threat described at the top of this file.
 Editing the config file requires access to the machine, and anyone with that
 can already run anything as you.
+
+### Claude Code's "do you trust this folder?" question
+
+Claude Code asks that the first time it opens a folder, and it needs someone at
+the keyboard to answer. From the phone nobody is, so a session would sit on
+that question and never reach your Code tab. **So when a session starts in a
+folder you shared, the agent answers it for you**: it sets
+`hasTrustDialogAccepted` for that folder in Claude Code's own `.claude.json` -
+the same field the real dialog writes - in your home folder, or in the profile
+folder set by `claude_config_dir` below. It adds that one field and keeps every
+other value in the file as it was (the file is written back whole, so its
+formatting is normalised), only ever for a shared folder you are launching, and
+never creates the file. If it cannot, `agent.log` says so and the session may
+stop on the question at the PC. The first-run screen says this too.
+
+Trusting a folder is what lets Claude Code run that project's own
+`.claude/settings.json` hooks and `.mcp.json` servers without asking. That is
+why the rule at the top of this file is "only open projects you trust": sharing
+a folder with this app now counts as saying so.
+
+### More than one Claude Code profile
+
+Sessions started from the phone use Claude Code's default profile
+(`%USERPROFILE%\.claude`) and its login. If you run Claude Code with a second
+profile - an alias that sets `CLAUDE_CONFIG_DIR`, say - and your login lives
+there, a phone session would open **logged out** in the default one. Point the
+app at the right profile in the config file:
+
+```json
+{ "claude_config_dir": "C:\\Users\\<you>\\.claude-max" }
+```
+
+It must be an absolute path to a folder that exists; anything else is ignored
+with a warning in `agent.log`, so a typo never opens a session in a new, empty
+profile. It is read on every launch, so no restart is needed.
 
 ## The opening report
 
