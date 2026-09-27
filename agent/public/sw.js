@@ -20,7 +20,7 @@
 const CACHE = 'claude-remote-shell-__SHELL_HASH__';
 const PRECACHE = [
   '/', '/index.html', '/app.css', '/app.js', '/api.js', '/lock.js', '/copy.js', '/folders-ui.js',
-  '/update-ui.js', '/handoff-ui.js', '/push-ui.js',
+  '/update-ui.js', '/handoff-ui.js', '/push-ui.js', '/phone.js', '/qr.js',
   '/manifest.webmanifest', '/icons/icon.svg',
   '/icons/icon-192.png', '/icons/icon-512.png',
 ];

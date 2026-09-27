@@ -28,6 +28,7 @@ import {
   MAX_DEVICES, TEST_TTL_S,
 } from './push.js';
 import { watchLaunch, checkServeOnce } from './alerts.js';
+import { startServe, phoneStatus } from './phone.js';
 
 export const HOST = '127.0.0.1';
 // 8787 is permanently held on this host by the WhatsApp channel plugin
@@ -188,6 +189,11 @@ async function handleAuthRoute(req, res, ctx, url) {
       sendJson(res, result.status, { error: result.error });
       return true;
     }
+    // R21.3: the passcode now exists, so - and only now - the tailnet may
+    // reach this agent. setPasscode succeeds exactly once (409 after), so
+    // this is the FIRST set. Never awaited; phoneServe is the real server's
+    // opt-in only, so no test ever runs a real tailscale serve.
+    if (ctx.phoneServe === true) startServe(ctx, ctx.port).catch(() => {});
     sendJson(res, result.status, { token: result.token, expires_at: result.expiresAt });
     return true;
   }
@@ -458,6 +464,19 @@ export async function handleRequest(req, res, ctx) {
       return;
     }
 
+    // Lane 23: the phone address for the desk's "Open it on your phone"
+    // screen and Settings > Agent status. POST reads no body, like
+    // /api/acknowledge: TRY AGAIN has nothing to say but "again".
+    if (url.pathname === '/api/phone' && req.method === 'GET') {
+      sendJson(res, 200, await phoneStatus(ctx, ctx.port ?? DEFAULT_PORT));
+      return;
+    }
+    if (url.pathname === '/api/phone/retry' && req.method === 'POST') {
+      await startServe(ctx, ctx.port ?? DEFAULT_PORT);
+      sendJson(res, 200, await phoneStatus(ctx, ctx.port ?? DEFAULT_PORT));
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/projects') {
       const parsed = await readJsonObject(req);
       if (!parsed.ok) {
@@ -629,7 +648,7 @@ if (import.meta.main) {
     console.warn(`claude-remote agent: NO PASSCODE SET. Open http://${HOST}:${port} at this desk and set one - every API route returns 403 until you do. Do NOT run 'tailscale serve' before it is set.`);
   }
 
-  const ctx = { sharedFolders, watchLaunches: true, trustFolders: true };
+  const ctx = { sharedFolders, watchLaunches: true, trustFolders: true, phoneServe: true, port };
   ensureVapid(ctx);
   const server = createAgentServer(ctx);
 

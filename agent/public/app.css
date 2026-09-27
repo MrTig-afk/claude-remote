@@ -1789,3 +1789,77 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   text-decoration: none;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* ---------------------------------------------------------------------------
+   Lane 23 (Artifact sequence 17, 2026-09-27) - "Open it on your phone", the
+   desk's last first-run screen, and the Phone address row in Settings >
+   Agent status. The same centred column as the accept screen, and at >=900px
+   the same Lane 21 sizes. The QR code is dark modules on the light text
+   token: a phone camera needs dark-on-light, and no new colour is introduced.
+--------------------------------------------------------------------------- */
+#phone { display: flex; flex-direction: column; flex-grow: 1; }
+.phone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 400px;
+  margin-inline: auto;
+  padding: 20px 20px calc(24px + env(safe-area-inset-bottom));
+}
+.phone-sec { font-size: 10px; letter-spacing: 0.1em; font-weight: 700; text-transform: uppercase; color: var(--accent); }
+.phone-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.phone-lede, .phone-after { margin: 0; font-size: 12px; line-height: 1.55; color: var(--text-2); }
+.phone-after { color: var(--muted); }
+#phone-ready:not([hidden]), #phone-failed:not([hidden]) { display: flex; flex-direction: column; gap: 12px; }
+#phone-failed .banner { margin: 0; }
+#phone-failed .cmd { margin: 0; color: var(--accent); }
+.phone-qr { width: 196px; margin: 4px auto 0; }
+.qr-svg { display: block; width: 100%; height: auto; border-radius: 6px; }
+.qr-bg { fill: var(--text); }
+.qr-fg { fill: var(--bg); }
+.phone-url {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--raised);
+  border: 1px solid var(--edge);
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.phone-copy {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  background: none;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.phone-copy.copied { color: var(--accent); border-color: var(--accent-2); }
+.phone-howto { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.phone-howto div { padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; font-size: 11px; line-height: 1.55; color: var(--text-2); }
+.phone-howto b { display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.phone-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.phone-btns .set-btn { margin-top: 0; }
+.phone-go { color: var(--accent); border-color: var(--accent-2); }
+.phone-row:not([hidden]) { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.phone-row .phone-qr { width: 160px; }
+
+@media (min-width: 900px) {
+  .phone { max-width: 640px; margin-block: auto; gap: 16px; }
+  .phone-sec { font-size: 12px; }
+  .phone-title { font-size: 20px; }
+  .phone-lede, .phone-after, .phone-url { font-size: 15px; }
+  .phone-howto div, .phone .banner, .phone .cmd { font-size: 13px; }
+  .phone-qr { width: 240px; }
+  .phone .set-btn { min-height: 48px; font-size: 12px; }
+}

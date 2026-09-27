@@ -36,6 +36,7 @@ import {
   ENABLE_FAILED_SUB, ENABLE_FAILED_PC, ENABLE_FAILED_PHONE,
   SEND_A_TEST, SENDING, TURN_OFF, STOPPED_WARN, SAVE, REMOVE,
 } from './push-ui.js';
+import { openPhoneScreen, phoneScreenPending, refreshAgentPhone } from './phone.js';
 
 // The version baked into whatever copy of the shell the phone has cached.
 // Keep it a plain single-quoted literal: the version test reads it out of
@@ -105,6 +106,7 @@ const SCREEN_MAIN = {
   accept: 'accept',
   list: 'picker',      // #picker IS the project list - it predates the folder picker
   folders: 'folders',  // the folder picker (T97)
+  phone: 'phone',      // Lane 23 - "Open it on your phone", once, after the first-run picker
   settings: 'settings',
   // Lane 7 destinations. Exactly one level below the settings root - the app
   // is never three screens deep in Settings - which is what lets the history
@@ -153,7 +155,7 @@ function showScreen(name, direction = null) {
   // and home is not it. Inert rather than hidden: design/tokens.md puts the
   // mark on EVERY screen, lock included, and never muted - so the control
   // stays fully drawn and stops being tappable.
-  document.getElementById('home').disabled = name === 'gate' || name === 'accept';
+  document.getElementById('home').disabled = name === 'gate' || name === 'accept' || name === 'phone';
   // Settings is reached from the project list and from nowhere else. On the
   // picker it would be a loop; on the gate it would be a way past it.
   document.getElementById('settings-open').hidden = name !== 'list';
@@ -3599,6 +3601,7 @@ function renderAgentStatus() {
 }
 
 async function refreshAgentStatus() {
+  refreshAgentPhone();   // Lane 23's Phone address row; phone.js owns it
   const res = await getStatus();
   state.status = res.ok ? res.data : null;
   if (currentSub() === 'agent') renderAgentStatus();
@@ -4781,9 +4784,14 @@ async function ensureAccepted() {
   // fall through to the list, where load() reports the agent unreachable, which
   // is the truth.
   const reopen = pendingFolders !== null;
+  // Lane 23 step 3: the phone screen follows the genuine first-run picker,
+  // once. A re-entry (a 401 on either screen) finds it pending and waits on
+  // the same DONE/SKIP instead of racing it to the project list.
+  const phoneDue = !reopen && firstRun && knownShared !== null;
   if (reopen || (firstRun && knownShared !== null)) {
     await showFolders(reopen ? share.ticks : sharedToTicks(knownShared), { firstRun: !reopen });
   }
+  if (phoneDue || phoneScreenPending()) await openPhoneScreen(() => showScreen('phone'));
   picker.hidden = false;
   showScreen('list');
 }

@@ -76,7 +76,7 @@ function readScreenMain() {
   return new Function(`${js.slice(start, end)}; return SCREEN_MAIN;`)();
 }
 
-test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the fifteen screens', () => {
+test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the sixteen screens', () => {
   // RED WHEN: a screen is added to the map with no <main>, or a <main> is
   // renamed - the router would then hide nothing and two screens stack.
   // All six Lane 7 destinations are here, Change passcode and Contact me
@@ -84,7 +84,7 @@ test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the
   const SCREEN_MAIN = readScreenMain();
   assert.deepEqual(
     Object.keys(SCREEN_MAIN).sort(),
-    ['about', 'accept', 'agent', 'contact', 'folders', 'gate', 'list', 'notify', 'passcode', 'reset', 'root', 'see', 'settings', 'shared', 'update'],
+    ['about', 'accept', 'agent', 'contact', 'folders', 'gate', 'list', 'notify', 'passcode', 'phone', 'reset', 'root', 'see', 'settings', 'shared', 'update'],
   );
   const html = read('index.html');
   for (const id of Object.values(SCREEN_MAIN)) {

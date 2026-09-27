@@ -158,13 +158,13 @@ test('openRootEditor: a set that goes unknown mid-fetch leaves SAVE disabled ins
 
 // ------------------------------------------------------------- ensureAccepted
 
-function loadEnsureAccepted({ sharedFromAgent = [], nullDuringAccept = false } = {}) {
+function loadEnsureAccepted({ sharedFromAgent = [], nullDuringAccept = false, firstRun = true, phonePending = false } = {}) {
   const calls = [];
   const picker = { hidden: false };
   const state = { shared: undefined };
   const fn = new Function(
     'document', 'getAcknowledged', 'state', 'screenAfterUnlock', 'showAccept',
-    'share', 'showFolders', 'sharedToTicks', 'showScreen', 'calls',
+    'share', 'showFolders', 'sharedToTicks', 'showScreen', 'calls', 'openPhoneScreen', 'phoneScreenPending',
     `const pendingFolders = null;
      ${slice('async function ensureAccepted()', 'function showAccept()')}
      return { ensureAccepted };`,
@@ -173,7 +173,7 @@ function loadEnsureAccepted({ sharedFromAgent = [], nullDuringAccept = false } =
     { getElementById: () => picker },
     async () => ({ ok: true, status: 200, data: { shared_folders: sharedFromAgent } }),
     state,
-    () => 'accept',                       // a genuine first run
+    () => (firstRun ? 'accept' : 'list'),   // 'accept' = a genuine first run
     async () => {
       // THE OWNER-PACED WINDOW. A visibilitychange here runs load(), whose
       // failing acknowledge leg nulls the set.
@@ -185,9 +185,33 @@ function loadEnsureAccepted({ sharedFromAgent = [], nullDuringAccept = false } =
     (s) => s.map((r) => ({ path: r.path })),
     (n) => calls.push(`showScreen:${n}`),
     calls,
+    async (show) => { show(); calls.push('phoneDone'); },
+    () => phonePending,
   );
   return { ...mod, calls, picker, state };
 }
+
+test('ensureAccepted: the phone screen follows the first-run picker, once, before the list (Lane 23)', async () => {
+  // RED WHEN: the phone screen is dropped, shown before the picker, shown on
+  // an ordinary unlock, or shown after the list instead of before it.
+  const first = loadEnsureAccepted({ sharedFromAgent: [] });
+  await first.ensureAccepted();
+  assert.deepEqual(first.calls.slice(-4), ['picker:[]', 'showScreen:phone', 'phoneDone', 'showScreen:list']);
+
+  const later = loadEnsureAccepted({ sharedFromAgent: [], firstRun: false });
+  await later.ensureAccepted();
+  assert.ok(!later.calls.includes('showScreen:phone'), 'an ordinary unlock never shows it');
+
+  const unknown = loadEnsureAccepted({ sharedFromAgent: null });
+  await unknown.ensureAccepted();
+  assert.ok(!unknown.calls.includes('showScreen:phone'), 'no picker, no phone screen');
+
+  // A re-unlock while it is still up (a 401 on it) brings it back rather than
+  // dropping the owner on the list with the first run's promise stranded.
+  const reentry = loadEnsureAccepted({ sharedFromAgent: [], firstRun: false, phonePending: true });
+  await reentry.ensureAccepted();
+  assert.deepEqual(reentry.calls.slice(-3), ['showScreen:phone', 'phoneDone', 'showScreen:list']);
+});
 
 test('ensureAccepted: a genuine first run still opens the picker when the set is nulled during the accept screen', async () => {
   // TWO READS OF A MUTABLE VALUE EITHER SIDE OF AN AWAIT was the bug; one read

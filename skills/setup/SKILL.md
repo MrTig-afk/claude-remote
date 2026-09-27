@@ -9,6 +9,32 @@ Get a Node agent running on this Windows PC, serving a small PWA that starts
 Claude Code sessions. The phone reaches it over Tailscale; the session it starts
 appears in the Claude app's Code tab.
 
+**Setup now runs by itself.** On the first Claude Code start after the plugin is
+installed, the plugin's SessionStart hook (`hooks/check-update.mjs`) runs step
+3's `update-agent.ps1` in the background with no window, opens the browser on
+the passcode screen, and the agent switches `tailscale serve` on itself once
+the passcode is set (step 5). A plugin update is installed the same way. **This
+skill is the manual repair path**: for when that could not run (the session
+said "couldn't set itself up" or "couldn't update itself"), or the owner asks.
+Every step below stays valid on a machine that is already set up - step 3
+keeps the previous version if the new one fails, and `tailscale serve` is
+idempotent.
+
+When step 3 succeeds, clear the automatic setup's record of a failure, so the
+next Claude start does not repeat an old failure line. Remove ONLY that record:
+the same file remembers that the phone code was already shown, and deleting the
+whole file would show it again after step 5 has just printed it.
+
+```powershell
+$f = "$env:USERPROFILE\.claude\plugins\data\claude-remote-claude-remote\auto-setup.json"
+if (Test-Path $f) {
+    $s = Get-Content $f -Raw | ConvertFrom-Json
+    $s.PSObject.Properties.Remove('last')
+    # ascii, not utf8: Windows PowerShell 5.1 writes utf8 with a BOM, which JSON.parse rejects
+    $s | ConvertTo-Json | Set-Content $f -Encoding ascii
+}
+```
+
 ## THE ORDER IS LOAD-BEARING. Do not reorder it.
 
 Step 4 hands over so the owner sets a passcode. Step 5 exposes the agent to the
@@ -36,8 +62,7 @@ thing to do was buried under it.
 - **Lead with the one thing they have to do**, in a sentence or two. Then stop.
 - Short sentences, plain words. No file names, flags or error internals unless
   they ask, or something failed and they need them to fix it.
-- **Ask before explaining.** The environment question in step 3 is one yes/no
-  question; only a "yes" earns the details.
+- **Ask before explaining.** Only a question the owner raises earns the details.
 - **Do not assume an iPhone.** Say "your phone or another device", and give the
   install steps for iPhone and Android both (step 5).
 - When something fails: what failed, then the one command or action that fixes
@@ -93,7 +118,7 @@ silently stop starting. Setup copies the agent to a folder that never moves,
 
 **This step is also the update.** A plugin update changes nothing on its own;
 the copy keeps running until this step runs again. The plugin's SessionStart
-hook compares the two and says "Claude Remote has an update" when they differ.
+hook compares the two and installs the new version by itself when they differ.
 Decide which run this is BEFORE copying anything. It is an update only when
 all three already hold:
 
@@ -177,73 +202,12 @@ to use the same number in both places. The known limit of the at-logon trigger
 - a cold boot sitting at the lock screen has no agent - is in
 `docs/agent-autostart.md`.
 
-### Does anything need to run before Claude starts?
+### Environments before Claude starts
 
-ASK THE OWNER THIS - do not assume, and do not skip it because their machine
-happens to look like a plain Python project. But ask it as ONE short question
-and nothing else, then wait:
-
-```
-Does your project need anything set up before Claude starts, like conda,
-poetry or uv? If you're not sure, the answer is probably no.
-```
-
-"No" (or a plain venv / .venv folder): say it is handled automatically and move
-on. Only a "yes" gets the details below, and then only the part that applies.
-
-The details, for you. When a session launches, the
-launcher `cd`s into the project and then activates an environment. Out of the
-box it checks two things, in order: a `venv` or `.venv` folder holding
-`Scripts\python.exe`, which it puts first on `PATH` itself (it never runs the
-project's `Activate.ps1`); then an `environment.yml` with a `name:`, which it
-activates through a conda found under `miniconda3` or `anaconda3` in the user
-folder, `AppData\Local` or `C:\ProgramData` - refusing the launch, with the
-reason, if conda is not there.
-
-If they use poetry, uv, pipenv, a differently-named folder, conda installed
-anywhere else, or a non-Python stack, that auto-detect finds nothing and the
-session starts in the
-wrong environment - silently, with no sign of it from the phone. Set
-`pre_launch_command` in the config file for that case:
-
-```json
-{ "pre_launch_command": "& \"$env:USERPROFILE\\miniconda3\\shell\\condabin\\conda-hook.ps1\"; conda activate myenv" }
-```
-
-THREE CONSTRAINTS. Say all three - each one produces a silent failure, and the
-first two make the obvious command the wrong one:
-
-- **`-NoProfile`.** The launcher spawns PowerShell with `-NoProfile`, so
-  nothing `conda init` (or nvm, or their own profile) defines exists. A bare
-  `conda activate myenv` is NOT a command here - it falls through to
-  `conda.exe`, errors with "Run 'conda init' before 'conda activate'", and the
-  session lands in the base environment looking fine. Hence the hook above.
-- **It must RETURN.** No timeout, and it runs before Claude Code starts, so
-  anything that blocks hangs the launch and no session ever appears. Do NOT
-  suggest `poetry shell` - it opens a nested interactive shell and waits
-  forever. `Invoke-Expression (poetry env activate)` is the one that both returns AND
-  actually activates - bare `poetry env activate` only PRINTS the line.
-- **It REPLACES the auto-detect** for any project it applies to - `venv`/
-  `.venv` is not tried as well. `pre_launch_command` is the fallback for every
-  project; `pre_launch_commands` is a map keyed by project path that overrides
-  it for one. Projects in neither keep the auto-detect. If their projects need
-  different environments, that map is the answer - not a command that branches
-  on `$PWD`. Map a project to `null` - and only `null` - to say "this one needs
-  nothing" and keep the auto-detect despite a global. Keys need a DRIVE LETTER
-  (`F:\...`): a `~` is never expanded, and anything else, `/Dev/x` included,
-  resolves against whatever directory the agent was started in, so it usually
-  matches nothing. The agent warns, but only in its own terminal.
-
-Tell them where failures show up, because nowhere else does: the launcher
-writes `<pid file>.err` beside the pid file in `session-pids\`.
-
-Also:
-
-- Leave it out and today's behaviour is unchanged.
-- The value is executed. Anyone who can edit that file can already run
-  anything as this user, which is why the setting lives in the file and NOT in
-  the app - no route can write it, and the phone must never be able to decide
-  what runs on the PC.
+Nothing to ask here. The launcher finds a `venv`/`.venv` or a conda
+`environment.yml` by itself; anything else is the `pre_launch_command`
+setting, which is file-only and documented in README.md ("What launching a
+session does to your environment"). Point the owner there only if they ask.
 
 **Nothing about folders is configured here.** Which directories the app can see
 is chosen by the owner IN THE APP on first run, on a screen that explains what
@@ -311,6 +275,20 @@ To keep it like an app:
 Enter your passcode, tap a project, and the session shows up in the Claude
 app's Code tab.
 ```
+
+With it, give the phone code - the same drawing a Claude start shows once
+sharing is on (Lane 23 step 8). The plugin's hook prints it (`$src` is step 3's
+plugin folder; find it again the same way in a new shell):
+
+```powershell
+node "$src\hooks\check-update.mjs" --print-qr https://<machine>.<tailnet>.ts.net:8790
+```
+
+Put what it prints in your reply exactly as printed, inside a code block, right
+under the address, and say "Scan this with your phone's camera to open it." The
+tool's own output is folded away in the terminal, so the owner does not see it
+there. Do not redraw or retype it: one wrong character and the code does not
+scan.
 
 To take it down again:
 

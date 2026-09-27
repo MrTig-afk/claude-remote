@@ -354,6 +354,41 @@
       </div>
     </main>
 
+    <!-- Lane 23 steps 3-4 (Artifact sequence 17): the desk's last first-run
+         screen, shown once after the picker's SAVE or SKIP. Words verbatim
+         from the Artifact; phone.js only picks the variant and fills in the
+         address, which the agent reads from Tailscale. Both variants ship
+         hidden until the agent has answered. -->
+    <main id="phone" hidden>
+      <div class="phone">
+        <div class="phone-sec">Last step</div>
+        <div class="phone-title">Open it on your phone</div>
+        <div id="phone-ready" hidden>
+          <p class="phone-lede">Your phone needs Tailscale too, signed in to the same account. Then scan this with its camera, or type the address.</p>
+          <div class="phone-qr" id="phone-qr"></div>
+          <div class="phone-url"><span id="phone-url"></span><button class="phone-copy" id="phone-copy" type="button">COPY</button></div>
+          <div class="phone-howto">
+            <div><b>iPhone or iPad</b>Open it in Safari, tap Share, then Add to Home Screen.</div>
+            <div><b>Android</b>Open it in Chrome, tap ⋮, then Add to Home screen.</div>
+          </div>
+          <p class="phone-after">Enter your passcode, tap a project, and the session shows up in the Claude app&rsquo;s Code tab.</p>
+          <button class="set-btn set-btn-solid ripples" id="phone-done" type="button">DONE</button>
+        </div>
+        <div id="phone-failed" hidden>
+          <div class="banner set-warn">
+            <svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-warn"/></svg>
+            <span>This PC couldn&rsquo;t switch on Tailscale sharing, so your phone can&rsquo;t reach it yet.</span>
+          </div>
+          <p class="phone-lede">Open a terminal on this PC and run:</p>
+          <div class="cmd" id="phone-cmd"></div>
+          <div class="phone-btns">
+            <button class="set-btn" id="phone-skip" type="button">SKIP FOR NOW</button>
+            <button class="set-btn phone-go" id="phone-retry" type="button">TRY AGAIN</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
     <!-- Settings root (T77). One <main> per screen, listed in SCREEN_MAIN -
          showScreen is the only thing that reveals it. T79-T85 add their own
          group headings and rows beside FOLDERS; this ships with the one
@@ -669,6 +704,16 @@
       </div>
       <div class="set-body">
         <div id="agent-facts"></div>
+        <!-- Lane 23: the phone address, the same code and COPY as the
+             first-run screen. Hidden until sharing is on (phone.js). -->
+        <div class="phone-row" id="agent-phone" hidden>
+          <div class="row folder set-row">
+            <svg class="ico set-ico" width="15" height="15" aria-hidden="true"><use href="#i-ext"/></svg>
+            <span class="row-main"><span class="row-name">Phone address</span></span>
+          </div>
+          <div class="phone-qr" id="agent-phone-qr"></div>
+          <div class="phone-url"><span id="agent-phone-url"></span><button class="phone-copy" id="agent-phone-copy" type="button">COPY</button></div>
+        </div>
         <button class="set-btn ripples" id="agent-recheck" type="button">TEST CONNECTION</button>
       </div>
       <div class="spacer"></div>

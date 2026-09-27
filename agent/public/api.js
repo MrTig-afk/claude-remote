@@ -201,3 +201,16 @@ export function removePushDevice(endpoint) {
 export function sendTestPush(endpoint) {
   return post('/api/push/test', { endpoint });
 }
+
+// Lane 23. The GET can wait on a serve the PC started at passcode time, and
+// the retry runs serve itself (the agent allows it 30s), hence the longer
+// waits. Same empty-body contract as acknowledge().
+export function getPhone() {
+  return request('/api/phone', {}, 45_000);
+}
+
+export function retryPhone() {
+  return request('/api/phone/retry', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+  }, 45_000);
+}
