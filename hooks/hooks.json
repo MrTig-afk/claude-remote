@@ -1,5 +1,5 @@
 {
-  "description": "Tell the user when the installed plugin carries a newer Claude Remote agent than the copy that runs.",
+  "description": "Install the Claude Remote agent on this PC in the background on the first Claude start after the plugin is installed, and again after a plugin update.",
   "hooks": {
     "SessionStart": [
       {

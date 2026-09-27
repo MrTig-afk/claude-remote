@@ -102,7 +102,7 @@ export function serveVerdict(stdout, port) {
   return walk(parsed) ? 'present' : 'missing';
 }
 
-function tailscaleBinary() {
+export function tailscaleBinary() {
   const candidate = path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Tailscale', 'tailscale.exe');
   return fs.existsSync(candidate) ? candidate : 'tailscale';
 }

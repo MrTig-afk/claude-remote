@@ -64,8 +64,8 @@ Specifically:
   attacker straight through.
 - **There is a first-run window.** Until you set a passcode, the agent answers
   `403` on every route except the one that *sets* it - so whoever reaches it
-  first sets it. Set your passcode at the desk **before** running
-  `tailscale serve`. The setup order below exists for exactly this reason.
+  first sets it. That is why the agent switches `tailscale serve` on only
+  **after** you have set the passcode at the desk, never before.
 - **Check your drive's ACL.** On a drive that inherits
   `NT AUTHORITY\Authenticated Users:(I)(M)` (Modify), any authenticated account
   on the machine can rewrite the scripts that run as you at logon. That is not
@@ -121,8 +121,8 @@ macOS and Linux PCs are not supported yet - see the [FAQ](#faq).
 ## Install
 
 In Claude Code, at the PC, run these **one at a time**. Paste them together and
-Claude Code reads all three as one marketplace name. Wait for each to finish
-before the next:
+Claude Code reads both as one marketplace name. Wait for the first to finish
+before the second:
 
 1. Add the marketplace:
 
@@ -136,31 +136,47 @@ before the next:
    /plugin install claude-remote@claude-remote
    ```
 
-3. Run setup (if Claude Code says the command is not found, restart it once so
-   it loads the new plugin, then run it again):
+Then **quit Claude Code and start it again.** That is the last thing you type.
+A plugin cannot run anything while it is being installed, so the next start is
+the first moment it can.
 
-   ```
-   /claude-remote:setup
-   ```
+**Installing the plugin is agreeing to what it installs.** On that next start
+it sets itself up in the background, with no window, and adds three things to
+this PC:
 
-Setup walks you through the rest, in this order, and **the order matters**:
+- **A copy of the agent** in `%LOCALAPPDATA%\claude-remote`.
+- **A scheduled task, "Claude Remote Agent"**, that starts it at every logon
+  (and again within a minute if it stops). It listens on
+  `http://127.0.0.1:8790` and nothing else.
+- **Tailscale sharing on port 8790** (`tailscale serve`), which makes the app
+  reachable from every device on your tailnet - switched on only once you have
+  set a passcode.
 
-1. It checks Tailscale is up, and that Node and Claude Code are installed.
-2. It copies the agent to `%LOCALAPPDATA%\claude-remote` and has it start at
-   every logon. It listens on `http://127.0.0.1:8790` and nothing else.
-3. It stops and hands you `http://127.0.0.1:8790`. Open it **at the desk**, set
-   a six-digit passcode, then choose which folders the app may see. Nothing is
-   shared until you pick it. Each folder is shared either as **one project**
-   (a session starts in that folder) or as **a folder of projects** (each
-   folder inside it is one). The app suggests one project when the folder holds
-   a `.git` or a `CLAUDE.md`; you can change it then, or later in Settings.
-4. **Only then** does it make the agent reachable from your tailnet, with
-   `tailscale serve`. The app is at `https://<machine>.<tailnet>.ts.net:8790`.
+What happens next, and **the order matters**:
+
+1. Claude Code says "Claude Remote is setting itself up on this PC." It first
+   checks Tailscale is running and signed in, and that Node and Claude Code are
+   installed; if one is missing it says which and installs nothing.
+2. Your browser opens on `http://127.0.0.1:8790` by itself. **At the desk**, set
+   a six-digit passcode, read the screen about what the app can see, then
+   choose which folders it may see. Nothing is shared until you pick it. Each
+   folder is shared either as **one project** (a session starts in that
+   folder) or as **a folder of projects** (each folder inside it is one). The
+   app suggests one project when the folder holds a `.git` or a `CLAUDE.md`;
+   you can change it then, or later in Settings.
+3. **Only after the passcode is set** does the agent switch on `tailscale
+   serve`. The last screen, **Open it on your phone**, shows the address
+   (`https://<machine>.<tailnet>.ts.net:8790`) with a code to scan. The same
+   address stays in Settings > Agent status.
 
 Open that address on your phone, or any other device signed in to your
 Tailscale. To keep it like an app: on an iPhone or iPad, open it in Safari, tap
 Share, then **Add to Home Screen**; on Android, open it in Chrome, tap the
 three-dot menu, then **Add to Home screen** (or **Install app**).
+
+If it could not set itself up, the next Claude Code start says why. Fix that,
+then run `/claude-remote:setup`: the same steps, by hand, with the details
+shown. A failed install is not retried by itself.
 
 Good to know:
 
@@ -177,8 +193,8 @@ Good to know:
   window; what it printed is in
   `%USERPROFILE%\.claude\plugins\data\claude-remote-claude-remote\agent.log`.
 - Port 8790 is the default, not a requirement: set a user environment variable
-  `CLAUDE_REMOTE_AGENT_PORT` to move it, and tell setup, so the serve command
-  uses the same number.
+  `CLAUDE_REMOTE_AGENT_PORT` to move it; the agent switches `tailscale serve`
+  on for the same number.
 
 ## Updates
 
@@ -187,12 +203,12 @@ it on: `/plugin` → **Marketplaces** → **claude-remote** → **Enable
 auto-update**. To update by hand instead, run
 `claude plugin update claude-remote@claude-remote`.
 
-A plugin update does not reach the running agent by itself. When the plugin is
-newer than the copy that runs, the next Claude Code session you start says
-**"Claude Remote has an update. Run /claude-remote:setup to install it on this
-PC."** Run it: setup installs the new version, restarts the agent and checks
-it came up. If it did not, setup puts the previous version back, so the phone
-keeps working. Your passcode, settings and open sessions are kept.
+When the plugin is newer than the copy that runs, the next Claude Code start
+installs the new version the same hidden way, restarts the agent and checks it
+came up. If it did not, the previous version is put back, so the phone keeps
+working. The start after that says which happened: "Claude Remote updated
+itself on this PC." or why it could not. Your passcode, settings and open
+sessions are kept.
 
 ## What launching a session does to your environment
 
