@@ -15,6 +15,7 @@ import {
   pidFileNameFor,
 } from './registry.js';
 import { containerChildrenOf, rootsFrom, listProjects } from './projects.js';
+import { trustFolder } from './trust.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
 
@@ -736,6 +737,16 @@ export function launchSession(ctx, project) {
   }
 
   const pidFilePath = path.join(pidDir, pidFileNameFor(sessionName));
+
+  // T140: answer Claude Code's workspace-trust modal for this shared folder
+  // before the session can meet it - see trust.js. Opt-in through ctx like
+  // watchLaunches, so only the real server writes the profile's .claude.json
+  // and no test can touch the developer's own.
+  if (ctx.trustFolders && !(ctx.trustFolder || trustFolder)(r.path, claudeConfigDir)) {
+    // The launch goes ahead - the worst case is the modal it always had - but
+    // the stuck tile that follows needs a cause somewhere the owner can read.
+    console.warn(`claude-remote agent: could not mark '${r.path}' trusted in Claude Code; the session may stop on its trust question on the PC`);
+  }
 
   const child = spawner('powershell.exe', [
     '-NoProfile',

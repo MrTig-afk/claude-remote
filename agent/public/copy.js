@@ -43,6 +43,15 @@ export const SECTIONS = [
     ],
   },
   {
+    // Added 2026-09-27, Artifact sequence 15 ("Approve as drawn"): the one
+    // thing the agent writes outside its own folder - Claude Code's trust
+    // answer for a shared folder at launch (agent/trust.js, T140).
+    heading: 'WHAT IT CHANGES ON THIS PC',
+    items: [
+      'When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask.',
+    ],
+  },
+  {
     heading: 'WHO CAN REACH IT',
     items: [
       'Any device on your private network that knows your passcode.',
@@ -67,10 +76,14 @@ export const ACCEPT_BUTTON = 'CHOOSE FOLDERS';
 // disclosure, because a screen someone navigates to on purpose must not hide
 // its payload behind a second tap.
 //
-// It is a table of contents, not a "learn more": it names all four sections in
-// their own order, so the collapsed screen still states the shape of what is
-// behind it. Do not shorten it to two of the four, and do not make it sound
-// reassuring - the file header's banned-wording rule binds this string too.
+// It is a table of contents, not a "learn more": it names the four original
+// sections in their own order, so the collapsed screen still states the shape
+// of what is behind it. Do not shorten it to two of the four, and do not make
+// it sound reassuring - the file header's banned-wording rule binds this
+// string too. WHAT IT CHANGES ON THIS PC (sequence 15) is not named in it: the
+// approved frame kept this string unchanged, and the consent box cannot be
+// ticked until the sections have been opened (E6), so the line is always shown
+// before anyone accepts. Naming it here is an Artifact change for the owner.
 export const SECTIONS_TOGGLE = 'What it can see, what it cannot, who can reach it, what leaves this machine';
 
 /**
