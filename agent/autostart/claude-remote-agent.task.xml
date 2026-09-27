@@ -91,6 +91,12 @@
            detection rules against that exact shape - fine on one machine, not
            fine shipped to other people's.
 
+           EXCEPT where Smart App Control is On (2026-09-27): there Windows
+           re-rates an unsigned program and blocked hidelaunch by hash after
+           nine days, so register-task.ps1 puts conhost.exe here instead.
+           Smart App Control is off on enterprise-managed PCs, where those
+           detection rules run.
+
            Stop-ScheduledTask ends the launcher only and node survives it:
            stop the agent with update-agent.ps1, never with the task. cmd /s /c
            is there for the log redirect and the data-folder md. -->

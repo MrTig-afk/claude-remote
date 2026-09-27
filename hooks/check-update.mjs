@@ -268,6 +268,23 @@ export function taskVerdict(q, target) {
   return line.includes(` ${server} `) ? 'ours' : 'other';
 }
 
+/** Smart App Control, from `reg query` of VerifiedAndReputablePolicyState: true for On (1) only. */
+export function sacOn(stdout) {
+  return /VerifiedAndReputablePolicyState\s+REG_DWORD\s+0x1\s*$/im.test(String(stdout || ''));
+}
+
+/**
+ * True when our own task still starts the self-built launcher on a PC whose
+ * Smart App Control is On. Windows re-rates an unsigned program and can block
+ * it at any restart (2026-09-27); register-task.ps1 uses conhost.exe there, so
+ * an install made before SAC went On is re-registered.
+ */
+export function launcherStale(q, target) {
+  if (taskVerdict(q, target) !== 'ours') return false;
+  const cmd = /<Command>([\s\S]*?)<\/Command>/.exec(String(q.stdout));
+  return !cmd || !/\\conhost\.exe$/i.test(xmlText(cmd[1]).trim());
+}
+
 // --- The phone code in the terminal (Lane 23 step 8) -------------------------
 
 /**
@@ -352,7 +369,15 @@ export async function sessionStart(deps) {
   const hash = installedHash(pluginRoot);
   // --now never takes the phone code: an agent would relay it through a reply,
   // garbling it, and use up the one showing meant for the terminal.
-  if (kind === 'update' && installedHash(target) === hash) return deps.explain ? UP_TO_DATE : phoneLine(deps, state, files, target);
+  // Up to date - unless Smart App Control went On after the install: then the
+  // same version is installed again, which re-registers the task with the
+  // launcher Windows allows. The failed-same-version guard below stops a loop.
+  // Both asked at once and the task's answer reused by phoneLine: in series,
+  // with phoneLine asking again, this reached the hook's 10s limit (SL-C1-01).
+  if (kind === 'update' && installedHash(target) === hash) {
+    const [sac, q] = await Promise.all([deps.sacStatus ? deps.sacStatus() : null, deps.taskQuery()]);
+    if (!(sacOn(sac) && launcherStale(q, target))) return deps.explain ? UP_TO_DATE : phoneLine(deps, state, files, target, q);
+  }
   // A failed install is not retried by itself - only a newer plugin, or
   // /claude-remote:setup, which clears this record.
   if (state.last && !state.last.ok && state.last.hash === hash) return quiet(outcomeLine(state.last));
@@ -394,12 +419,13 @@ export async function sessionStart(deps) {
  * runs the copy here) and only when Tailscale shares the port and knows this
  * PC's address. Until then, silent - and asked again at the next start.
  */
-async function phoneLine(deps, state, files, target) {
+async function phoneLine(deps, state, files, target, q) {
   if (state.phoneShown) return null;
   // The task first, alone: on a PC set up another way (never 'ours', so never
   // phoneShown) Tailscale would otherwise be asked at every start, forever.
-  // Worst case here is the task's 2s plus phoneAddress's two parallel 4s calls.
-  if (taskVerdict(await deps.taskQuery(), target) !== 'ours') return null;
+  // The caller's answer (asked in parallel with Smart App Control), so the
+  // worst case is that 2s plus phoneAddress's two parallel 4s calls.
+  if (taskVerdict(q, target) !== 'ours') return null;
   const url = await deps.phoneAddress();
   if (!url) return null;
   writeState(files.state, { ...state, phoneShown: true, phoneUrl: url });
@@ -498,6 +524,15 @@ export function realTaskQuery(exec = execFile) {
   });
 }
 
+/** `reg query` of Smart App Control's state -> sacOn's input, or null. */
+export function realSacStatus(exec = execFile) {
+  return new Promise((resolve) => {
+    exec(path.join(SYSTEM32, 'reg.exe'), ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy', '/v', 'VerifiedAndReputablePolicyState'], {
+      windowsHide: true, timeout: 2000, cwd: SYSTEM32,
+    }, (err, stdout) => resolve(err ? null : stdout));
+  });
+}
+
 /** A job that never ran: gives its lock back and leaves a failure for the next start. */
 function jobFailed(job, err) {
   try {
@@ -589,6 +624,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
         now: Date.now(),
         tailscaleStatus: () => realTailscale(['status', '--json']),
         taskQuery: () => realTaskQuery(),
+        sacStatus: () => realSacStatus(),
         phoneAddress: () => phoneAddress(port),
         startJob: (job) => realStartJob(job),
         agentRunning: () => realAgentAnswers(port),

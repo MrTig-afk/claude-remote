@@ -13,7 +13,11 @@ param(
     [string]$TaskName = 'Claude Remote Agent',
     # Where hidelaunch.exe is built. Default below, because Windows PowerShell
     # 5.1 leaves $PSScriptRoot empty in a param default under -File.
-    [string]$LauncherDir
+    [string]$LauncherDir,
+    # Smart App Control as this PC has it. Read from the registry when not
+    # given; the tests pass it so both launchers are covered on any machine.
+    [ValidateSet('', 'On', 'Off')]
+    [string]$SmartAppControl = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +65,22 @@ if (-not $nodeCmd) {
 # still points at, leaving both triggers naming a missing file forever. It
 # would also have made two task names registered from different sources evict
 # each other's launcher. A few 5KB files is the cheaper failure.
+#
+# EXCEPT WHERE SMART APP CONTROL IS ON (owner 2026-09-27, "B plus A"). There
+# Windows runs an unsigned program only while Microsoft's cloud rates it safe,
+# and it re-rates: hidelaunch ran for nine days under SAC and was then blocked
+# by hash (CodeIntegrity 3118, DefenderMadeCloudCall=false, TTLValid=false; an
+# exact copy blocked too, a fresh build ran). So on those PCs the task uses
+# conhost.exe --headless, which Microsoft signs and SAC always allows. Its costs
+# (see the task template) are accepted there: SAC is off on enterprise-managed
+# PCs, where EDR rules against that shape run, and crash recovery is the
+# every-minute trigger, which does not need the exit code it loses.
+if (-not $SmartAppControl) {
+    $sac = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
+    $SmartAppControl = if ($sac -eq 1) { 'On' } else { 'Off' }   # 0 off, 1 on, 2 evaluation
+}
+$useConhost = $SmartAppControl -eq 'On'
+
 $launcherSrc = Join-Path $PSScriptRoot 'hidelaunch.cs'
 if (-not (Test-Path -LiteralPath $launcherSrc)) {
     throw "Cannot find the launcher source at '$launcherSrc' - is this script still inside agent/autostart/?"
@@ -68,7 +88,7 @@ if (-not (Test-Path -LiteralPath $launcherSrc)) {
 
 $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
-if (-not (Test-Path -LiteralPath $csc)) {
+if (-not $useConhost -and -not (Test-Path -LiteralPath $csc)) {
     throw "the .NET Framework C# compiler (csc.exe) was not found under $env:WINDIR\Microsoft.NET - it ships with Windows, so this machine is missing the .NET Framework 4 runtime."
 }
 
@@ -81,8 +101,10 @@ $sha = [System.Security.Cryptography.SHA256]::Create()
 try { $srcHash = -join ($sha.ComputeHash([System.IO.File]::ReadAllBytes($launcherSrc))[0..5] | ForEach-Object { $_.ToString('x2') }) }
 finally { $sha.Dispose() }
 $launcher = Join-Path $LauncherDir "hidelaunch-$srcHash.exe"
+# A full path, like cmd.exe below: never resolved through the search order.
+if ($useConhost) { $launcher = Join-Path $env:SystemRoot 'System32\conhost.exe' }
 
-if (-not (Test-Path -LiteralPath $launcher)) {
+if (-not $useConhost -and -not (Test-Path -LiteralPath $launcher)) {
     # /target:winexe is the whole point: a GUI-subsystem process gets no
     # console of its own, so there is no window to hide and none to flash.
     #
@@ -123,6 +145,8 @@ if (-not (Test-Path -LiteralPath $cmdExe)) { throw "cmd.exe not found at '$cmdEx
 # handing it to the scheduler. It waits for the child, so its own exit code is
 # the child's: check the wait, the side effect AND the code, because any one
 # alone could pass while the task silently starts nothing at every logon.
+# Under conhost --headless (Smart App Control On) the code is always 0, so
+# there the side effect - the probe file - is the check that proves it ran.
 #
 # The timeout result is captured rather than discarded: `> "$probe"` creates
 # the redirect target the moment cmd STARTS, so Test-Path can pass while the
@@ -131,7 +155,8 @@ if (-not (Test-Path -LiteralPath $cmdExe)) { throw "cmd.exe not found at '$cmdEx
 # under update-agent.ps1 would drive a healthy update into rollback.
 $probe = Join-Path $env:TEMP "claude-remote-launcher-probe-$PID"
 Remove-Item -LiteralPath $probe -ErrorAction SilentlyContinue
-$p = Start-Process -FilePath $launcher -PassThru -ArgumentList "`"$cmdExe`" /c type nul > `"$probe`""
+$headless = if ($useConhost) { '--headless ' } else { '' }
+$p = Start-Process -FilePath $launcher -PassThru -ArgumentList "$headless`"$cmdExe`" /c type nul > `"$probe`""
 $exited = $p.WaitForExit(10000)
 if (-not $exited) {
     try { $p.Kill() } catch { }
@@ -152,7 +177,7 @@ $userId = "$env:USERDOMAIN\$env:USERNAME"
 # cmd /s /c "<...>": /s strips only the outer quotes and takes the rest
 # verbatim, the one form that survives paths with spaces. md creates the
 # data dir on a first-ever run (2>nul swallows "already exists").
-$arguments = '"' + $cmdExe + '" /s /c "md "' + $dataDir + '" 2>nul & node.exe "' +
+$arguments = $headless + '"' + $cmdExe + '" /s /c "md "' + $dataDir + '" 2>nul & node.exe "' +
     $serverPath + '" 1>>"' + $logFile + '" 2>&1"'
 
 # Every value is XML-escaped: the arguments carry & and ", and a path may too.

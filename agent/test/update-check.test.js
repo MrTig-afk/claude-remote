@@ -20,7 +20,7 @@ import {
   SETTING_UP, NEEDS_TAILSCALE, NOT_WINDOWS, NEEDS_NODE, UPDATED, setupFailed, updateFailed,
   takeLock, releaseLock, removeLockIfStill, LONGEST_JOB_MS, INSTALL_TIMEOUT_MS, taskVerdict, realTaskQuery,
   realStartJob, realTailscale, phoneAddress, phoneReady, terminalQr, qrBlocks, TASK_NAME,
-  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING,
+  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING, sacOn, launcherStale,
 } from '../../hooks/check-update.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../hooks/check-update.mjs', import.meta.url));
@@ -703,4 +703,72 @@ test('--now names every outcome, and never takes the phone code', async () => {
   assert.equal(await ex(nonWin, { platform: 'linux' }), NOT_WINDOWS);
   assert.equal(await ex(nonWin, { platform: 'linux' }), NOT_WINDOWS, 'every time, not just once');
   assert.equal(await ex(world(), { localAppData: '' }), setupFailed('this PC has no LOCALAPPDATA folder'));
+});
+
+// ------------------------------------------------ Smart App Control (2026-09-27)
+
+// `reg query` output on this PC, 2026-09-27, verbatim.
+const REG = (v) => `\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy\r\n    VerifiedAndReputablePolicyState    REG_DWORD    ${v}\r\n\r\n`;
+const conhostXml = (serverPath) => taskXml(serverPath)
+  .replace(/<Command>[^<]*<\/Command>/, '<Command>C:\\WINDOWS\\System32\\conhost.exe</Command>')
+  .replace('<Arguments>', '<Arguments>--headless ');
+
+test('sacOn: On (1) only - evaluation (2), off (0), 0x10 and no answer are not On', () => {
+  assert.equal(sacOn(REG('0x1')), true);
+  for (const v of ['0x0', '0x2', '0x10']) assert.equal(sacOn(REG(v)), false, v);
+  assert.equal(sacOn(null), false);
+});
+
+test('launcherStale: our task still on the self-built launcher; conhost or someone else\'s task is not', () => {
+  const target = 'C:\\Users\\u\\AppData\\Local\\claude-remote';
+  const ours = path.join(target, 'agent', 'server.js');
+  assert.equal(launcherStale({ ok: true, stdout: taskXml(ours) }, target), true);
+  assert.equal(launcherStale({ ok: true, stdout: conhostXml(ours) }, target), false);
+  assert.equal(launcherStale({ ok: true, stdout: taskXml('F:\\elsewhere\\agent\\server.js') }, target), false);
+  assert.equal(launcherStale(NO_TASK, target), false);
+});
+
+// RED WHEN the up-to-date branch stops asking about Smart App Control: a PC
+// that turned it On after the install keeps a launcher Windows can block at
+// any restart (this PC, 18 Sep On, blocked 27 Sep).
+test('up to date, Smart App Control On, task still on the self-built launcher: the same version is installed again', async () => {
+  const w = world({ installed: 'server v1' });
+  assert.equal(await sessionStart({ ...w.deps, sacStatus: async () => REG('0x1') }), null);
+  assert.equal(w.jobs.length, 1);
+  assert.equal(w.jobs[0].kind, 'update');
+});
+
+test('up to date and nothing to fix: no job (Smart App Control off, evaluation, unknown, or already on conhost)', async () => {
+  for (const [sac, xml] of [[REG('0x0'), taskXml], [REG('0x2'), taskXml], [null, taskXml], [REG('0x1'), conhostXml]]) {
+    const w = world({ installed: 'server v1' });
+    // eslint-disable-next-line no-await-in-loop
+    await sessionStart({ ...w.deps, sacStatus: async () => sac, taskQuery: async () => ({ ok: true, stdout: xml(w.ours) }) });
+    assert.deepEqual(w.jobs, [], String(sac));
+  }
+});
+
+test('a failed re-registration is not retried at every start', async () => {
+  const w = world({ installed: 'server v1' });
+  writeState(w, { last: { kind: 'update', ok: false, hash: installedHash(w.deps.pluginRoot), reported: true, reason: 'x' } });
+  await sessionStart({ ...w.deps, sacStatus: async () => REG('0x1') });
+  assert.deepEqual(w.jobs, []);
+});
+
+// RED WHEN (SL-C1-01) Smart App Control and the task are asked one after the
+// other again, or phoneLine asks for the task a second time: each has a 2s
+// timeout, and in series with the phone address this reached the hook's 10s.
+test('up to date: Smart App Control and the task are asked together, and the task only once', async () => {
+  const w = world({ installed: 'server v1' });
+  let taskCalls = 0;
+  let taskAskedBeforeSacAnswered = false;
+  let sacAnswered = false;
+  await sessionStart({
+    ...w.deps,
+    sacStatus: async () => { await new Promise((r) => { setImmediate(r); }); sacAnswered = true; return REG('0x2'); },
+    taskQuery: async () => { taskCalls += 1; if (!sacAnswered) taskAskedBeforeSacAnswered = true; return { ok: true, stdout: taskXml(w.ours) }; },
+    phoneAddress: async () => URL_OK,
+  });
+  assert.equal(taskAskedBeforeSacAnswered, true, 'asked in series');
+  assert.equal(taskCalls, 1, 'phoneLine asked for the task again');
+  assert.equal(readState(w).phoneShown, true, 'positive control: the phone line still ran on the shared answer');
 });

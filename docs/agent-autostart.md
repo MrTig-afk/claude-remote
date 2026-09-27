@@ -309,6 +309,16 @@ does not touch `tailscale serve` — that is a separate command
   nothing built - but the flag is undocumented, it loses the child's exit
   code, and it is a catalogued attacker technique that EDR tools alert on.
   Acceptable for one person's own PC; not for software other people install.
+  **Back, but only where Smart App Control is On (2026-09-27).** Windows runs
+  an unsigned program there only while Microsoft's cloud rates it safe, and
+  it re-rates: hidelaunch ran for nine days on this PC under Smart App Control
+  and was then blocked by hash (an exact copy blocked too, a fresh build ran).
+  `register-task.ps1` reads `VerifiedAndReputablePolicyState` (1 = On) and
+  uses conhost there; the plugin's start-up hook re-registers an install made
+  before Smart App Control went On. Smart App Control is off on
+  enterprise-managed PCs, where the EDR rules run, and the lost exit code does
+  not matter to crash recovery (the every-minute trigger). Paid code signing
+  was ruled out by the owner.
 - **A third-party hidden-launcher binary (RunHidden and similar).** Would
   work, but it puts someone else's unsigned executable in the install path of
   a tool whose whole pitch is that nothing leaves your machine. Building ~100
