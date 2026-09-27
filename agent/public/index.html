@@ -53,6 +53,7 @@
     <symbol id="i-ext" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
     <symbol id="i-dl" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></symbol>
@@ -195,9 +196,18 @@
         <div class="list" id="projects"></div>
       </section>
 
-      <button class="newproj" id="newproj" type="button" aria-label="New project">
-        <span class="newproj-box">+</span>
+      <!-- Lane 22: the + opens a menu. The GLYPH turns into an x, not its box,
+           so it has a span of its own. The scrim is the tap-anywhere-to-close
+           target and covers the header too; the blur and dim are on the list
+           behind it (app.css). -->
+      <button class="newproj" id="newproj" type="button" aria-label="Add" aria-haspopup="menu" aria-expanded="false" aria-controls="plusmenu">
+        <span class="newproj-box"><span class="newproj-g" aria-hidden="true">+</span></span>
       </button>
+      <div class="plus-scrim" id="plus-scrim"></div>
+      <div class="plusmenu" id="plusmenu" role="menu" aria-label="Add">
+        <button class="plusmenu-item" id="plus-share" type="button" role="menuitem"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-folder"/></svg>Share folder</button>
+        <button class="plusmenu-item" id="plus-new" type="button" role="menuitem"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-plus"/></svg>New project</button>
+      </div>
 
       <div id="pane-bottom">
       <div class="spacer"></div>

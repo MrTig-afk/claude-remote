@@ -730,6 +730,33 @@ test('the + button is anchored to the bottom corner and the page reserves the ba
   );
 });
 
+// Lane 22 steps 1-2, the parts a static read can prove: the label, the two
+// choices in their drawn order with the Artifact's icons, same width, 44px.
+test('Lane 22: the + is "Add" with aria-expanded, and its menu is Share folder over New project, equal width, 44px', () => {
+  const html = read('index.html');
+  const btn = html.match(/<button class="newproj"[^>]*>/);
+  assert.ok(btn);
+  assert.match(btn[0], /aria-label="Add"/);
+  assert.match(btn[0], /aria-expanded="false"/);
+  assert.match(html, /<span class="newproj-g"[^>]*>\+<\/span>/, 'the GLYPH rotates, so it needs its own element');
+  const menu = html.slice(html.indexOf('id="plusmenu"'), html.indexOf('</div>', html.indexOf('id="plusmenu"')));
+  const share = menu.indexOf('Share folder');
+  const neu = menu.indexOf('New project');
+  assert.ok(share !== -1 && neu > share, 'top Share folder, bottom (nearest the thumb) New project');
+  assert.match(menu.slice(0, share), /#i-folder/);
+  assert.match(menu.slice(share, neu), /#i-plus/);
+  assert.match(html, /<symbol id="i-plus"/);
+
+  const css = read('app.css');
+  const rule = css.match(/\n\.plusmenu \{([^}]*)\}/);
+  assert.ok(rule);
+  assert.match(rule[1], /align-items: stretch;/, 'both choices take the width of the longer one');
+  const item = css.match(/\n\.plusmenu-item \{([^}]*)\}/);
+  assert.match(item[1], /height: 44px;/);
+  assert.match(css, /\.newproj\[aria-expanded="true"\] \.newproj-g \{ transform: rotate\(45deg\); \}/);
+  assert.match(css, /filter: blur\(4px\);/);
+});
+
 // Executed, not grepped: the literal is lifted out of rowState and evaluated,
 // so a status quietly put back fails here rather than passing on a string
 // match. It cannot prove what a browser paints - it proves the two halves
@@ -1880,6 +1907,8 @@ function makeRenderProjectsIntegration(stubs) {
     // the serveMissing branch (dormant for every pre-existing test here);
     // closeActiveReauth runs unconditionally at the top of every call.
     'buildServeMissingState', 'closeActiveReauth',
+    // Lane 22: renderProjects asks what the + offers and hands it to renderBackBar.
+    'plusMenuItems',
     src + '; return renderProjects;',
   )(
     stubs.document, stubs.state, stubs.buildTile, stubs.buildRow, stubs.renderBackBar,
@@ -1898,6 +1927,7 @@ function makeRenderProjectsIntegration(stubs) {
     stubs.projectSections || folders.projectSections,
     stubs.buildServeMissingState || (() => makeStubEl()),
     stubs.closeActiveReauth || (() => {}),
+    stubs.plusMenuItems || folders.plusMenuItems,
   );
 }
 
@@ -2048,7 +2078,7 @@ test('inside a folder the footer counts the rows on screen; at the top level it 
   assert.equal(topLevel.footerEl.textContent, '1 ACTIVE · 5 TOTAL', 'the top-level total is the whole-list count, not the rows passed in');
 });
 
-function makeRenderBackBar() {
+function makeRenderBackBar(newProjectAt = null) {
   const js = read('app.js');
   const src = js.slice(js.indexOf('function renderBackBar('), js.indexOf('function render()'));
   const els = {};
@@ -2064,25 +2094,56 @@ function makeRenderBackBar() {
     },
   };
   const closeCalls = [];
-  const renderBackBar = new Function('document', 'closeNewProjectPanel', src + '; return renderBackBar;')(
-    document, () => closeCalls.push(1),
+  const syncs = [];
+  const renderBackBar = new Function('document', 'closeNewProjectPanel', 'syncPlusMenu', 'newProjectAt', src + '; return renderBackBar;')(
+    document, () => closeCalls.push(1), (plus) => syncs.push(plus), newProjectAt,
   );
-  return { renderBackBar, els, closeCalls };
+  return { renderBackBar, els, closeCalls, syncs };
 }
 
-test('renderBackBar reveals the bar and puts the + away, and vice versa', () => {
+// Lane 22 (was: the + hid inside a folder). It now shows there too, and hides
+// only when plusMenuItems has nothing to offer.
+test('renderBackBar reveals the bar and keeps the + inside a folder; the + hides only with nothing to offer', () => {
   const open = makeRenderBackBar();
-  open.renderBackBar({ name: 'Pull Requests', path: 'F:/p/Pull Requests' });
+  open.renderBackBar({ name: 'Pull Requests', path: 'F:/p/Pull Requests' }, ['share', 'new']);
   assert.equal(open.els.backbar.hidden, false);
-  assert.equal(open.els.newproj.hidden, true);
+  assert.equal(open.els.newproj.hidden, false, 'Lane 22 step 6: the + shows inside a folder of projects');
   assert.equal(open.els['backbar-name'].textContent, 'Pull Requests');
   assert.equal(open.els['backbar-path'].textContent, 'F:/p/Pull Requests');
   assert.ok(open.els.backbar.attrs['aria-label'], 'an aria-label must be set');
+  assert.deepEqual(open.syncs, [['share', 'new']], 'every render hands the choices to syncPlusMenu');
 
   const closed = makeRenderBackBar();
-  closed.renderBackBar(null);
+  closed.renderBackBar(null, ['share']);
   assert.equal(closed.els.backbar.hidden, true);
-  assert.equal(closed.els.newproj.hidden, false);
+  assert.equal(closed.els.newproj.hidden, false, 'Lane 22 step 5: Share folder alone still shows the +');
+
+  const unknown = makeRenderBackBar();
+  unknown.renderBackBar(null, []);
+  assert.equal(unknown.els.newproj.hidden, true, 'shared set unknown: nothing to offer, no +');
+  assert.deepEqual(unknown.syncs, [[]], 'including an empty list, which closes a menu open over it');
+});
+
+// RED WHEN: the name panel survives a level change - its target line and the
+// root it sends would name the folder the owner has just left.
+test('renderBackBar closes the name panel only when the level it was opened on changes', () => {
+  const top = { folder: null, root: null, dir: 'F:\\p' };
+  const stay = makeRenderBackBar(top);
+  stay.renderBackBar(null, ['share', 'new']);
+  assert.equal(stay.closeCalls.length, 0, 'same level: the panel stays open');
+
+  const drill = makeRenderBackBar(top);
+  drill.renderBackBar({ name: 'Uni', path: 'F:\\p\\Uni' }, ['share', 'new']);
+  assert.equal(drill.closeCalls.length, 1, 'opened at the top, now inside Uni: closed');
+
+  const inside = { folder: 'Uni', root: 'F:\\p\\Uni', dir: 'F:\\p\\Uni' };
+  const back = makeRenderBackBar(inside);
+  back.renderBackBar(null, ['share', 'new']);
+  assert.equal(back.closeCalls.length, 1, 'opened inside Uni, now at the top: closed');
+
+  const same = makeRenderBackBar(inside);
+  same.renderBackBar({ name: 'Uni', path: 'F:\\p\\Uni' }, ['share', 'new']);
+  assert.equal(same.closeCalls.length, 0, 'a re-render inside the same folder keeps it');
 });
 
 test('the bar can never appear on the passcode screen', () => {
@@ -2416,13 +2477,15 @@ test('D5 - reachable:\'waiting\' with shared:[]: the waiting .msg renders and NO
   assert.match(body, /waking up/, 'and the likeliest cause still leads');
 });
 
-test('D6 - renderBackBar receives canCreate=false for nothing-shared and true for empty-day-one', () => {
+// Lane 22 changed this: nothing-shared used to hide the + (canCreate=false).
+// It now offers Share folder alone, and only an unknown set hides it.
+test('D6 - renderBackBar gets Share folder alone for nothing-shared, both for empty-day-one, nothing when unknown', () => {
   function canCreateFor(sharedVal) {
     const state = baseEmptyListState({ shared: sharedVal });
     const els = makeProjectsEls();
     const document = makeProjectsDocument(els);
     let seen;
-    const renderBackBar = (open, canCreate) => { seen = canCreate; };
+    const renderBackBar = (open, plus) => { seen = plus; };
     const renderProjects = makeRenderProjectsIntegration({
       document,
       state,
@@ -2436,10 +2499,11 @@ test('D6 - renderBackBar receives canCreate=false for nothing-shared and true fo
     return seen;
   }
 
-  assert.equal(canCreateFor([]), false, "'nothing-shared' - + can only fail with no usable root");
-  assert.equal(canCreateFor([{
+  assert.deepEqual(canCreateFor([]), ['share'], "'nothing-shared' - Share folder is the way out; New project could only fail");
+  assert.deepEqual(canCreateFor([{
     path: 'F:\\Dev\\Projects\\Workspace', mode: 'container', excludes: [], new_folders: 'show', missing: false,
-  }]), true, "'empty-day-one' - a live root exists to create into");
+  }]), ['share', 'new'], "'empty-day-one' - a live root exists to create into");
+  assert.deepEqual(canCreateFor(null), [], "'unknown-shared' - the picker would open blind, so no +");
 });
 
 test('the eyebrow is the dimmest token, clamps to one line, and clears the corner STOP chip', () => {

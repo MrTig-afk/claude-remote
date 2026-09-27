@@ -79,6 +79,11 @@ export function isInsideOrEqual(candidate, ancestor) {
   return c === a || c.startsWith(a + path.sep);
 }
 
+/** The same folder, by the same case-folded key isInsideOrEqual compares. */
+export function samePath(a, b) {
+  return pathKey(a) === pathKey(b);
+}
+
 function isPlainExcludeName(name) {
   if (typeof name !== 'string') return false;
   if (name.trim() === '') return false;

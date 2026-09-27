@@ -156,8 +156,9 @@ export function dismissEnded(sessionName) {
   return post('/api/sessions/dismiss', { session_name: sessionName });
 }
 
-export function createProject(name) {
-  return post('/api/projects', { name });
+// `root` only inside a folder of projects (R20); absent, the agent picks.
+export function createProject(name, root) {
+  return post('/api/projects', root == null ? { name } : { name, root });
 }
 
 export function getAuthStatus() {

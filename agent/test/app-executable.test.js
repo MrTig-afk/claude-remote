@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // The REAL withoutRoot, never a stub. removeRoot's refusal is a contract
 // BETWEEN the two functions - "withoutRoot answers null, so removeRoot must not
 // write" - and a stub would let the pair drift apart with both sides green.
-import { withoutRoot } from '../public/folders-ui.js';
+import { withoutRoot, plusMenuItems } from '../public/folders-ui.js';
 
 // THE FIRST TESTS THAT RUN app.js's ACTUAL LOGIC (T104 step 3).
 //
@@ -465,4 +465,217 @@ test('openSettingsSub: an unknown key is refused before anything else happens', 
   s.openSettingsSub('not-a-sub');
   assert.deepEqual(s.settingsSubs, []);
   assert.deepEqual(s.calls, []);
+});
+
+// ------------------------------------------------------------ Lane 22's menu
+
+function loadPlusMenu({ shared = [{ path: 'F:/p', mode: 'container' }], openFolder = null, confirmOpen = false } = {}) {
+  const calls = [];
+  const attrs = { 'aria-expanded': 'false' };
+  const plus = {
+    getAttribute: (k) => attrs[k],
+    setAttribute: (k, v) => { attrs[k] = v; },
+    focus() { calls.push('focus:+'); document.activeElement = plus; },
+  };
+  const item = (name) => ({ hidden: false, focus() { calls.push(`focus:${name}`); document.activeElement = this; } });
+  const share = item('share');
+  const neu = item('new');
+  const behind = [{ inert: false }, { inert: false }];
+  const byId = { newproj: plus, 'plus-share': share, 'plus-new': neu, picker: { classList: { toggle: (c, on) => calls.push(`${c}:${on}`) } } };
+  const document = {
+    activeElement: null,
+    getElementById: (id) => byId[id],
+    querySelectorAll: (sel) => (sel === '.plusmenu-item' ? [share, neu] : behind),
+  };
+  const listeners = new Set();
+  const window = { addEventListener: (t, f) => listeners.add(f), removeEventListener: (t, f) => listeners.delete(f) };
+  const history = {
+    state: null, pushes: [], backs: 0,
+    pushState(s) { this.pushes.push(s); this.state = s; },
+    back() { this.backs += 1; },
+  };
+  const mod = new Function(
+    'document', 'window', 'history', 'state', 'plusMenuItems', 'cancelOpenConfirm',
+    'openNewProjectPanel', 'onChooseFolders',
+    `${slice("const PLUS_BEHIND = '", '// The folder picker (T97)')}
+     return { openPlusMenu, closePlusMenu, closePlusMenuHard, onPlusTap, onPlusMenuClick, onPlusKey, plusMenuOpen, syncPlusMenu };`,
+  )(
+    document, window, history, { shared, openFolder }, plusMenuItems,
+    () => { if (confirmOpen) calls.push('cancelConfirm'); return confirmOpen; },
+    () => calls.push('openNewProjectPanel'),
+    () => calls.push('onChooseFolders'),
+  );
+  // What the browser does when a pushed entry comes off: the state of the
+  // entry it LANDS on, then every popstate listener.
+  const pop = (landing = null) => { history.state = landing; for (const f of [...listeners]) f(); };
+  const clickOn = (id) => mod.onPlusMenuClick({ target: { closest: (sel) => (sel === id ? {} : null) } });
+  return { ...mod, calls, history, pop, clickOn, listeners, share, neu, behind, document, attrs };
+}
+
+test('Lane 22: + opens the menu with one history entry, the list behind inert, focus on the first choice', () => {
+  const m = loadPlusMenu();
+  m.onPlusTap();
+  assert.equal(m.attrs['aria-expanded'], 'true');
+  assert.deepEqual(m.history.pushes, [{ plusMenu: true }], 'exactly one entry, so Back closes it');
+  assert.ok(m.behind.every((el) => el.inert), 'nothing behind the scrim is reachable by keyboard');
+  assert.equal(m.neu.hidden, false);
+  assert.ok(m.calls.includes('focus:share'));
+
+  const single = loadPlusMenu({ shared: [{ path: 'D:/u', mode: 'single' }] });
+  single.onPlusTap();
+  assert.equal(single.neu.hidden, true, 'step 5: New project left out, Share folder only');
+
+  const inFolder = loadPlusMenu({ shared: [{ path: 'D:/u', mode: 'single' }], openFolder: 'Uni' });
+  inFolder.onPlusTap();
+  assert.equal(inFolder.neu.hidden, false, 'step 6: inside a folder of projects New project shows');
+  assert.equal(inFolder.share.hidden, true, 'sequence 18: and Share folder does not - it is all shared already');
+  assert.ok(inFolder.calls.includes('focus:new'), 'focus lands on the one choice that is there');
+});
+
+test('Lane 22: Share folder waits for the menu pop before opening the picker; New project opens at once', () => {
+  // RED WHEN: onChooseFolders runs before the pop lands. showFolders registers
+  // the picker's own popstate listener, which would then receive the MENU's
+  // pop and reload the drive list a second time.
+  const s = loadPlusMenu();
+  s.onPlusTap();
+  s.clickOn('#plus-share');
+  assert.equal(s.attrs['aria-expanded'], 'false', 'closed synchronously');
+  assert.equal(s.history.backs, 1);
+  assert.ok(!s.calls.includes('onChooseFolders'), 'not before the pop');
+  s.pop(null);
+  assert.equal(s.calls.filter((c) => c === 'onChooseFolders').length, 1);
+  assert.equal(s.listeners.size, 0, 'the menu listener is gone once its entry is');
+
+  // The phone raises its keyboard only for a focus INSIDE the tap.
+  const n = loadPlusMenu();
+  n.onPlusTap();
+  n.clickOn('#plus-new');
+  assert.ok(n.calls.includes('openNewProjectPanel'), 'before the pop');
+  assert.equal(n.history.backs, 1);
+  n.pop(null);
+  assert.equal(n.calls.filter((c) => c === 'openNewProjectPanel').length, 1, 'and only once');
+});
+
+test('Lane 22: Back closes the menu without a second traversal; a pop ABOVE it leaves it open', () => {
+  const b = loadPlusMenu();
+  b.onPlusTap();
+  b.pop({ plusMenu: true });   // the sheet's entry, pushed over the menu's, came off
+  assert.equal(b.plusMenuOpen(), true, 'the menu entry is still there, so the menu stays');
+  b.pop(null);                 // now the menu's own
+  assert.equal(b.plusMenuOpen(), false);
+  assert.equal(b.history.backs, 0, 'Back already moved history - closing must not move it again');
+  assert.ok(b.behind.every((el) => !el.inert));
+});
+
+test('Lane 22: a double close issues one back(), and + during the pending pop does not push under it', () => {
+  const d = loadPlusMenu();
+  d.onPlusTap();
+  d.closePlusMenu();
+  d.closePlusMenu();
+  assert.equal(d.history.backs, 1);
+  d.onPlusTap();   // the pop has not landed yet
+  assert.equal(d.history.pushes.length, 1, 'a push now would be taken by the pending traversal');
+  d.pop(null);
+  d.onPlusTap();
+  assert.equal(d.history.pushes.length, 2, 'once it lands the + works again');
+});
+
+test('Lane 22: an open STOP confirm swallows the tap, as openSettings does', () => {
+  const c = loadPlusMenu({ confirmOpen: true });
+  c.onPlusTap();
+  assert.deepEqual(c.calls, ['cancelConfirm']);
+  assert.equal(c.history.pushes.length, 0);
+});
+
+test('Lane 22: arrow keys move between the choices, Esc closes and puts focus back on the +', () => {
+  const k = loadPlusMenu();
+  const key = (name) => k.onPlusKey({ key: name, preventDefault() {} });
+  k.onPlusTap();
+  assert.equal(k.document.activeElement, k.share);
+  key('ArrowDown');
+  assert.equal(k.document.activeElement, k.neu);
+  key('ArrowDown');
+  assert.equal(k.document.activeElement, k.share, 'wraps');
+  key('ArrowUp');
+  assert.equal(k.document.activeElement, k.neu);
+  key('Escape');
+  assert.equal(k.plusMenuOpen(), false);
+  assert.equal(k.history.backs, 1);
+  assert.equal(k.calls.at(-1), 'focus:+');
+  const before = k.calls.length;
+  key('Escape');
+  assert.equal(k.calls.length, before, 'with the menu shut the keys are left alone');
+});
+
+test('Lane 22: the re-lock puts the menu away with no traversal and drops a pending choice', () => {
+  const h = loadPlusMenu();
+  h.onPlusTap();
+  h.clickOn('#plus-share');
+  h.closePlusMenuHard();
+  h.pop(null);
+  assert.ok(!h.calls.includes('onChooseFolders'), 'no picker over the passcode screen');
+  assert.equal(h.listeners.size, 0);
+});
+
+// ---------------------------------------------------------- onCreateProject
+
+function loadOnCreateProject({ loadSetsBanner = false } = {}) {
+  const calls = [];
+  const els = {
+    'newproj-error': { hidden: true, textContent: '' },
+    'newproj-create': { disabled: false },
+    banner: { hidden: true },
+  };
+  const fn = new Function(
+    'document', 'currentNameTrimmed', 'clientValidateName', 'newProjectErrorCopy',
+    'createProject', 'closeNewProjectPanel', 'setBanner', 'load', 'updateNewProjectTarget', 'calls',
+    `let newProjectAt = null;
+     ${slice('async function onCreateProject()', 'const PLUS_BEHIND')}
+     return { onCreateProject };`,
+  );
+  const mod = fn(
+    { getElementById: (id) => els[id] },
+    () => 'v2', () => null, (c) => c,
+    async () => ({ ok: true, data: { project: { name: 'v2' } } }),
+    () => calls.push('close'),
+    (tone) => { els.banner.hidden = false; calls.push(`banner:${tone}`); },
+    async () => {
+      els.banner.hidden = true;          // load() starts with hideBanner()
+      calls.push('load');
+      if (loadSetsBanner) { els.banner.hidden = false; calls.push('banner:error'); }
+    },
+    () => {}, calls,
+  );
+  return { ...mod, calls };
+}
+
+test('onCreateProject: the "created" banner goes up after load(), not before it where load() wipes it', async () => {
+  // RED WHEN: setBanner is called before `await load()` again - load() begins
+  // with hideBanner(), so the owner never saw "<name> created." (found on the
+  // Lane 22 browser pass, 2026-09-27).
+  const { onCreateProject, calls } = loadOnCreateProject();
+  await onCreateProject();
+  assert.deepEqual(calls, ['close', 'load', 'banner:info']);
+});
+
+test('onCreateProject: a banner load() raised itself (a failed refresh) is not overwritten', async () => {
+  const { onCreateProject, calls } = loadOnCreateProject({ loadSetsBanner: true });
+  await onCreateProject();
+  assert.deepEqual(calls, ['close', 'load', 'banner:error']);
+});
+
+// RED WHEN: syncPlusMenu only closes on an EMPTY list again (PM-C1-D2-C01) - a
+// load() that drops New project (the last folder of projects went missing)
+// would leave it on screen, where a tap can only answer base_unavailable.
+test('Lane 22: a render whose choices differ from the open menu closes it; the same choices keep it open', () => {
+  const m = loadPlusMenu();
+  m.onPlusTap();
+  m.syncPlusMenu(['share', 'new']);
+  assert.equal(m.plusMenuOpen(), true, 'same choices: stays open');
+  m.syncPlusMenu(['share']);
+  assert.equal(m.plusMenuOpen(), false, 'New project gone: the menu closes');
+  assert.equal(m.history.backs, 1, 'through the one guarded back()');
+  const n = loadPlusMenu();
+  n.syncPlusMenu([]);
+  assert.equal(n.history.backs, 0, 'closed menu, empty list: nothing to do');
 });

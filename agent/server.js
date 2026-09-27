@@ -15,7 +15,7 @@ import {
 import { listProjects, createProject, rootsFrom } from './projects.js';
 import { listDrives } from './drives.js';
 import { listFolders } from './folders.js';
-import { putSharedFolders, describeSharedRoots } from './shared.js';
+import { putSharedFolders, describeSharedRoots, samePath } from './shared.js';
 import { launchSession, endSession } from './sessions.js';
 import { listSessions, dropSession } from './registry.js';
 import { serveStatic } from './static.js';
@@ -464,19 +464,37 @@ export async function handleRequest(req, res, ctx) {
         sendJson(res, parsed.status, { error: parsed.error });
         return;
       }
-      // The client sends only { name } - picking a root is UI (T97) and out
-      // of scope here, so: the FIRST container root in the shared set. A
+      // No `root` -> the FIRST container root in the shared set, as before. A
       // `single` root has no children to create into. No container root ->
       // 400 base_unavailable BEFORE calling createProject (which itself maps
       // an mkdirSync ENOENT failure to a 500 of the same code - app.js maps
       // on the code, not the status, so no client change is needed for
       // either status).
-      const containerRoot = rootsFrom(ctx).find((r) => r.mode === 'container');
-      if (!containerRoot) {
+      // R20: `root` names the folder of projects the phone is looking at. It
+      // is a LOOKUP KEY against a closed server-side set, never a path to
+      // build from: a shared container root, or a folder of projects that
+      // listProjects itself reports under one (the drilled-in screen - it is
+      // never a root, usableRoots drops nested roots). Excluded, dot-prefixed
+      // and junctioned folders are not in that list, so they cannot be named.
+      // The matched SERVER path is what createProject gets, and it stays one
+      // level deep below it. Anything else -> the same base_unavailable.
+      const roots = rootsFrom(ctx);
+      const containers = roots.filter((r) => r.mode === 'container').map((r) => r.path);
+      let base = containers[0];
+      if (Object.hasOwn(parsed.value, 'root')) {
+        const want = parsed.value.root;
+        if (typeof want !== 'string') {
+          sendJson(res, 400, { error: 'invalid_request' });
+          return;
+        }
+        const nested = listProjects(roots).filter((p) => p.container).map((p) => p.path);
+        base = [...containers, ...nested].find((p) => samePath(p, want));
+      }
+      if (!base) {
         sendJson(res, 400, { error: 'base_unavailable' });
         return;
       }
-      const result = createProject(containerRoot.path, parsed.value.name);
+      const result = createProject(base, parsed.value.name);
       if (!result.ok) {
         sendJson(res, result.status, { error: result.error });
         return;

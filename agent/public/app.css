@@ -609,6 +609,87 @@ select {
   justify-content: center;
 }
 
+/* ---------------------------------------------------------------------------
+   Lane 22 - the + opens a menu. Open state is the + button's aria-expanded
+   plus .plus-open on #picker, both set by setPlusMenu() and nothing else.
+   Everything here is a TRANSITION, so taking the class off plays it in
+   reverse; prefers-reduced-motion is the global rule in MOTION below, which
+   makes every one of them instant.
+--------------------------------------------------------------------------- */
+.newproj-g { display: block; transition: transform 180ms ease-out; }
+.newproj[aria-expanded="true"] { z-index: 3; }
+.newproj[aria-expanded="true"] .newproj-box { border-color: var(--accent-2); }
+.newproj[aria-expanded="true"] .newproj-g { transform: rotate(45deg); }
+
+/* The list behind, blurred and dimmed. Named element by element rather than
+   #pane-top/#pane-bottom themselves: below 900px those are display: contents,
+   and filter and opacity do nothing on an element with no box. The header is
+   not on the list - the frames draw it sharp. */
+#picker :is(#backbar, #zone-list, #pane-top > *, #pane-bottom > *) {
+  transition: filter 180ms ease-out, opacity 180ms ease-out;
+}
+#picker.plus-open :is(#backbar, #zone-list, #pane-top > *, #pane-bottom > *) {
+  filter: blur(4px);
+  opacity: 0.35;
+}
+
+/* Clear, and over the header as well: its only job is to catch the tap that
+   closes the menu, so nothing behind it can be reached while it is open. */
+.plus-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  visibility: hidden;
+  transition: visibility 0s 220ms;
+}
+#picker.plus-open .plus-scrim { visibility: visible; transition-delay: 0s; }
+
+/* Stacked just above the + box and right-aligned to it: the same `right` as
+   .newproj (repeated, not shared - see .newproj), then 6px in, because the
+   32px box is centred in the 44px button. Bottom is the box's top edge (13px
+   inset + 6px + 32px) plus an 8px gap. align-items: stretch is what makes
+   both choices the width of the longer one. */
+.plusmenu {
+  position: fixed;
+  right: max(13px, calc(50% - 215px + 13px));
+  margin-right: 6px;
+  bottom: calc(59px + env(safe-area-inset-bottom));
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  visibility: hidden;
+  transition: visibility 0s 220ms;
+}
+#picker.plus-open .plusmenu { visibility: visible; transition-delay: 0s; }
+.plusmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  white-space: nowrap;
+  appearance: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 180ms ease-out, transform 180ms ease-out;
+}
+.plusmenu-item .ico { color: var(--accent); }
+/* 40ms apart, top first on the way in and last on the way out. */
+.plusmenu-item:first-child { transition-delay: 40ms; }
+#picker.plus-open .plusmenu-item { opacity: 1; transform: none; }
+#picker.plus-open .plusmenu-item:first-child { transition-delay: 0s; }
+#picker.plus-open .plusmenu-item + .plusmenu-item { transition-delay: 40ms; }
+
 .spacer { flex-grow: 1; }
 .actions { padding: 8px 12px 0; }
 .refresh {
@@ -1597,6 +1678,7 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   /* The + button is fixed to the viewport and was positioned against the
      430px column; at this width it belongs at the main column's right edge. */
   .newproj { right: max(13px, calc(50% - 520px + 13px)); }
+  .plusmenu { right: max(13px, calc(50% - 520px + 13px)); }   /* Lane 22: stays on the + */
 
   /* -------------------------------------------------------------------------
      Lane 21 (Artifact sequence 15, 2026-09-27) - the desk comes first. Until
