@@ -45,6 +45,18 @@ thing to do was buried under it.
 
 ---
 
+## 0. This must be a Windows PC. HALT if it is not.
+
+Your environment names the platform; Windows is `win32`. Anything else
+(`darwin`, `linux`) -> **STOP before running any command** and say:
+
+"Claude Remote runs on Windows PCs for now, so setup can't continue on this
+machine. Your phone can be anything - it's only the PC that has to be Windows.
+You can remove the plugin with `/plugin uninstall claude-remote@claude-remote`."
+
+Every later step calls PowerShell or a Windows-only tool, so continuing only
+trades this message for a confusing error.
+
 ## 1. Tailscale must be up. HALT if it is not.
 
 ```powershell

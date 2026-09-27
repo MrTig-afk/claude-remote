@@ -4,6 +4,8 @@
 
 # Claude Remote
 
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
+
 Start, watch, and stop a Claude Code session on your Windows PC from your phone,
 over Tailscale. Open the PWA, tap a project, and the session appears in the
 Claude Code app - the same session whether you drive it from the phone or sit
@@ -108,8 +110,13 @@ keeping.
 
 ## Requirements
 
-Windows, Tailscale installed and logged in, Node >= 24.2.0, and the Claude Code
-CLI on `PATH`.
+| | |
+|---|---|
+| **PC** (runs the agent) | Windows 10 or 11 (tested on 11) |
+| **Phone** (the remote) | Any iPhone, iPad or Android device, or another computer's browser |
+| **Software on the PC** | Tailscale installed and logged in, Node >= 24.2.0, the Claude Code CLI on `PATH` |
+
+macOS and Linux PCs are not supported yet - see the [FAQ](#faq).
 
 ## Install
 
@@ -339,6 +346,14 @@ session started from a phone gives you nothing to diagnose.
 
 ## FAQ
 
+**Does it run on macOS or Linux?**
+Not yet. The agent itself is plain Node, but the parts that start it at logon,
+open a Claude window and list your drives are built on Windows (a Scheduled
+Task, a small launcher compiled from source, PowerShell). A Mac port would swap
+those for `launchd` and Terminal. If you would use it, say so in an issue -
+that is what decides whether it gets built. Your phone can be anything; only the
+PC has to run Windows.
+
 **The app says "Waiting for the PC" or "Can’t reach your PC.", but Tailscale
 says Connected.**
 Fully quit the Tailscale app on the phone (swipe it away in the app switcher),
@@ -380,7 +395,7 @@ self-contained and does not need them.
 
 ## Known limitations
 
-- Windows only.
+- The PC must run Windows; macOS and Linux are not supported yet.
 - The PC has to be on, logged in (the agent starts at logon) and on Tailscale.
 - One six-digit passcode is the only authentication (see the threat model above).
 - No live terminal output, and no way to answer an interactive prompt from the
