@@ -138,29 +138,29 @@ changing anything.
 
 ### Then install
 
-Two ways, and you only need one.
+In Claude Code, at the PC, paste this **one line**, `!` included, and press
+Enter:
 
-**Let Claude do it.** In Claude Code, at the PC, say:
+```
+! claude plugin marketplace add MrTig-afk/claude-remote; claude plugin install claude-remote@claude-remote
+```
+
+Then **quit Claude Code and start it again.** A plugin cannot run anything
+while it is being installed, so the next start is the first moment it can.
+
+The `!` runs the line as your own command, so Claude's permission modes have
+no say in it. The same line works in a PowerShell window too, without the `!`.
+
+**Or let Claude do it.** In Claude Code, say:
 
 ```
 Install Claude Remote by following github.com/MrTig-afk/claude-remote/blob/main/AGENTS.md
 ```
 
 Claude tells you what it will install, runs the steps, and your browser opens
-on the passcode screen. Nothing to restart.
-
-**Or by hand.** In Claude Code, at the PC, run these **one at a time** (pasted
-together, Claude Code reads both as one marketplace name):
-
-1. ```
-   /plugin marketplace add MrTig-afk/claude-remote
-   ```
-2. ```
-   /plugin install claude-remote@claude-remote
-   ```
-
-Then **quit Claude Code and start it again.** A plugin cannot run anything
-while it is being installed, so the next start is the first moment it can.
+on the passcode screen, with nothing to restart. In auto mode (Claude Code's
+default since 2.1.283) Claude may refuse to install a plugin by itself; it then
+hands you the line above.
 
 **Installing the plugin is agreeing to what it installs.** Either way, it
 sets itself up in the background, with no window, and adds three things to
