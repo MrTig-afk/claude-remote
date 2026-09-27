@@ -14,7 +14,8 @@ function el() {
 }
 const els = {};
 for (const id of ['phone-ready', 'phone-failed', 'phone-cmd', 'phone-qr', 'phone-url', 'phone-copy', 'phone-done',
-  'phone-skip', 'phone-retry', 'agent-phone', 'agent-phone-qr', 'agent-phone-url', 'agent-phone-copy']) els[id] = el();
+  'phone-skip', 'phone-retry', 'agent-phone', 'agent-phone-qr', 'agent-phone-url', 'agent-phone-copy',
+  'phone-ios-qr', 'phone-android-qr', 'agent-phone-ios-qr', 'agent-phone-android-qr']) els[id] = el();
 globalThis.document = { getElementById: (id) => els[id] };
 globalThis.location = { port: '8790', protocol: 'http:' };
 
@@ -33,7 +34,8 @@ const settle = () => new Promise((r) => { setTimeout(r, 0); });
 // With mock timers on, setTimeout does not fire by itself; setImmediate still does.
 const drain = () => new Promise((r) => { setImmediate(() => setImmediate(r)); });
 
-const { phoneView, openPhoneScreen, phoneScreenPending, refreshAgentPhone, RECHECK_MS } = await import('../public/phone.js');
+const { phoneView, openPhoneScreen, phoneScreenPending, refreshAgentPhone, RECHECK_MS, STORES } = await import('../public/phone.js');
+const { qrSvg } = await import('../public/qr.js');
 
 test('phoneView: ready only for serve on AND a well-formed tailnet address; failed only for an ANSWER', () => {
   assert.equal(phoneView({ ok: true, data: { serve: 'on', url: URL_OK } }), 'ready');
@@ -184,11 +186,35 @@ test('Settings > Agent status: the Phone address row shows only once the phone c
   assert.match(els['agent-phone-qr'].innerHTML, /^<svg class="qr-svg"/);
 });
 
+test('"No Tailscale on your phone?": each address also gets the App Store and Google Play codes', async () => {
+  // Tailscale Inc.'s own listings (verified 2026-09-27), and nothing else.
+  assert.deepEqual(STORES, {
+    ios: ['https://apps.apple.com/app/tailscale/id1470499037', 'QR code of Tailscale on the App Store'],
+    android: ['https://play.google.com/store/apps/details?id=com.tailscale.ipn', 'QR code of Tailscale on Google Play'],
+  });
+  for (const id of ['phone-ios-qr', 'phone-android-qr', 'agent-phone-ios-qr', 'agent-phone-android-qr']) els[id].innerHTML = '';
+  answers.push({ url: URL_OK, serve: 'on' });
+  const p = openPhoneScreen(() => {});
+  await settle();
+  answers.push({ url: URL_OK, serve: 'on' });
+  await refreshAgentPhone();
+  for (const prefix of ['phone', 'agent-phone']) {
+    assert.equal(els[`${prefix}-ios-qr`].innerHTML, qrSvg(...STORES.ios), prefix);
+    assert.equal(els[`${prefix}-android-qr`].innerHTML, qrSvg(...STORES.android), prefix);
+    // A screen reader must not announce a store code as the address (TS-C1-01).
+    assert.match(els[`${prefix}-ios-qr`].innerHTML, /aria-label="QR code of Tailscale on the App Store"/);
+    assert.match(els[`${prefix}-android-qr`].innerHTML, /aria-label="QR code of Tailscale on Google Play"/);
+    assert.match(els[`${prefix}-qr`].innerHTML, /aria-label="QR code of the address"/);
+  }
+  els['phone-done'].onclick();
+  await p;
+});
+
 test('the words are the Artifact\'s, verbatim, in index.html', () => {
   for (const words of [
     '<div class="phone-sec">Last step</div>',
     '<div class="phone-title">Open it on your phone</div>',
-    'Your phone needs Tailscale too, signed in to the same account. Then scan this with its camera, or type the address.',
+    'Your phone needs the Tailscale app too, from tailscale.com/download, signed in to the same Tailscale account as this PC. Then scan this with its camera, or type the address.',
     '<b>iPhone or iPad</b>Open it in Safari, tap Share, then Add to Home Screen.',
     '<b>Android</b>Open it in Chrome, tap ⋮, then Add to Home screen.',
     'Enter your passcode, tap a project, and the session shows up in the Claude app&rsquo;s Code tab.',
@@ -200,4 +226,12 @@ test('the words are the Artifact\'s, verbatim, in index.html', () => {
     '<span class="row-name">Phone address</span>',
   ]) assert.ok(HTML.includes(words), words);
   assert.equal((HTML.match(/>COPY<\/button>/g) || []).length, 2, 'COPY on the screen and on the row');
+  // Sequence 24: the same closed button on the screen and on the row.
+  for (const words of [
+    '<span>No Tailscale on your phone?</span>',
+    '<b>iPhone or iPad</b>App Store</div>',
+    '<b>Android</b>Google Play</div>',
+    'Install it, sign in with the same Tailscale account as this PC, then scan the code above.',
+  ]) assert.equal(HTML.split(words).length - 1, 2, words);
+  assert.equal((HTML.match(/<details class="ts-more">/g) || []).length, 2, 'closed by default: no open attribute');
 });

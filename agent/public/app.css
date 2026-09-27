@@ -1854,12 +1854,42 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 .phone-row:not([hidden]) { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
 .phone-row .phone-qr { width: 160px; }
 
+/* Lane 23 step 3b (Artifact sequence 24): "No Tailscale on your phone?",
+   closed by default, a native <details> for the same reasons as
+   .accept-more. Here the chevron is the affordance, as the Artifact draws it,
+   so the UA marker goes. The Artifact's open border is not a token; --edge is
+   the nearest one. */
+.ts-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.ts-more > summary::-webkit-details-marker { display: none; }
+.ts-more > summary .chev { margin-left: auto; color: var(--muted); transition: transform 0.15s; }
+.ts-more[open] > summary { border-color: var(--edge); }
+.ts-more[open] > summary .chev { transform: rotate(90deg); }
+.ts-panel { margin-top: 6px; padding: 12px; background: var(--raised); border: 1px solid var(--edge); border-radius: 6px; }
+.ts-stores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; text-align: center; font-size: 11px; line-height: 1.5; color: var(--text-2); }
+.ts-stores b { display: block; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+.ts-qr { width: 110px; margin: 0 auto 6px; }
+.ts-note { margin: 10px 0 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+
 @media (min-width: 900px) {
   .phone { max-width: 640px; margin-block: auto; gap: 16px; }
   .phone-sec { font-size: 12px; }
   .phone-title { font-size: 20px; }
   .phone-lede, .phone-after, .phone-url { font-size: 15px; }
-  .phone-howto div, .phone .banner, .phone .cmd { font-size: 13px; }
+  .phone-howto div, .phone .banner, .phone .cmd, .phone .ts-more > summary, .phone .ts-stores, .phone .ts-note { font-size: 13px; }
   .phone-qr { width: 240px; }
+  .phone .ts-qr { width: 130px; }
   .phone .set-btn { min-height: 48px; font-size: 12px; }
 }

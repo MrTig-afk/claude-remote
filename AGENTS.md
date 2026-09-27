@@ -17,6 +17,13 @@ command starts the plugin's setup right away, instead of waiting for the next
 time Claude Code starts. It is the same setup the plugin runs by itself at
 startup, and it opens nothing but the person's browser.
 
+**Check Tailscale first.** Run `tailscale status` in PowerShell. If the
+command is not found, or it says Tailscale is stopped or logged out, stop here
+and tell the person, in plain words: Claude Remote reaches the PC through
+Tailscale, so they need it on this PC (tailscale.com/download, then sign in)
+AND the Tailscale app on their phone (App Store or Google Play), signed in to
+the same Tailscale account. Offer to carry on once both are done.
+
 **Tell the person first, in one line, what it installs.** Something like: "It
 adds a copy of its agent under %LOCALAPPDATA%\claude-remote, a logon task that
 starts it, and Tailscale sharing on port 8790 once you set a passcode."

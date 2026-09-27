@@ -291,7 +291,7 @@ test('each outcome is printed exactly once, at the next start', async () => {
 
 test('the lines are the Artifact\'s, word for word', () => {
   assert.equal(SETTING_UP, 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.');
-  assert.equal(NEEDS_TAILSCALE, 'Claude Remote needs Tailscale running on this PC before it can set itself up. Start Tailscale and sign in, then restart Claude.');
+  assert.equal(NEEDS_TAILSCALE, 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then restart Claude.');
   assert.equal(NOT_WINDOWS, 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.');
   assert.equal(NEEDS_NODE, 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then restart Claude.');
   assert.equal(setupFailed('R'), "Claude Remote couldn't set itself up: R. Run /claude-remote:setup to try again and see the details.");

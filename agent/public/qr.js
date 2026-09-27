@@ -300,13 +300,14 @@ export function qrMatrix(text) {
 /**
  * The symbol as SVG markup: a light square with a 4-module quiet zone and
  * one path of dark modules. Only numbers go into it, never `text`, so it is
- * safe for innerHTML. No xmlns: inline SVG in HTML needs none, and a
+ * safe for innerHTML - and `label` is always a constant written in this
+ * repo, never anything the agent or a user sent. No xmlns: inline SVG in HTML needs none, and a
  * namespace URL in a shipped asset would trip the no-egress test.
  */
-export function qrSvg(text) {
+export function qrSvg(text, label = 'QR code of the address') {
   const dark = qrMatrix(text);
   const n = dark.length + 8;
   let d = '';
   dark.forEach((row, y) => row.forEach((on, x) => { if (on) d += `M${x + 4} ${y + 4}h1v1h-1z`; }));
-  return `<svg class="qr-svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges" role="img" aria-label="QR code of the address"><rect class="qr-bg" width="${n}" height="${n}"/><path class="qr-fg" d="${d}"/></svg>`;
+  return `<svg class="qr-svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges" role="img" aria-label="${label}"><rect class="qr-bg" width="${n}" height="${n}"/><path class="qr-fg" d="${d}"/></svg>`;
 }
