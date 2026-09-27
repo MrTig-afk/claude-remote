@@ -5,7 +5,7 @@ import {
 // setPinRevealed lives in lock.js because the gate needs it before
 // wireEvents() has run - see the note on it there.
 import {
-  showGate, messageFor, setPinRevealed, showServeMissingNotice,
+  showGate, messageFor, setPinRevealed, showServeMissingNotice, setMsg, toneFor,
 } from './lock.js';
 import {
   TITLE, LEDE, CONSENT_LABEL, SETTINGS_NOTE, ACCEPT_BUTTON, SECTIONS_TOGGLE, renderSections,
@@ -2967,7 +2967,7 @@ function openReauth({
   line.textContent = reauthLine(kind, name);
   action.textContent = verb;
   action.disabled = true;
-  msg.textContent = '';
+  setMsg(msg, '');
   pin.disabled = false;
   pin.value = '';
   setPinRevealed('reauth-pin', false);
@@ -3028,12 +3028,12 @@ function openReauth({
     }
     if (outcome === 'wrong') {
       setPinRevealed('reauth-pin', false);
-      msg.textContent = REAUTH_WRONG;
+      setMsg(msg, REAUTH_WRONG, 'error');
       updateEnabled();
       return;
     }
     // 'locked' - same words as the lock screen's own lockout (Lane 12).
-    msg.textContent = messageFor('too_many_attempts', 429, res.data);
+    setMsg(msg, messageFor('too_many_attempts', 429, res.data), 'warn');
     pin.disabled = true;
     action.disabled = true;
     await sleep((res.data && res.data.retry_after_ms) || 0);
@@ -3041,7 +3041,7 @@ function openReauth({
     pin.disabled = false;
     pin.value = '';
     setPinRevealed('reauth-pin', false);
-    msg.textContent = '';
+    setMsg(msg, '');
     updateEnabled();
   }
 
@@ -3448,7 +3448,7 @@ function resetPasscodeForm() {
     document.getElementById(id).value = '';
     setPinRevealed(id, false);
   }
-  document.getElementById('pw-msg').textContent = '';
+  setMsg(document.getElementById('pw-msg'), '');
   updatePwEnabled();
 }
 
@@ -3475,7 +3475,7 @@ async function onChangePasscode(ev) {
   }
 
   resetPasscodeForm();
-  document.getElementById('pw-msg').textContent = messageFor(res.code, res.status, res.data);
+  setMsg(document.getElementById('pw-msg'), messageFor(res.code, res.status, res.data), toneFor(res.code));
 }
 
 // The ONE external URL this file knows. The no-egress test allows exactly

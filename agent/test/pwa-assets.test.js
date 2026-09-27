@@ -12,6 +12,7 @@ import * as copy from '../public/copy.js';
 import * as update from '../public/update-ui.js';
 import { handoffReady } from '../public/handoff-ui.js';
 import * as pushUi from '../public/push-ui.js';
+import { setMsg } from '../public/lock.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const AGENT_DIR = fileURLToPath(new URL('..', import.meta.url));
@@ -829,7 +830,10 @@ test('a list row folds its elapsed time into the status line, so the removed idl
 // appears nowhere else" - so those selectors are on the list below. It stays
 // an ALLOWLIST: a new red thing must be added here on purpose, and the two
 // base banner rules must stay neutral whatever else does.
-const DANGER_SELECTORS = /tile-stop|tile-confirm|shared-remove|set-danger|set-gone|set-btn-danger/;
+// Input errors joined it on 2026-09-27 (owner, "Make errors red"; Artifact
+// Lanes 11, 12 and 20): the New project error line and its panel edge, and a
+// message line whose tone lock.js setMsg marked 'error'. Nothing else.
+const DANGER_SELECTORS = /tile-stop|tile-confirm|shared-remove|set-danger|set-gone|set-btn-danger|newproj-error|gate-msg\[data-tone="error"\]/;
 
 test('the danger tokens appear only on controls that end something, never on a plain banner', () => {
   const css = read('app.css');
@@ -3028,7 +3032,7 @@ function loadDoor({
     'sharedToTicks', 'sharedRowState',
     'PICKER_SKIP', 'PICKER_CANCEL', 'showScreen',
     'SHELL_VERSION', 'agentStateLine', 'aboutRowState', 'notifyRowState',
-    'reauthLine', 'REAUTH_WRONG', 'reauthOutcome', 'setPinRevealed', 'messageFor', 'sleep', 'SAVE',
+    'reauthLine', 'REAUTH_WRONG', 'reauthOutcome', 'setPinRevealed', 'messageFor', 'setMsg', 'sleep', 'SAVE',
     'state', 'render', 'load',
     `${onChooseSrc}
 ${pickerSrc}
@@ -3048,7 +3052,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     // version, and the Agent status row's is the connection state.
     '0.1.0', (r) => (r === true ? 'reachable' : 'checking'), update.aboutRowState, pushUi.notifyRowState,
     folders.reauthLine, folders.REAUTH_WRONG, folders.reauthOutcome,
-    () => {}, () => '', () => Promise.resolve(), pushUi.SAVE,
+    () => {}, () => '', setMsg, () => Promise.resolve(), pushUi.SAVE,
     state, render, loadSpy,
   );
   door.document = doc;

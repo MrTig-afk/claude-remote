@@ -20,6 +20,17 @@ const MESSAGES = {
   timeout: () => '! Cannot reach the agent. Check the PC is awake and Tailscale is connected.',
 };
 
+/**
+ * A message line and its colour, set together so a colour never outlives its
+ * words: 'error' red, 'warn' amber, '' plain (owner 2026-09-27, "Make errors
+ * red"; Artifact Lanes 11, 12 and 20). The lockout is amber, as drawn.
+ */
+export function setMsg(el, text, tone = '') {
+  el.textContent = text;
+  el.dataset.tone = tone;
+}
+export const toneFor = (code) => (code === 'too_many_attempts' ? 'warn' : 'error');
+
 function formatWait(ms) {
   const seconds = Math.ceil(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
@@ -210,7 +221,7 @@ async function runGate() {
           await sleep(WAIT_GAPS_MS[Math.min(waitTries, WAIT_GAPS_MS.length - 1)]);
           if (!statusUnknown || document.visibilityState !== 'visible') return;
           waitTries += 1;
-          e.msg.textContent = `Waiting for the PC (${waitTries})...`;
+          setMsg(e.msg, `Waiting for the PC (${waitTries})...`);
           // Re-entrant by design: checkStatus() calls waitForAgent() again on
           // a failure, and `waiting` is still true, so that call is a no-op
           // and THIS loop keeps ownership of the retrying.
@@ -240,26 +251,26 @@ async function runGate() {
         e.go.textContent = 'RETRY';
         e.go.disabled = false;
         if (res.code === 'network' || res.code === 'timeout') {
-          if (waitTries === 0) e.msg.textContent = 'Waiting for the PC. This screen will unlock itself as soon as the agent answers.';
+          if (waitTries === 0) setMsg(e.msg, 'Waiting for the PC. This screen will unlock itself as soon as the agent answers.');
           waitForAgent();
           return;
         }
         // Not a silence - the agent refused. RETRY stays the only way on,
         // correctly: waiting cannot fix an answer.
         waitTries = 0;
-        e.msg.textContent = messageFor(res.code, res.status);
+        setMsg(e.msg, messageFor(res.code, res.status), toneFor(res.code));
         return;
       }
       statusUnknown = false;
       waitTries = 0;
-      e.msg.textContent = ''; // the probe worked; drop any stale "cannot reach" line
+      setMsg(e.msg, ''); // the probe worked; drop any stale "cannot reach" line
       hideServeMissingNotice(); // the PC answered - back to the ordinary unlock
       mode = res.data.configured ? 'lock' : 'setup';
       rateLimited = mode === 'lock' && res.data.retry_after_ms > 0;
       retext();
       updateGoEnabled();
       if (rateLimited) {
-        e.msg.textContent = `! Too many wrong tries. Try again in ${formatWait(res.data.retry_after_ms)}.`;
+        setMsg(e.msg, `! Too many wrong tries. Try again in ${formatWait(res.data.retry_after_ms)}.`, 'warn');
       }
     }
 
@@ -305,7 +316,7 @@ async function runGate() {
       // typo gets saved - so passcode_mismatch clears BOTH inputs too.
       clearInputs();
       e.pin.focus();
-      e.msg.textContent = messageFor(res.code, res.status, res.data);
+      setMsg(e.msg, messageFor(res.code, res.status, res.data), toneFor(res.code));
       updateGoEnabled();
     }
 

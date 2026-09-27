@@ -545,8 +545,11 @@ select {
 .newproj-error {
   margin-top: 8px;
   font-size: 11px;
-  color: var(--text);
+  color: var(--danger);
 }
+/* The panel's edge goes red with its error line, as Lane 11 steps 3 and 3b
+   draw it. --danger-2 is the border the app already gives red controls. */
+.newproj-panel:has(.newproj-error:not([hidden])) { border-color: var(--danger-2); }
 .newproj-actions { display: flex; gap: 8px; margin-top: 12px; }
 .newproj-actions button {
   flex: 1;
@@ -1174,6 +1177,10 @@ select {
   color: var(--text-2);
   min-height: 33px;   /* two lines reserved so the form never jumps */
 }
+/* Input errors red, the lockout amber (owner 2026-09-27, "Make errors red";
+   Artifact Lanes 12 and 20). lock.js setMsg sets the tone with the words. */
+.gate-msg[data-tone="error"] { color: var(--danger); }
+.gate-msg[data-tone="warn"] { color: var(--warn); }
 
 /* --- Accept screen (first run) --- */
 
