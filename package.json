@@ -1,0 +1,8 @@
+{
+  "name": "claude-remote",
+  "private": true,
+  "description": "Installs the Claude Remote plugin into Claude Code: npx.cmd -y github:MrTig-afk/claude-remote",
+  "bin": {
+    "claude-remote": "bin/install.mjs"
+  }
+}
