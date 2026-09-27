@@ -13,6 +13,7 @@ import { test } from 'node:test';
 
 import * as folders from '../public/folders-ui.js';
 import * as pushUi from '../public/push-ui.js';
+import { setMsg } from '../public/lock.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 function read(rel) {
@@ -205,7 +206,7 @@ function loadPanelLifecycle() {
 
   return new Function(
     'document', 'state',
-    'reauthLine', 'REAUTH_WRONG', 'reauthOutcome', 'setPinRevealed', 'messageFor', 'sleep',
+    'reauthLine', 'REAUTH_WRONG', 'reauthOutcome', 'setPinRevealed', 'messageFor', 'setMsg', 'sleep',
     'deviceRows', 'addedDate', 'renameHint', 'removePrompt', 'NO_NAME_SUB',
     'crumbSegments', 'REMOVE', 'SAVE', 'removeRoot', 'load', 'setErrorBanner',
     'share', 'shareEls', 'putShared', 'sharedBody', 'applySaveResult', 'finishFolders', 'renderShare',
@@ -236,6 +237,7 @@ function loadLib(doc, state, over = {}) {
     folders.reauthLine, folders.REAUTH_WRONG, folders.reauthOutcome,
     () => {}, // setPinRevealed - not under test here
     () => '', // messageFor
+    setMsg, // the real one: the tone is set with the words
     o.sleep,
     pushUi.deviceRows, pushUi.addedDate, pushUi.renameHint, pushUi.removePrompt, pushUi.NO_NAME_SUB,
     folders.crumbSegments, pushUi.REMOVE, pushUi.SAVE, o.removeRoot, async () => {}, () => {},

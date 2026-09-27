@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, test } from 'node:test';
 
 import { changePasscode, attemptUnlock, readAttempts, isConfigured, FREE_ATTEMPTS } from '../auth.js';
-import { setPinRevealed } from '../public/lock.js';
+import { setPinRevealed, setMsg, toneFor } from '../public/lock.js';
 import { makeAuthCtx, cleanupAuthCtx, seedPasscode, issueTestToken, makeAuthedFetch, fixtureServer } from './helper-auth.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
@@ -276,7 +276,7 @@ function pwDocument() {
     nodes.set(`${id}-eye`, eye);
   }
   nodes.set('pw-go', { disabled: true });
-  nodes.set('pw-msg', { textContent: '' });
+  nodes.set('pw-msg', { textContent: '', dataset: {} });
   return { eyes, getElementById: (id) => nodes.get(id) };
 }
 
@@ -294,7 +294,7 @@ function loadPasscodeScreen({ api, lockNow } = {}) {
   globalThis.document = doc;
   const calls = { locked: 0 };
   const fn = new Function(
-    'document', 'changePasscode', 'messageFor', 'lockNow', 'setPinRevealed',
+    'document', 'changePasscode', 'messageFor', 'lockNow', 'setPinRevealed', 'setMsg', 'toneFor',
     `${src}; return { PW_FIELDS, pwReady, updatePwEnabled, resetPasscodeForm, onChangePasscode };`,
   );
   const mod = fn(
@@ -303,6 +303,7 @@ function loadPasscodeScreen({ api, lockNow } = {}) {
     (code) => `! ${code}`,
     lockNow || (() => { calls.locked += 1; }),
     setPinRevealed,
+    setMsg, toneFor,
   );
   return { ...mod, setPinRevealed, doc, calls };
 }
@@ -387,6 +388,20 @@ test('U5 - a refusal clears all three fields and says why, in the lock screen\'s
     assert.equal(doc.getElementById(id).value, '', `${id} must be cleared`);
   }
   assert.equal(doc.getElementById('pw-msg').textContent, '! passcode_incorrect');
+  // RED WHEN the refusal is written without its tone: input errors are red
+  // (owner 2026-09-27, "Make errors red"; Artifact Lanes 12 and 20).
+  assert.equal(doc.getElementById('pw-msg').dataset.tone, 'error');
+});
+
+test('the lockout is amber, and clearing the line clears its colour too', async () => {
+  const api = async () => ({ ok: false, status: 429, code: 'too_many_attempts', data: { retry_after_ms: 60000 } });
+  const { onChangePasscode, resetPasscodeForm, doc } = loadPasscodeScreen({ api });
+  for (const id of ['pw-current', 'pw-new', 'pw-confirm']) doc.getElementById(id).value = '481902';
+  await onChangePasscode({ preventDefault() {} });
+  assert.equal(doc.getElementById('pw-msg').dataset.tone, 'warn');
+  resetPasscodeForm();
+  assert.equal(doc.getElementById('pw-msg').textContent, '');
+  assert.equal(doc.getElementById('pw-msg').dataset.tone, '', 'a colour must never outlive its words');
 });
 
 test('U6 - a double tap sends one change, not two', async () => {
