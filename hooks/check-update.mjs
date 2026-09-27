@@ -82,7 +82,7 @@ const ANSWER_WAIT_MS = 500;
 const ANSWER_TIMEOUT_MS = 2000;
 export const LONGEST_JOB_MS = INSTALL_TIMEOUT_MS + ANSWER_TRIES * (ANSWER_WAIT_MS + ANSWER_TIMEOUT_MS);
 export const LOCK_STALE_MS = LONGEST_JOB_MS + 5 * 60 * 1000;   // + node's start and the state write, generously
-const DEFAULT_PORT = 8790;
+export const DEFAULT_PORT = 8790;
 export const TASK_NAME = 'Claude Remote Agent';   // register-task.ps1's default -TaskName
 
 /** One hash over every file setup copies: agent/ minus agent/test, plus release-notes.json. */
