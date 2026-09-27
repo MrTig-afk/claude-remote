@@ -36,7 +36,7 @@ import {
   ENABLE_FAILED_SUB, ENABLE_FAILED_PC, ENABLE_FAILED_PHONE,
   SEND_A_TEST, SENDING, TURN_OFF, STOPPED_WARN, SAVE, REMOVE,
 } from './push-ui.js';
-import { openPhoneScreen, phoneScreenPending, refreshAgentPhone } from './phone.js';
+import { openPhoneScreen, phoneScreenPending, refreshAgentPhone, closePhoneScreen } from './phone.js';
 
 // The version baked into whatever copy of the shell the phone has cached.
 // Keep it a plain single-quoted literal: the version test reads it out of
@@ -2091,6 +2091,16 @@ function onPopState() {
     render();
     return;
   }
+  // The phone screen opened from Settings (sequence 29) sits on Settings'
+  // entry, so this pop is that entry's: leave both, and settle the screen's
+  // promise so a later unlock does not bring it back.
+  if (state.screen === 'phone' && settingsPushed) {
+    settingsPushed = false;
+    closePhoneScreen();
+    showScreen('list');
+    render();
+    return;
+  }
   confirmPushed = false;
   if (state.confirmName !== null) { state.confirmName = null; render(); }
   if (history.state && history.state.drill) return; // the folder's entry survived this pop
@@ -3279,6 +3289,14 @@ let settingsPushed = false;
 // documents: cancelOpenConfirm() must run FIRST, or Settings' entry could
 // land above a live confirm entry and break "the confirm's entry is always
 // the top one".
+/** Settings > Open it on your phone: step 3's screen again; DONE returns to Settings. */
+async function openPhoneAgain() {
+  await openPhoneScreen(() => showScreen('phone', 'deeper'));
+  if (state.screen !== 'phone') return;   // the back button already left
+  showScreen('settings', 'back');
+  renderSettings();
+}
+
 function openSettings() {
   if (cancelOpenConfirm()) return;
   showScreen('settings', 'deeper');
@@ -4654,6 +4672,11 @@ function settingsGroups(facts) {
     {
       heading: 'THIS APP',
       rows: [
+        // Lane 23 step 3c / Lane 6 (sequence 29): for desktop browsers only.
+        ...(deskBrowser() ? [{
+          id: 'phone', icon: 'i-ext', name: 'Open it on your phone',
+          state: 'the code to scan, and how to add it', enterable: true,
+        }] : []),
         // Three-way, not two: `null` and 'waiting' mean the app has not
         // finished asking. Reporting "not answering" there would accuse the
         // PC of being down during the second it takes to reply.
@@ -4699,6 +4722,16 @@ function renderSettings() {
     section.appendChild(list);
     listEl.appendChild(section);
   }
+}
+
+/**
+ * A desk browser (Chrome, Edge...): not the installed app and not a touch
+ * device, where "Open it on your phone" would point at itself (sequence 29,
+ * "for desktop browsers only").
+ */
+function deskBrowser() {
+  const mm = (q) => globalThis.matchMedia?.(q)?.matches === true;
+  return !mm('(display-mode: standalone)') && globalThis.navigator?.standalone !== true && mm('(pointer: fine)');
 }
 
 /**
@@ -4963,6 +4996,7 @@ function wireEvents() {
     // R5. Only reachable when a prompt was captured - the informational form
     // of this row is not enterable and carries no data-settings at all.
     if (id === 'install') { runInstall(); return; }
+    if (id === 'phone') { openPhoneAgain(); return; }
     if (SETTINGS_SUBS.has(id)) {
       openSettingsSub(id);
       // Fetched on open, not on boot: this is the only screen that reads it.

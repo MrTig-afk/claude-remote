@@ -498,7 +498,7 @@ test('S12b - every enterable settings row has somewhere to go', () => {
   // The one id that is an ACTION rather than a screen, handled in the click
   // delegate: it drops the token. 'shared' used to be one too - it jumped
   // straight into the picker - and is now Lane 3's own screen.
-  const actions = new Set(['lock']);
+  const actions = new Set(['lock', 'phone']);   // phone: Lane 23 step 3c, opens the phone screen
   for (const row of renderedRows(listEl)) {
     const id = row.dataset.settings;
     if (id === undefined) continue;
@@ -508,6 +508,31 @@ test('S12b - every enterable settings row has somewhere to go', () => {
     );
   }
 });
+// Sequence 29: "Open it on your phone", for desktop browsers only. RED WHEN the
+// row shows in the installed app or on a touch device, or vanishes from a desk
+// browser, or loses its handler.
+test('S12c - Open it on your phone: first in THIS APP in a desk browser only, and wired', () => {
+  const state = { shared: [{ path: 'F:\\A' }], reachable: true };
+  const saved = globalThis.matchMedia;
+  const media = (standalone, fine) => (q) => ({
+    matches: q === '(display-mode: standalone)' ? standalone : q === '(pointer: fine)' ? fine : false,
+  });
+  const idsFor = (mm) => {
+    globalThis.matchMedia = mm;
+    const { renderSettings, listEl } = loadRenderSettings(state, stubRow);
+    renderSettings();
+    return renderedRows(listEl).map((r) => r.dataset.settings);
+  };
+  try {
+    assert.deepEqual(idsFor(media(false, true)).slice(-4), ['phone', 'agent', 'reset', 'about'], 'desk browser: first in THIS APP');
+    assert.ok(!idsFor(media(true, true)).includes('phone'), 'installed app: no row');
+    assert.ok(!idsFor(media(false, false)).includes('phone'), 'touch device: no row');
+  } finally {
+    globalThis.matchMedia = saved;
+  }
+  assert.match(read('app.js'), /if \(id === 'phone'\) \{ openPhoneAgain\(\); return; \}/, 'the row must lead somewhere');
+});
+
 // --- S13 - the one door, order-checked ---------------------------------------
 
 function loadOpenPickerFromShared(onChooseFoldersSpy, { subPushed = true, settingsPushed = true, sharedSet = [] } = {}) {
