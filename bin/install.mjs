@@ -10,11 +10,24 @@
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { NOT_WINDOWS } from '../hooks/check-update.mjs';
+import {
+  NOT_WINDOWS, SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE, DEFAULT_PORT,
+} from '../hooks/check-update.mjs';
 
 export const ID = 'claude-remote@claude-remote';
 export const NO_CLAUDE = 'Claude Remote needs Claude Code first: install it from claude.com/claude-code, then paste this again.';
 export const NOT_INSTALLED = 'Claude Remote did not install - Claude Code said why above.';
+
+/**
+ * The line that ends a paste once the app is on this PC (owner 2026-09-28,
+ * "Only print the link"): on an update nothing opens, and Claude, asked
+ * afterwards, had no address to give. Not after a setup that stopped (no
+ * Tailscale, old Node...), where there is nothing to open yet.
+ */
+export function linkLine(hookLine, port = DEFAULT_PORT) {
+  const installed = [SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE].includes(hookLine);
+  return installed ? `Open http://127.0.0.1:${port} in your browser.` : null;
+}
 
 /**
  * Where `claude plugin list --json` says the plugin is installed, or null.
@@ -65,7 +78,13 @@ function main() {
   const root = pluginRoot(claude('plugin list --json', true).stdout);
   if (!root) { console.log(NOT_INSTALLED); return 1; }
   const hook = path.join(root, 'hooks', 'check-update.mjs');
-  return spawnSync(process.execPath, [hook, '--now'], { ...spawnOptions(false), shell: false }).status ?? 1;
+  const run = spawnSync(process.execPath, [hook, '--now'], { ...spawnOptions(true), shell: false });
+  const said = (run.stdout || '').trim();
+  if (said) console.log(said);
+  if (run.stderr) process.stderr.write(run.stderr);
+  const link = linkLine(said, Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT);
+  if (link) console.log(link);
+  return run.status ?? 1;
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) process.exitCode = main();

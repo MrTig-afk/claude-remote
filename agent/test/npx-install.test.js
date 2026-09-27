@@ -9,7 +9,23 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { pluginRoot, spawnOptions, ID } from '../../bin/install.mjs';
+import { pluginRoot, spawnOptions, linkLine, ID } from '../../bin/install.mjs';
+import {
+  SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE, NEEDS_TAILSCALE, NEEDS_NODE, NOT_WINDOWS, setupFailed,
+} from '../../hooks/check-update.mjs';
+
+// RED WHEN the paste stops ending with the address (owner 2026-09-28: on an
+// update nothing opened and Claude had no link to give), or prints it after a
+// setup that stopped, where there is nothing to open.
+test('linkLine: the address after every outcome that leaves the app on this PC, never after one that stopped', () => {
+  for (const ok of [SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE]) {
+    assert.equal(linkLine(ok), 'Open http://127.0.0.1:8790 in your browser.', ok);
+  }
+  assert.equal(linkLine(UPDATING, 8791), 'Open http://127.0.0.1:8791 in your browser.');
+  for (const stopped of [NEEDS_TAILSCALE, NEEDS_NODE, NOT_WINDOWS, setupFailed('x'), '']) {
+    assert.equal(linkLine(stopped), null, stopped);
+  }
+});
 
 // RED WHEN (NPX-C1-S01) the children run in the caller's folder again: the
 // paste runs with Claude Code's cwd, the open project, and cmd.exe looks there
