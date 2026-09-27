@@ -34,7 +34,7 @@ const settle = () => new Promise((r) => { setTimeout(r, 0); });
 // With mock timers on, setTimeout does not fire by itself; setImmediate still does.
 const drain = () => new Promise((r) => { setImmediate(() => setImmediate(r)); });
 
-const { phoneView, openPhoneScreen, phoneScreenPending, refreshAgentPhone, RECHECK_MS, STORES } = await import('../public/phone.js');
+const { phoneView, openPhoneScreen, phoneScreenPending, refreshAgentPhone, RECHECK_MS, STORES, closePhoneScreen } = await import('../public/phone.js');
 const { qrSvg } = await import('../public/qr.js');
 
 test('phoneView: ready only for serve on AND a well-formed tailnet address; failed only for an ANSWER', () => {
@@ -234,4 +234,17 @@ test('the words are the Artifact\'s, verbatim, in index.html', () => {
     'Install it, sign in with the same Tailscale account as this PC, then scan the code above.',
   ]) assert.equal(HTML.split(words).length - 1, 2, words);
   assert.equal((HTML.match(/<details class="ts-more">/g) || []).length, 2, 'closed by default: no open attribute');
+});
+
+// Sequence 29: opened from Settings, the screen can be left by the browser's
+// back button. RED WHEN closePhoneScreen stops settling it - a later unlock
+// would then bring the screen back on its own (phoneScreenPending).
+test('closePhoneScreen settles an open screen as DONE would, and is a no-op otherwise', async () => {
+  closePhoneScreen();   // nothing open: must not throw
+  answers.push({ url: URL_OK, serve: 'on' });
+  const p = openPhoneScreen(() => {});
+  assert.equal(phoneScreenPending(), true);
+  closePhoneScreen();
+  await p;
+  assert.equal(phoneScreenPending(), false);
 });

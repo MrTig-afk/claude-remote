@@ -92,6 +92,11 @@ async function check(ask) {
   if (view === 'pending' && res?.status !== 401) recheck = setTimeout(() => check(getPhone), RECHECK_MS);
 }
 
+/** Settles an open screen as DONE would (the back button left it). No-op when none is open. */
+export function closePhoneScreen() {
+  if (pending) document.getElementById('phone-done').onclick();
+}
+
 /** True while the screen is up and something is awaiting its DONE or SKIP. */
 export function phoneScreenPending() {
   return pending !== null;
