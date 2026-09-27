@@ -190,3 +190,101 @@ test('POST /api/sessions still behaves exactly as before (server edit was additi
   const body = await res.json();
   assert.equal(body.error, 'invalid_project');
 });
+
+// ------------------------------------------------------------------------
+// R20 / Lane 22 step 6 - the optional `root`. A lookup key against the
+// folders of projects the agent already lists, never a path to build from.
+// ------------------------------------------------------------------------
+
+const multi = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-server-create-root-'));
+const box = path.join(multi, 'Box');       // shared as a folder of projects
+const uni = path.join(box, 'Uni');         // a folder of projects INSIDE it (the drill-in)
+const one = path.join(multi, 'One');       // shared as one project
+const outside = path.join(multi, 'Outside');
+for (const d of [
+  path.join(uni, 'a2'), path.join(box, 'plain'), path.join(box, 'Skip', 'x'),
+  path.join(box, '.hidden', 'x'), one, path.join(outside, 'x'),
+]) fs.mkdirSync(d, { recursive: true });
+
+// `One` is listed FIRST on purpose: with no root sent, the first CONTAINER
+// root wins, not the first root.
+const rootServer = fixtureServer({
+  sharedFolders: [
+    { path: one, mode: 'single', excludes: [], new_folders: 'show' },
+    { path: box, mode: 'container', excludes: ['Skip'], new_folders: 'show' },
+  ],
+  ...authCtx,
+});
+await new Promise((resolve) => rootServer.listen(0, '127.0.0.1', resolve));
+const rootFetch = makeAuthedFetch(`http://127.0.0.1:${rootServer.address().port}`, token);
+after(() => {
+  rootServer.close();
+  fs.rmSync(multi, { recursive: true, force: true });
+});
+
+function postRoot(body) {
+  return rootFetch('/api/projects', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
+test('R20 - root absent: the first CONTAINER root, exactly as before', async () => {
+  const res = await postRoot({ name: 'top-level' });
+  assert.equal(res.status, 201);
+  assert.ok(fs.existsSync(path.join(box, 'top-level')));
+  assert.equal(fs.existsSync(path.join(one, 'top-level')), false, 'a single root is never created into');
+});
+
+test('R20 - root = a shared container root -> created there', async () => {
+  const res = await postRoot({ name: 'at-root', root: box });
+  assert.equal(res.status, 201);
+  assert.deepEqual(await res.json(), { project: { name: 'at-root' } });
+  assert.ok(fs.existsSync(path.join(box, 'at-root')));
+});
+
+test('R20 - root = the drilled-in folder, as GET /api/projects reports it -> created INSIDE it, one level', async () => {
+  const listed = (await (await rootFetch('/api/projects')).json()).projects.find((p) => p.name === 'Uni');
+  assert.ok(listed && listed.container, 'fixture: Uni is listed as a folder of projects');
+  const res = await postRoot({ name: 'big-data-a3', root: listed.path });
+  assert.equal(res.status, 201);
+  assert.ok(fs.existsSync(path.join(uni, 'big-data-a3')));
+  assert.equal(fs.existsSync(path.join(box, 'big-data-a3')), false);
+});
+
+test('R20 - root that is not a shared folder of projects -> 400 base_unavailable, nothing created', async () => {
+  const refused = [
+    ['not shared at all', outside],
+    ['shared as ONE project', one],
+    ['a project, not a folder of projects', path.join(box, 'plain')],
+    ['excluded from the share', path.join(box, 'Skip')],
+    ['dot-prefixed, never listed', path.join(box, '.hidden')],
+    ['a folder INSIDE the drill-in (two levels)', path.join(uni, 'a2')],
+    ['traversal out of a listed folder', `${uni}${path.sep}..${path.sep}..${path.sep}Outside`],
+    ['empty string', ''],
+  ];
+  for (const [why, root] of refused) {
+    const res = await postRoot({ name: 'refused-here', root });
+    assert.equal(res.status, 400, why);
+    assert.deepEqual(await res.json(), { error: 'base_unavailable' }, why);
+  }
+  for (const d of [outside, one, path.join(box, 'plain'), path.join(box, 'Skip'), uni, path.join(uni, 'a2'), box]) {
+    assert.equal(fs.existsSync(path.join(d, 'refused-here')), false, `nothing may be created in ${d}`);
+  }
+});
+
+test('R20 - root of the wrong type -> 400 invalid_request', async () => {
+  for (const root of [42, null, [box], { path: box }, true]) {
+    const res = await postRoot({ name: 'wrong-type', root });
+    assert.equal(res.status, 400, JSON.stringify(root));
+    assert.deepEqual(await res.json(), { error: 'invalid_request' });
+  }
+  assert.equal(fs.existsSync(path.join(box, 'wrong-type')), false);
+});
+
+test('R20 - the name rules still apply inside a named root', async () => {
+  const res = await postRoot({ name: '..', root: uni });
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: 'name_has_traversal' });
+});

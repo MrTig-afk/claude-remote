@@ -7,6 +7,7 @@ import {
   MAX_SHARED_ROOTS, crumbSegments, sharedBody, coverageOf, driveRowState,
   truncatedNote, shareErrorMessage, applySaveResult,
   listZoneState, missingRoots, withoutRoot, sharedToTicks, withRootExcludes, modeSwitchWarning,
+  plusMenuItems, newProjectTarget,
 } from '../public/folders-ui.js';
 import { emptyDayOneTitle } from '../public/copy.js';
 import { MAX_SHARED_ROOTS as SERVER_MAX_SHARED_ROOTS } from '../shared.js';
@@ -445,4 +446,40 @@ test('Lane 18 - modeSwitchWarning names only LISTED projects with a live session
     modeSwitchWarning([{ name: 'a', running: true, ticked: true }, { name: 'b', running: true, ticked: true }], 'Repos'),
     /^2 projects have sessions running inside Repos\. Switching will not stop them/,
   );
+});
+
+// Lane 22 - what the + offers, and where New project goes.
+test('Lane 22 - plusMenuItems: Share folder on the top-level list; New project only where one can be made; inside a folder New project alone', () => {
+  const container = { path: 'F:\\Dev\\Projects', mode: 'container' };
+  const gone = { path: 'E:\\Work', mode: 'container', missing: true };
+  const single = { path: 'D:\\Uni\\CML', mode: 'single' };
+  assert.deepEqual(plusMenuItems([container], false), ['share', 'new']);
+  assert.deepEqual(plusMenuItems([single], false), ['share'], 'step 5: only one-project folders shared');
+  assert.deepEqual(plusMenuItems([], false), ['share'], 'nothing shared: Share folder is the way in');
+  assert.deepEqual(plusMenuItems([single, container], false), ['share', 'new'], 'any container root is enough');
+  // RED WHEN: `missing` is ignored again - New project on a folder of projects
+  // that is not on disk can only answer base_unavailable (PM-C1-01).
+  assert.deepEqual(plusMenuItems([gone], false), ['share'], 'the only folder of projects is gone: New project could only fail');
+  assert.deepEqual(plusMenuItems([gone, container], false), ['share', 'new'], 'a live one after a gone one still counts');
+  // RED WHEN: Share folder comes back inside a folder (sequence 18).
+  assert.deepEqual(plusMenuItems([single], true), ['new'], 'step 6: inside a shared folder, New project only');
+  assert.deepEqual(plusMenuItems(null, false), [], 'unknown set: the picker would open blind');
+  assert.deepEqual(plusMenuItems(undefined, true), []);
+});
+
+test('Lane 22 - newProjectTarget: the folder it names is the folder it sends, and never one that is gone', () => {
+  const shared = [
+    { path: 'D:\\Uni\\CML', mode: 'single' },
+    { path: 'G:\\Old', mode: 'container', missing: true },
+    { path: 'F:\\Dev\\Projects', mode: 'container' },
+    { path: 'E:\\Work', mode: 'container' },
+  ];
+  // RED WHEN: the top level sends no root again - the agent would take the
+  // first container (G:\Old, missing) while the line names F:\Dev\Projects.
+  assert.deepEqual(newProjectTarget(shared, null), { folder: null, root: 'F:\\Dev\\Projects' },
+    'the first folder of projects still on disk, shown AND sent - not the single root, not the missing one');
+  const open = { name: 'Lala', path: 'F:\\Dev\\Projects\\Lala', container: true };
+  assert.deepEqual(newProjectTarget(shared, open), { folder: 'Lala', root: open.path });
+  assert.deepEqual(newProjectTarget(null, null), { folder: null, root: null });
+  assert.deepEqual(newProjectTarget([shared[0], shared[1]], null), { folder: null, root: null }, 'no live container root: nowhere to make one');
 });

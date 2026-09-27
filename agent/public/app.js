@@ -19,6 +19,7 @@ import {
   sharedFolderRows, stopSharingPrompt,
   rootEditRows, excludesFrom, withRootExcludes, orphanWarning, modeSwitchWarning,
   reauthLine, REAUTH_WRONG, reauthOutcome,
+  plusMenuItems, newProjectTarget,
 } from './folders-ui.js';
 import {
   updateAvailable, releaseOf, releaseLines, readyLine, fallbackReadyLine, aboutRowState, updateWaiting,
@@ -249,21 +250,6 @@ function clientValidateName(name) {
   return null;
 }
 
-// Best-effort target-path preview only: derived from an existing project's
-// absolute path already present in the loaded list (GET /api/projects
-// returns one per entry; the create response deliberately omits it, matching
-// createProject's contract of never returning a filesystem path). If the
-// base folder is currently empty nothing has a path to derive from - the
-// preview falls back to a relative form rather than adding a new endpoint
-// just to expose baseDir.
-function baseDirGuess() {
-  const withPath = state.projects.find((p) => p.path);
-  if (!withPath) return null;
-  const sep = withPath.path.includes('\\') ? '\\' : '/';
-  const idx = withPath.path.lastIndexOf(sep);
-  return idx === -1 ? null : { dir: withPath.path.slice(0, idx), sep };
-}
-
 // Time since session start, not time since last input (no API exposes
 // that), so no "last active" label is ever put next to it.
 function elapsed(startedAt) {
@@ -280,7 +266,7 @@ function elapsed(startedAt) {
 
 // The name of the folder that CONTAINS this one, read off an absolute path -
 // 'Pull Requests' for '...\Pull Requests\Vercel'. Both separators are handled,
-// the same way baseDirGuess does it, because the agent's paths are whatever
+// the same way updateNewProjectTarget does it, because the agent's paths are whatever
 // the OS it runs on produces. null when there is no containing segment to
 // name. It answers about the PATH and knows nothing about the project list,
 // which is why only renderProjects' synthetic-row loop may call it: a
@@ -1332,11 +1318,11 @@ function renderProjects() {
     projectCount: state.projects.length,
     shared: state.shared,
   });
-  // With no usable root, POST /api/projects can only answer base_unavailable,
-  // and a control that can only fail is the failed screen this task exists
-  // to delete.
-  const canCreate = zone.kind !== 'nothing-shared' && zone.kind !== 'all-gone' && zone.kind !== 'unknown-shared';
-  renderBackBar(open, canCreate);
+  // Lane 22: what the + offers here. New project is left out where the agent
+  // could only answer base_unavailable; Share folder works whenever the set is
+  // known, which is why the + no longer hides on nothing-shared or all-gone.
+  // Inside a folder it is New project alone (sequence 18).
+  renderBackBar(open, plusMenuItems(state.shared, open !== null));
 
   const rows = open
     ? (open.children || []).map((c) => {
@@ -1633,23 +1619,21 @@ function childProject(container, child) {
 
 
 // open = the resolved container entry (from renderProjects), or null.
-// canCreate defaults true so every existing call/test that only ever passed
-// `open` keeps working with no edit - T100 is the only caller that passes
-// false, and only when nothing usable is shared (see renderProjects).
-function renderBackBar(open, canCreate = true) {
+// plus = plusMenuItems' answer for this level (Lane 22); [] hides the +.
+function renderBackBar(open, plus) {
   document.getElementById('backbar').hidden = open === null;
-  // The + creates a TOP-LEVEL project only - the agent's create route is one
-  // level deep, which is what the "a project is created directly in the
-  // folder, not inside a subfolder" copy already says - so inside a folder it
-  // has nothing true to offer. Also hidden at the top level when there is no
-  // usable root to create into - a control that can only fail is not an
-  // affordance.
-  document.getElementById('newproj').hidden = open !== null || !canCreate;
+  // The + shows on the list and inside a folder alike. Hidden only when it
+  // has nothing to offer - the shared set is unknown - and a menu already
+  // open then closes rather than sit over a + that is gone.
+  document.getElementById('newproj').hidden = plus.length === 0;
+  syncPlusMenu(plus);
+  // The name panel belongs to the level it was opened on: its target line,
+  // and the folder it will send, are wrong on any other.
+  if (newProjectAt !== null && newProjectAt.folder !== (open === null ? null : open.name)) closeNewProjectPanel();
   if (open === null) return;
   document.getElementById('backbar-name').textContent = open.name;
   document.getElementById('backbar-path').textContent = open.path;
   document.getElementById('backbar').setAttribute('aria-label', `Back to all projects. Inside ${open.name}.`);
-  closeNewProjectPanel(); // a top-level create form must not sit on the folder screen
 }
 
 function render() {
@@ -2204,14 +2188,28 @@ function updateNewProjectTarget() {
 
   errorEl.hidden = true;
   errorEl.textContent = '';
-  const base = baseDirGuess();
-  targetEl.textContent = base
-    ? `will create: ${base.dir}${base.sep}${name}`
+  // The folder the agent will actually use - newProjectTarget, fixed when the
+  // panel opened. It used to be guessed from the first listed project's
+  // parent, which named the wrong folder whenever that project came from a
+  // second root or a one-project share.
+  const dir = newProjectAt && newProjectAt.root;
+  const sep = dir && dir.includes('\\') ? '\\' : '/';
+  targetEl.textContent = dir
+    ? `will create: ${dir.replace(/[\\/]$/, '')}${sep}${name}`
     : `will create: ${name} (in the projects folder)`;
   createBtn.disabled = false;
 }
 
+// Where the open panel creates: newProjectTarget's { folder, root, dir }, or
+// null while the panel is closed. Fixed at open, so the line on screen and the
+// `root` sent are the same folder even if a load() lands in between.
+let newProjectAt = null;
+
 function openNewProjectPanel() {
+  const open = state.openFolder === null
+    ? null
+    : (state.projects.find((p) => p.name === state.openFolder && p.container) ?? null);
+  newProjectAt = newProjectTarget(state.shared, open);
   document.getElementById('newproj-panel').hidden = false;
   const nameEl = newProjectNameEl();
   nameEl.value = '';
@@ -2221,6 +2219,7 @@ function openNewProjectPanel() {
 
 function closeNewProjectPanel() {
   document.getElementById('newproj-panel').hidden = true;
+  newProjectAt = null;
 }
 
 async function onCreateProject() {
@@ -2236,15 +2235,19 @@ async function onCreateProject() {
   }
 
   createBtn.disabled = true;
-  const res = await createProject(name);
+  const res = await createProject(name, newProjectAt && newProjectAt.root);
   createBtn.disabled = false;
 
   if (res.ok) {
     closeNewProjectPanel();
-    setBanner('info', [{ b: res.data.project.name }, { text: ' created.' }]);
     // Re-fetch, never optimistic insert: the list is the single source of
-    // truth once the agent has confirmed it.
+    // truth once the agent has confirmed it. The banner goes up AFTER, because
+    // load() starts with hideBanner() - set first, it was never seen - and
+    // only if load() left none of its own, so a failed refresh keeps its error.
     await load();
+    if (document.getElementById('banner').hidden) {
+      setBanner('info', [{ b: res.data.project.name }, { text: ' created.' }]);
+    }
     return;
   }
 
@@ -2254,8 +2257,124 @@ async function onCreateProject() {
   updateNewProjectTarget();
 }
 
-function onNewProject() {
-  openNewProjectPanel();
+// ============================================================================
+// Lane 22 - the + opens a menu: Share folder / New project.
+// ============================================================================
+
+// Everything behind the menu: made inert while it is open so a keyboard cannot
+// reach what the scrim stops a finger reaching - the gear or a folder row
+// would push a history entry above the menu's and desync the back stack, the
+// same reason the sheet makes `.hdr` inert.
+// ponytail: the sheet can open over the menu (a launch landing) and un-inerts
+// `.hdr` when it closes; the scrim still covers it, only Tab can reach it.
+const PLUS_BEHIND = '.hdr, #backbar, #pane-top, #zone-list, #pane-bottom';
+
+// Same shape as sheetPushed: true while the menu's history entry is on the
+// stack, cleared only when its pop lands (onPlusPop) - which is also where a
+// choice that must wait for that pop runs (plusThen).
+let plusPushed = false;
+let plusThen = null;
+// The choices the open menu is showing, as plusMenuItems gave them at open.
+let plusShown = '';
+
+function plusMenuOpen() {
+  return document.getElementById('newproj').getAttribute('aria-expanded') === 'true';
+}
+
+function setPlusMenu(open) {
+  document.getElementById('newproj').setAttribute('aria-expanded', String(open));
+  document.getElementById('picker').classList.toggle('plus-open', open);
+  for (const el of document.querySelectorAll(PLUS_BEHIND)) el.inert = open;
+}
+
+function plusItems() {
+  return [...document.querySelectorAll('.plusmenu-item')].filter((b) => !b.hidden);
+}
+
+function openPlusMenu() {
+  // A pop still in flight, or an open STOP confirm: the tap is swallowed,
+  // exactly as openSettings swallows it - pushing now would land under the
+  // traversal that is about to happen, which then takes the wrong entry.
+  if (plusPushed || cancelOpenConfirm()) return;
+  const items = plusMenuItems(state.shared, state.openFolder !== null);
+  if (items.length === 0) return;
+  plusShown = items.join();
+  document.getElementById('plus-share').hidden = !items.includes('share');
+  document.getElementById('plus-new').hidden = !items.includes('new');
+  setPlusMenu(true);
+  history.pushState({ plusMenu: true }, '');   // Android back = close the menu
+  plusPushed = true;
+  window.addEventListener('popstate', onPlusPop);
+  plusItems()[0].focus();
+}
+
+// The x, the scrim, Esc, a choice. Hidden synchronously (the double-tap
+// guard), then ONE guarded back(). `then` runs once that pop has landed.
+function closePlusMenu(then = null) {
+  if (!plusMenuOpen()) return;
+  setPlusMenu(false);
+  plusThen = then;
+  if (plusPushed) history.back();
+}
+
+// Its own listener, the way the picker has onFoldersPop, so onPopState needs
+// no branch: on the list its fall-through is a no-op for this pop. history.state
+// tells the pop apart - still on the menu's entry means one ABOVE it went (R2's
+// sheet, which onPopState owns).
+function onPlusPop() {
+  if (history.state && history.state.plusMenu) return;
+  window.removeEventListener('popstate', onPlusPop);
+  plusPushed = false;
+  if (plusMenuOpen()) setPlusMenu(false);   // Back itself, not one of our closes
+  const then = plusThen;
+  plusThen = null;
+  if (then) then();
+}
+
+// The re-lock: put it away without a traversal, and disown the entry - the
+// same accepted cost closeSheetHard documents.
+function closePlusMenuHard() {
+  if (plusMenuOpen()) setPlusMenu(false);
+  window.removeEventListener('popstate', onPlusPop);
+  plusPushed = false;
+  plusThen = null;
+}
+
+// Every render (renderBackBar): a menu whose choices changed under it - a
+// load() found the last folder of projects gone, so New project could only
+// fail - closes rather than keep offering what is no longer true.
+function syncPlusMenu(plus) {
+  if (plus.length === 0 || (plusMenuOpen() && plus.join() !== plusShown)) closePlusMenu();
+}
+
+function onPlusTap() {
+  if (plusMenuOpen()) closePlusMenu(); else openPlusMenu();
+}
+
+function onPlusMenuClick(e) {
+  // New project opens at once, not after the pop: focusing the name field
+  // must happen inside the tap or a phone will not raise its keyboard.
+  if (e.target.closest('#plus-new')) { closePlusMenu(); openNewProjectPanel(); return; }
+  // Share folder waits for the pop, so the picker's own popstate listener,
+  // registered by showFolders, never receives the menu's.
+  if (e.target.closest('#plus-share')) closePlusMenu(onChooseFolders);
+}
+
+function onPlusKey(e) {
+  if (!plusMenuOpen()) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closePlusMenu();
+    document.getElementById('newproj').focus();
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const items = plusItems();
+  const i = items.indexOf(document.activeElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  const next = i === -1 ? (step === 1 ? 0 : items.length - 1) : (i + step + items.length) % items.length;
+  items[next].focus();
 }
 
 // ============================================================================
@@ -4789,7 +4908,10 @@ function wireEvents() {
   // Its CHOOSE FOLDERS is the same [data-choose] control, so the same delegate.
   document.getElementById('pane-empty').addEventListener('click', onProjectTap);
   document.getElementById('tiles').addEventListener('click', onTileTap);
-  document.getElementById('newproj').addEventListener('click', onNewProject);
+  document.getElementById('newproj').addEventListener('click', onPlusTap);
+  document.getElementById('plusmenu').addEventListener('click', onPlusMenuClick);
+  document.getElementById('plus-scrim').addEventListener('click', () => closePlusMenu());
+  document.addEventListener('keydown', onPlusKey);
   // R2. GOT IT is the sheet's only control and its only exit.
   document.getElementById('sheet-go').addEventListener('click', closeSheet);
   document.getElementById('refresh').addEventListener('click', () => load());
@@ -5156,7 +5278,7 @@ async function boot() {
   // double-tap guard (`currentSub() === key`) made the Shared folders row a
   // DEAD TAP for the rest of the session. lockNow only escaped this by doing a
   // full location.reload().
-  onAuthLost(async () => { hideConn(); closeSheetHard(); resetSettingsNav(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
+  onAuthLost(async () => { hideConn(); closeSheetHard(); closePlusMenuHard(); resetSettingsNav(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on

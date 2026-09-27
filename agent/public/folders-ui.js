@@ -140,6 +140,40 @@ export function listZoneState({
   return { kind: 'empty-day-one', roots: shared.filter((r) => !r.missing) };
 }
 
+/**
+ * Lane 22: what the + offers. [] means no + at all - only while the shared set
+ * is unknown, because Share folder then has nothing safe to open (the picker
+ * refuses to enter blind) and New project cannot say where it would go.
+ * Inside a folder of projects: New project only (sequence 18 - everything in
+ * there is already shared). On the top-level list: Share folder, plus New
+ * project when a root shared as a folder of projects is still on disk (a
+ * `single` root has no children to make, a missing one can only fail).
+ */
+export function plusMenuItems(shared, inFolder) {
+  if (!Array.isArray(shared)) return [];
+  if (inFolder) return ['new'];
+  return firstLiveContainer(shared) ? ['share', 'new'] : ['share'];
+}
+
+function firstLiveContainer(shared) {
+  return (shared || []).find((r) => r.mode === 'container' && !r.missing) || null;
+}
+
+/**
+ * Lane 22 step 6: where New project will make the folder. `open` is the
+ * drilled-in container entry or null. Inside one it is that folder; on the
+ * top-level list it is the first folder of projects still on disk. Its path is
+ * sent as `root` either way, so the line on screen and the folder the agent
+ * uses cannot disagree (with no root the agent takes the first container even
+ * when that one is missing). `root` null = nowhere to make one.
+ * -> { folder, root }   folder is open's name, or null at the top level
+ */
+export function newProjectTarget(shared, open) {
+  if (open) return { folder: open.name, root: open.path };
+  const first = firstLiveContainer(shared);
+  return { folder: null, root: first ? first.path : null };
+}
+
 /** The roots the agent says are gone. [] when the set is unknown. */
 export function missingRoots(shared) {
   return (shared || []).filter((r) => r.missing === true);
