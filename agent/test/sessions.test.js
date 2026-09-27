@@ -342,7 +342,8 @@ test('launchSession - nested identifier: exact args array, and the registry key 
   // claudeConfigDir null for the same reason the flat exact-args test pins it:
   // an unpinned ctx reads the REAL config, so this argv would depend on whether
   // the machine running the suite has a profile configured (T56).
-  const r = launchSession({ baseDir: base, spawner, claudeConfigDir: null, ...regCtx }, 'Pull Requests/Vercel');
+  // openingReport pinned for the same reason as claudeConfigDir: off the real config file.
+  const r = launchSession({ baseDir: base, spawner, claudeConfigDir: null, openingReport: false, ...regCtx }, 'Pull Requests/Vercel');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
     '-NoProfile',
@@ -355,6 +356,7 @@ test('launchSession - nested identifier: exact args array, and the registry key 
     // the leaf alone would put two identical rows in the Code tab.
     '-SessionName', 'Vercel (Pull Requests)',
     '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(PULL_REQUESTS_VERCEL)),
+    '-NoOpeningReport',
   ]);
   // The registry key must NOT change - this is the pin that a future
   // mutation of the launcher-argument collapse cannot also change the key.
@@ -591,7 +593,7 @@ test('launchSession - exact args array', () => {
   // configured), and pinning it keeps this assertion off the real config file.
   // Without it the expected argv would depend on whether the machine running
   // the suite happens to have set claude_config_dir (T56).
-  launchSession({ baseDir: base, spawner, claudeConfigDir: null, ...regCtx }, 'Video Editing');
+  launchSession({ baseDir: base, spawner, claudeConfigDir: null, openingReport: false, ...regCtx }, 'Video Editing');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
     '-NoProfile',
@@ -601,6 +603,7 @@ test('launchSession - exact args array', () => {
     '-ProjectPath', path.join(base, 'Video Editing'),
     '-SessionName', 'Video Editing',   // leaf, spaces and all - the same form --name has always used
     '-PidFile', path.join(regCtx.pidDir, pidFileNameFor(VIDEO_EDITING)),
+    '-NoOpeningReport',   // the default (owner 2026-09-27)
   ]);
 });
 
@@ -643,7 +646,7 @@ test('launchSession - passes -PreLaunch as ONE argument when configured', () => 
   assert.equal(calls[0].args[i + 1], 'conda activate myenv');
 });
 
-test('launchSession - no -NoOpeningReport when the report is on (the default)', () => {
+test('launchSession - no -NoOpeningReport when the owner switched the report on', () => {
   const { spawner, calls } = makeFakeSpawner();
   launchSession({
     spawner, baseDir: base, claudeConfigDir: null, preLaunchCommand: null, openingReport: true, ...makeRegCtx(),
@@ -654,7 +657,7 @@ test('launchSession - no -NoOpeningReport when the report is on (the default)', 
   );
 });
 
-test('launchSession - passes -NoOpeningReport when the owner switched the report off', () => {
+test('launchSession - passes -NoOpeningReport when the report is off (the default)', () => {
   const { spawner, calls } = makeFakeSpawner();
   launchSession({
     spawner, baseDir: base, claudeConfigDir: null, preLaunchCommand: null, openingReport: false, ...makeRegCtx(),

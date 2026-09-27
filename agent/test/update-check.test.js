@@ -20,6 +20,7 @@ import {
   SETTING_UP, NEEDS_TAILSCALE, NOT_WINDOWS, NEEDS_NODE, UPDATED, setupFailed, updateFailed,
   takeLock, releaseLock, removeLockIfStill, LONGEST_JOB_MS, INSTALL_TIMEOUT_MS, taskVerdict, realTaskQuery,
   realStartJob, realTailscale, phoneAddress, phoneReady, terminalQr, qrBlocks, TASK_NAME,
+  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING,
 } from '../../hooks/check-update.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../hooks/check-update.mjs', import.meta.url));
@@ -641,4 +642,65 @@ test('run as the hook with --print-qr: the same drawing, plain, for setup\'s han
   const out = execFileSync(process.execPath, [SCRIPT, '--print-qr', URL_OK], { encoding: 'utf8' });
   assert.equal(out, `${qrBlocks(URL_OK).join('\n')}\n`);
   assert.equal(execFileSync(process.execPath, [SCRIPT, '--print-qr'], { encoding: 'utf8' }), '');
+});
+
+// --now (AGENTS.md's third command) has no CLAUDE_PLUGIN_ROOT: it must find the
+// plugin it sits in, or it hashes and installs from the wrong folder.
+test('--now finds its own plugin root: the folder above hooks/', () => {
+  const root = path.join(base, 'own-root');
+  assert.equal(ownPluginRoot(pathToFileURL(path.join(root, 'hooks', 'check-update.mjs')).href), root);
+  assert.equal(ownPluginRoot(), path.resolve(fileURLToPath(new URL('../..', import.meta.url))), 'the repo copy is its own root');
+});
+
+// RED WHEN: the README sentence, AGENTS.md's steps and the hook drift apart -
+// the sentence must name AGENTS.md, AGENTS.md must give the reason BEFORE the
+// commands and run the hook's real --now mode with the PS 5.1-safe lookup, and
+// the README must carry no instructions addressed to Claude (sequence 21).
+test('install docs: README names AGENTS.md; AGENTS.md reasons first, then the three commands', () => {
+  const repo = fileURLToPath(new URL('../..', import.meta.url));
+  const readme = fs.readFileSync(path.join(repo, 'README.md'), 'utf8');
+  const agents = fs.readFileSync(path.join(repo, 'AGENTS.md'), 'utf8');
+  assert.match(readme, /Install Claude Remote by following github\.com\/MrTig-afk\/claude-remote\/blob\/main\/AGENTS\.md/);
+  assert.doesNotMatch(readme, /claude plugin marketplace add|check-update\.mjs" --now/, 'no Claude steps in the README');
+  const why = agents.indexOf('**Why these steps.**');
+  const cmds = agents.indexOf('claude plugin marketplace add MrTig-afk/claude-remote');
+  assert.ok(why !== -1 && cmds > why, 'the reason comes before the commands');
+  assert.match(agents, /claude plugin install claude-remote@claude-remote/);
+  assert.match(agents, /\(\(claude plugin list --json \| ConvertFrom-Json\) \| Where-Object id -eq 'claude-remote@claude-remote'/, 'brackets for PS 5.1');
+  assert.match(agents, /hooks\\check-update\.mjs" --now/);
+  assert.match(fs.readFileSync(SCRIPT, 'utf8'), /process\.argv\[2\] === '--now'/, 'the hook really has a --now mode');
+});
+
+// RED WHEN: --now maps a silent branch to one catch-all sentence again
+// (SO-C1-C01) - it denied an update that was starting and hid a failed setup.
+// Every branch a session start keeps quiet, --now names.
+test('--now names every outcome, and never takes the phone code', async () => {
+  const ex = (w, more = {}) => sessionStart({ ...w.deps, explain: true, ...more });
+  const fresh = world();
+  assert.equal(await ex(fresh), SETTING_UP, 'install started');
+  assert.equal(await ex(fresh), ALREADY_RUNNING, 'the lock is held');
+
+  const older = world({ installed: 'server v0' });
+  assert.equal(await ex(older), UPDATING, 'an update really started');
+  assert.equal(older.jobs.length, 1);
+
+  const same = world({ installed: 'server v1' });
+  let asked = 0;
+  assert.equal(await ex(same, { phoneAddress: async () => { asked += 1; return URL_OK; } }), UP_TO_DATE);
+  assert.equal(asked, 0, 'the phone code is never asked for, so it is not used up');
+
+  const foreign = world();
+  const elsewhere = { ok: true, stdout: taskXml('F:\\checkout\\agent\\server.js') };
+  assert.equal(await ex(foreign, { taskQuery: async () => elsewhere }), RUNS_ELSEWHERE);
+  assert.equal(await ex(world(), { taskQuery: async () => NO_TASK, agentRunning: async () => true }), RUNS_ELSEWHERE);
+
+  const failed = world();
+  writeState(failed, { last: { kind: 'install', ok: false, hash: installedHash(failed.deps.pluginRoot), reported: true, reason: 'boom' } });
+  assert.equal(await ex(failed), setupFailed('boom'), 'a failed setup that will not retry says so');
+  assert.equal(await sessionStart(failed.deps), null, 'while a session start stays quiet about it');
+
+  const nonWin = world();
+  assert.equal(await ex(nonWin, { platform: 'linux' }), NOT_WINDOWS);
+  assert.equal(await ex(nonWin, { platform: 'linux' }), NOT_WINDOWS, 'every time, not just once');
+  assert.equal(await ex(world(), { localAppData: '' }), setupFailed('this PC has no LOCALAPPDATA folder'));
 });

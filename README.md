@@ -120,28 +120,32 @@ macOS and Linux PCs are not supported yet - see the [FAQ](#faq).
 
 ## Install
 
-In Claude Code, at the PC, run these **one at a time**. Paste them together and
-Claude Code reads both as one marketplace name. Wait for the first to finish
-before the second:
+Two ways, and you only need one.
 
-1. Add the marketplace:
+**Let Claude do it.** In Claude Code, at the PC, say:
 
-   ```
+```
+Install Claude Remote by following github.com/MrTig-afk/claude-remote/blob/main/AGENTS.md
+```
+
+Claude tells you what it will install, runs the steps, and your browser opens
+on the passcode screen. Nothing to restart.
+
+**Or by hand.** In Claude Code, at the PC, run these **one at a time** (pasted
+together, Claude Code reads both as one marketplace name):
+
+1. ```
    /plugin marketplace add MrTig-afk/claude-remote
    ```
-
-2. Install the plugin:
-
-   ```
+2. ```
    /plugin install claude-remote@claude-remote
    ```
 
-Then **quit Claude Code and start it again.** That is the last thing you type.
-A plugin cannot run anything while it is being installed, so the next start is
-the first moment it can.
+Then **quit Claude Code and start it again.** A plugin cannot run anything
+while it is being installed, so the next start is the first moment it can.
 
-**Installing the plugin is agreeing to what it installs.** On that next start
-it sets itself up in the background, with no window, and adds three things to
+**Installing the plugin is agreeing to what it installs.** Either way, it
+sets itself up in the background, with no window, and adds three things to
 this PC:
 
 - **A copy of the agent** in `%LOCALAPPDATA%\claude-remote`.
@@ -154,7 +158,7 @@ this PC:
 
 What happens next, and **the order matters**:
 
-1. Claude Code says "Claude Remote is setting itself up on this PC." It first
+1. You see "Claude Remote is setting itself up on this PC." It first
    checks Tailscale is running and signed in, and that Node and Claude Code are
    installed; if one is missing it says which and installs nothing.
 2. Your browser opens on `http://127.0.0.1:8790` by itself. **At the desk**, set
@@ -336,18 +340,16 @@ profile. It is read on every launch, so no restart is needed.
 
 ## The opening report
 
-A session you start from the phone opens by telling you where the work stands,
-rather than sitting silent until you type something. The launcher does this by
-submitting one prompt for you, "Read HANDOFF.md and give the opening report.",
-and only when the project actually contains a `HANDOFF.md`. A project without
-one starts silent, exactly as before.
+Optional, and off until you turn it on. With it on, a session you start from
+the phone opens by telling you where the work stands, rather than sitting
+silent until you type something. The launcher does this by submitting one
+prompt for you, "Read HANDOFF.md and give the opening report.", and only when
+the project actually contains a `HANDOFF.md`.
 
-It exists because the PWA is a start button: nobody is at the keyboard to type
-the first message, so a session that opens silently has wasted the launch.
-
-Turn it off with `"opening_report": false` in the config file. Only a literal
-`false` counts - anything else leaves it on, deliberately, because a silent
-session started from a phone gives you nothing to diagnose.
+Turn it on with `"opening_report": true` in the config file. Only a literal
+`true` counts. It is off by default because it starts Claude on a file from
+the project itself: in your own projects that is your own note, but in a repo
+someone else wrote, it would be their text, read first.
 
 ## Daily use
 

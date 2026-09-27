@@ -174,13 +174,15 @@ export function resolvePreLaunchCommand(configPath = getConfigFilePath(), projec
 }
 
 /**
- * Whether a PWA-launched session opens by reporting where the work stands.
- * ONLY an explicit `false` switches it off - a missing, null or malformed key
- * leaves it ON, because the failure it guards is a silent phone-launched
- * session, which gives the owner nothing to diagnose.
+ * Whether a PWA-launched session opens by reading the project's HANDOFF.md
+ * and reporting where the work stands. OFF unless the owner wrote exactly
+ * `true` (owner 2026-09-27): the report starts the session with an
+ * instruction to read a file FROM THE PROJECT, and in a repo someone else
+ * wrote that file is someone else's text, read first, with nobody watching.
+ * A silent session is the lesser failure. Missing, null or malformed = off.
  */
 export function resolveOpeningReport(configPath = getConfigFilePath()) {
-  return readConfig(configPath).opening_report !== false;
+  return readConfig(configPath).opening_report === true;
 }
 
 /** Claude Code profile session directories to scan. Only <pid>.json is ever

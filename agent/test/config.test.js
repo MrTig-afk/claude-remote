@@ -350,22 +350,22 @@ test('pre_launch_commands: a non-object map is ignored rather than thrown on', (
   assert.equal(resolvePreLaunchCommand(configPath, 'F:\\Dev\\Projects\\Workspace\\x'), 'conda activate global');
 });
 
-// --- T108: the opening report is on unless explicitly switched off ----------
+// --- the opening report is OFF unless explicitly switched on (owner 2026-09-27) ---
 
-test('resolveOpeningReport is TRUE by default and on anything that is not exactly false', () => {
-  // The default has to fail in this direction: a silent session started from a
-  // phone gives the owner nothing to diagnose. Only an explicit false counts.
-  assert.equal(resolveOpeningReport(writeConfig('or-absent.json', '{}')), true);
-  assert.equal(resolveOpeningReport(writeConfig('or-missing-file.json')), true);
-  for (const junk of ['false', 0, null, 'no', {}]) {
+// RED WHEN: the default flips back to on - a phone launch into a cloned repo
+// would start Claude on "Read HANDOFF.md", someone else's text, read first.
+test('resolveOpeningReport is FALSE by default and on anything that is not exactly true', () => {
+  assert.equal(resolveOpeningReport(writeConfig('or-absent.json', '{}')), false);
+  assert.equal(resolveOpeningReport(writeConfig('or-missing-file.json')), false);
+  for (const junk of ['true', 1, null, 'yes', {}, false]) {
     const configPath = writeConfig(`or-junk-${JSON.stringify(junk)}.json`.replace(/[^\w.-]/g, '_'),
       JSON.stringify({ opening_report: junk }));
-    assert.equal(resolveOpeningReport(configPath), true, `${JSON.stringify(junk)} must not switch it off`);
+    assert.equal(resolveOpeningReport(configPath), false, `${JSON.stringify(junk)} must not switch it on`);
   }
 });
 
-test('resolveOpeningReport is FALSE only for a literal false', () => {
-  assert.equal(resolveOpeningReport(writeConfig('or-off.json', '{"opening_report":false}')), false);
+test('resolveOpeningReport is TRUE only for a literal true', () => {
+  assert.equal(resolveOpeningReport(writeConfig('or-on.json', '{"opening_report":true}')), true);
 });
 
 test('a profile relocated behind a junction or symlink is still discovered', () => {
