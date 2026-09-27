@@ -29,12 +29,14 @@ after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
 const launcherDir = path.join(dir, 'launcher');
 
-function render() {
-  const out = path.join(dir, 'task.xml');
+// Smart App Control is passed, never read from this machine, so both
+// launchers are covered wherever the suite runs.
+function render(sac = 'Off', into = launcherDir) {
+  const out = path.join(dir, `task-${sac}.xml`);
   const r = spawnSync('powershell.exe', [
     '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(AUTOSTART, 'register-task.ps1'), '-RenderOnly', '-OutFile', out,
-    '-LauncherDir', launcherDir,
+    '-LauncherDir', into, '-SmartAppControl', sac,
   ], { encoding: 'utf8', windowsHide: true, env: { ...process.env, CLAUDE_REMOTE_AGENT_PORT: '' } });
   assert.equal(r.status, 0, `register-task.ps1 -RenderOnly failed:\n${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /nothing was registered/);
@@ -65,13 +67,25 @@ test('the action is our own hidelaunch.exe running THIS agent, logging to the da
   assert.equal(tag('WorkingDirectory'), AGENT);
 });
 
-test('no VBScript and no conhost --headless: both predecessors are gone', () => {
+test('no VBScript, and no conhost --headless where Smart App Control is off', () => {
   assert.doesNotMatch(xml, /wscript|\.vbs/i);
   assert.equal(fs.existsSync(path.join(AUTOSTART, 'start-agent-hidden.vbs')), false);
   // --headless is undocumented, loses the child's exit code, and conhost
   // parenting cmd.exe is a catalogued attacker technique. Not in the action.
   assert.doesNotMatch(tag('Command'), /conhost/i);
   assert.doesNotMatch(tag('Arguments'), /--headless/);
+});
+
+// Owner 2026-09-27, "B plus A": where Smart App Control is On, Windows can
+// re-rate the unsigned hidelaunch and block it at any restart (it did, by
+// hash, after nine days). There the task uses Microsoft's own conhost.exe.
+test('Smart App Control On: conhost.exe --headless by full path, same command line, nothing built', () => {
+  const none = path.join(dir, 'launcher-sac-on');
+  const on = render('On', none).replace(/<!--[\s\S]*?-->/g, '');
+  const get = (name) => unescape(on.match(new RegExp(`<${name}>([\\s\\S]*?)</${name}>`))[1]);
+  assert.equal(get('Command'), path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'conhost.exe'));
+  assert.equal(get('Arguments'), `--headless ${tag('Arguments')}`, 'the rest of the line must match the Off render');
+  assert.deepEqual(fs.readdirSync(none).filter((f) => f.startsWith('hidelaunch-')), [], 'no unsigned build left on a Smart App Control PC');
 });
 
 test('the launcher is built from source into the data folder, content-addressed', () => {
