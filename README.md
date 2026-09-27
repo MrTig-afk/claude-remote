@@ -142,14 +142,17 @@ In Claude Code, at the PC, paste this **one line**, `!` included, and press
 Enter:
 
 ```
-! claude plugin marketplace add MrTig-afk/claude-remote; claude plugin install claude-remote@claude-remote
+! npx.cmd -y github:MrTig-afk/claude-remote
 ```
 
-Then **quit Claude Code and start it again.** A plugin cannot run anything
-while it is being installed, so the next start is the first moment it can.
+It adds the plugin to Claude Code, finds where Claude Code put it, and starts
+the setup straight away: your browser opens on the passcode screen. Nothing to
+restart.
 
 The `!` runs the line as your own command, so Claude's permission modes have
-no say in it. The same line works in a PowerShell window too, without the `!`.
+no say in it. The same line works in a Command Prompt or PowerShell window too,
+without the `!` (it is `npx.cmd`, not `npx`, because PowerShell blocks `npx`
+on a PC that has never allowed scripts).
 
 **Or let Claude do it.** In Claude Code, say:
 
