@@ -48,7 +48,7 @@ export const SECTIONS = [
     // answer for a shared folder at launch (agent/trust.js, T140).
     heading: 'WHAT IT CHANGES ON THIS PC',
     items: [
-      'When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask.',
+      "When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask. That also lets the folder's own Claude Code hooks and MCP servers run, so share only folders whose code you trust.",
     ],
   },
   {

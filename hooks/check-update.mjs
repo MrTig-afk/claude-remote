@@ -57,6 +57,11 @@ export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale running on this PC
 export const NOT_WINDOWS = 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.';
 export const NEEDS_NODE = 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then restart Claude.';
 export const UPDATED = 'Claude Remote updated itself on this PC. The app on your phone picks it up the next time it opens.';
+// --now only (an agent relays these; a session start stays silent there).
+export const ALREADY_RUNNING = 'Claude Remote is already setting itself up on this PC.';
+export const UP_TO_DATE = 'Claude Remote is already installed and up to date on this PC.';
+export const RUNS_ELSEWHERE = 'Claude Remote did not install: this PC already runs its agent another way, so it was left as it is.';
+export const UPDATING = 'Claude Remote is updating itself on this PC in the background.';
 export function setupFailed(reason) {
   return `Claude Remote couldn't set itself up: ${reason}. Run /claude-remote:setup to try again and see the details.`;
 }
@@ -316,15 +321,18 @@ export function outcomeLine(last) {
 export async function sessionStart(deps) {
   const { pluginRoot, localAppData, dataDir } = deps;
   if (!pluginRoot || !dataDir) return null;
+  // deps.explain (--now): an agent asked for this and will relay the answer,
+  // so every branch that is silent at a session start says what happened.
+  const quiet = (line) => (deps.explain ? line : null);
   const files = stateFiles(dataDir);
   let state = readState(files.state);
 
   if (deps.platform !== 'win32') {
-    if (state.nonWindowsNoted) return null;
+    if (state.nonWindowsNoted) return quiet(NOT_WINDOWS);
     writeState(files.state, { ...state, nonWindowsNoted: true });
     return NOT_WINDOWS;
   }
-  if (!localAppData) return null;
+  if (!localAppData) return quiet(setupFailed('this PC has no LOCALAPPDATA folder'));
 
   // The last job's outcome, once. Then stop for this start: one line per start.
   // A first install that worked has no line (the browser said it), so that
@@ -337,15 +345,17 @@ export async function sessionStart(deps) {
   }
 
   // An install still running: a second Claude says nothing and starts nothing.
-  if (lockHeld(files.lock, deps.now)) return null;
+  if (lockHeld(files.lock, deps.now)) return quiet(ALREADY_RUNNING);
 
   const target = path.join(localAppData, 'claude-remote');
   const kind = fs.existsSync(path.join(target, 'agent', 'server.js')) ? 'update' : 'install';
   const hash = installedHash(pluginRoot);
-  if (kind === 'update' && installedHash(target) === hash) return phoneLine(deps, state, files, target);
+  // --now never takes the phone code: an agent would relay it through a reply,
+  // garbling it, and use up the one showing meant for the terminal.
+  if (kind === 'update' && installedHash(target) === hash) return deps.explain ? UP_TO_DATE : phoneLine(deps, state, files, target);
   // A failed install is not retried by itself - only a newer plugin, or
   // /claude-remote:setup, which clears this record.
-  if (state.last && !state.last.ok && state.last.hash === hash) return null;
+  if (state.last && !state.last.ok && state.last.hash === hash) return quiet(outcomeLine(state.last));
   // The three questions at once: each has its own timeout, and asked one
   // after another they came close to the hook's 10s limit (SS-C1-D2-C02).
   // Only a first install needs Tailscale; an update keeps whatever sharing is on.
@@ -358,10 +368,10 @@ export async function sessionStart(deps) {
   // A logon task running an agent from anywhere else - a git checkout - means
   // this PC is set up another way: installing or updating would stop that
   // agent and re-point its task. Left alone, and said nothing to.
-  if (verdict === 'other') return null;
+  if (verdict === 'other') return quiet(RUNS_ELSEWHERE);
   // Same for an agent already answering with no task at all, started by hand -
   // on an update too: update-agent.ps1 stops whatever node holds the port.
-  if (verdict === 'none' && running) return null;
+  if (verdict === 'none' && running) return quiet(RUNS_ELSEWHERE);
 
   if (kind === 'install' && !tailscaleReady(ts)) return NEEDS_TAILSCALE;
   if (!nodeVersionOk(deps.nodeVersion)) return NEEDS_NODE;
@@ -374,9 +384,9 @@ export async function sessionStart(deps) {
   }
 
   const lockToken = takeLock(files.lock, deps.now);
-  if (!lockToken) return null;   // another start got there in the meantime
+  if (!lockToken) return quiet(ALREADY_RUNNING);   // another start got there in the meantime
   deps.startJob({ kind, pluginRoot, target, dataDir, hash, lockToken });
-  return kind === 'install' ? SETTING_UP : null;
+  return kind === 'install' ? SETTING_UP : quiet(UPDATING);
 }
 
 /**
@@ -545,6 +555,12 @@ async function realAgentAnswers(port) {
 // The agent's own data folder (agent/config.js getConfigFilePath's folder).
 const DATA_DIR = path.join(os.homedir(), '.claude', 'plugins', 'data', 'claude-remote-claude-remote');
 
+/** The plugin root this file sits in (<root>/hooks/check-update.mjs), for --now, where no CLAUDE_PLUGIN_ROOT is set. */
+export function ownPluginRoot(fileUrl = import.meta.url) {
+  return path.dirname(path.dirname(fileURLToPath(fileUrl)));
+}
+
+
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const port = Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT;
   if (process.argv[2] === '--job') {
@@ -558,10 +574,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     // codes, so the model can put it in its reply as a code block.
     if (process.argv[3]) process.stdout.write(`${qrBlocks(process.argv[3]).join('\n')}\n`);
   } else {
+    // --now (AGENTS.md's third command): the same decision and hidden job as a
+    // session start, run straight after `claude plugin install` so there is no
+    // restart. Plain text, because an agent reads it, not Claude Code.
+    const now = process.argv[2] === '--now';
     try {
       const line = await sessionStart({
         platform: process.platform,
-        pluginRoot: process.env.CLAUDE_PLUGIN_ROOT,
+        pluginRoot: now ? ownPluginRoot() : process.env.CLAUDE_PLUGIN_ROOT,
         localAppData: process.env.LOCALAPPDATA,
         dataDir: DATA_DIR,
         pathValue: process.env.PATH,
@@ -572,8 +592,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
         phoneAddress: () => phoneAddress(port),
         startJob: (job) => realStartJob(job),
         agentRunning: () => realAgentAnswers(port),
+        explain: now,
       });
-      if (line) process.stdout.write(JSON.stringify({ systemMessage: line }));
+      if (now) process.stdout.write(`${line}\n`);
+      else if (line) process.stdout.write(JSON.stringify({ systemMessage: line }));
     } catch { /* silent: see the header */ }
   }
 }

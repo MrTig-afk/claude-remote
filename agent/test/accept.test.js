@@ -522,8 +522,8 @@ test('C3 - every items line and every top-level string pins to its reviewed lite
     'Your C: drive. It is blocked and cannot be shared.',
   ]);
   assert.deepEqual(copy.SECTIONS[2].items, [
-    // Owner-approved 2026-09-27 (Artifact sequence 15, T140).
-    'When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask.',
+    // Owner-approved 2026-09-27 (Artifact sequence 15, T140; second sentence sequence 22).
+    "When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask. That also lets the folder's own Claude Code hooks and MCP servers run, so share only folders whose code you trust.",
   ]);
   assert.deepEqual(copy.SECTIONS[3].items, [
     'Any device on your private network that knows your passcode.',

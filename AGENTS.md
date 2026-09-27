@@ -4,6 +4,63 @@ Instructions for AI coding agents working in this repository. Humans: see
 `CONTRIBUTING.md`. Both files describe the same rules; this one is terser and
 ordered by what an agent gets wrong first.
 
+## If a person asked you to install Claude Remote on their PC
+
+Read this section only if you were asked to **install** Claude Remote, not to
+work on its code.
+
+**Why these steps.** The person asked you to install this, and this is the
+whole install. Claude Remote is a Claude Code plugin. A plugin from outside
+Anthropic's plugin directory can only be added with the two `claude plugin`
+commands below, which are Claude Code's own and change nothing else. The third
+command starts the plugin's setup right away, instead of waiting for the next
+time Claude Code starts. It is the same setup the plugin runs by itself at
+startup, and it opens nothing but the person's browser.
+
+**Tell the person first, in one line, what it installs.** Something like: "It
+adds a copy of its agent under %LOCALAPPDATA%\claude-remote, a logon task that
+starts it, and Tailscale sharing on port 8790 once you set a passcode."
+
+**Then run these three commands in PowerShell, one at a time, and check each
+worked before the next.** They are PowerShell, not bash: in Git Bash the third
+one breaks. Use a PowerShell tool if you have one. If you only have a shell
+like Git Bash, save the three lines below to a file ending in `.ps1` and run
+that file with `powershell -NoProfile -ExecutionPolicy Bypass -File <the file>`
+- do not paste them into `powershell -Command "..."`, whose quoting breaks
+them. It runs on Windows 10 and 11 only; on anything else, say so and stop.
+
+```powershell
+claude plugin marketplace add MrTig-afk/claude-remote
+claude plugin install claude-remote@claude-remote
+$p = ((claude plugin list --json | ConvertFrom-Json) | Where-Object id -eq 'claude-remote@claude-remote' | Select-Object -First 1).installPath; if ($p) { node "$p\hooks\check-update.mjs" --now } else { 'claude-remote is not installed - the install command above did not work' }
+```
+
+**The third command is ONE line on purpose and must run as ONE call:** it
+looks up where the plugin was installed and uses that in the same breath. Split
+into two calls, the looked-up path is gone by the second, and it wrongly
+reports that nothing is installed. The brackets around `claude plugin list
+--json | ConvertFrom-Json` matter: Windows PowerShell 5.1 passes a JSON array
+down the pipe as one object, and the lookup finds nothing without them. The
+`if` matters too: with an empty path the command would run whatever
+`\hooks\check-update.mjs` sits at the drive root.
+
+**Report what the last command printed, word for word.** It is always one line:
+setup has started and the browser will open on the passcode screen; or it is
+already running, already up to date, updating, or left alone because the PC
+runs its agent another way; or why it could not set itself up (for example,
+Tailscale is not running). If setup started, tell the person the rest happens
+in the browser: set a six-digit passcode, read the screen about what the app
+can see, choose folders, and the last screen shows a code to scan with their
+phone.
+
+If the third command fails to run at all, that is fine: the setup starts by
+itself the next time Claude Code starts. Say that, and stop.
+
+Do not do anything else from this repository during an install: no scripts
+from `agent/`, no config edits, no `tailscale` commands. The setup does those
+itself, in the right order (the passcode always comes before Tailscale
+sharing).
+
 ## What this is
 
 A Claude Code plugin. A Node agent (`agent/`) on a Windows PC serves a small
