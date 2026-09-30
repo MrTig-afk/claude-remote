@@ -1,13 +1,13 @@
 // readAgentVersion and readNewestRelease both read a file off disk at module
-// load. Dropped once while resolving the M11 merge, which made every version
+// load. Dropped once while resolving a merge, which made every version
 // read return 'unknown' with a `fs is not defined` warning - the agent still
 // booted and still answered, which is exactly why only a test caught it.
 import fs from 'node:fs';
 import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 
-// The single default_base_folder was replaced by the shared_folders set at M9;
-// resolveSharedFolders is the only reader. T54 then deleted resolveBaseDir
+// The single default_base_folder was replaced by the shared_folders set;
+// resolveSharedFolders is the only reader. A cleanup then deleted resolveBaseDir
 // outright - it had no production caller.
 import {
   resolveSharedFolders, isAcknowledged, acknowledge, readStatusFacts,
@@ -189,7 +189,7 @@ async function handleAuthRoute(req, res, ctx, url) {
       sendJson(res, result.status, { error: result.error });
       return true;
     }
-    // R21.3: the passcode now exists, so - and only now - the tailnet may
+    // The passcode now exists, so - and only now - the tailnet may
     // reach this agent. setPasscode succeeds exactly once (409 after), so
     // this is the FIRST set. Never awaited; phoneServe is the real server's
     // opt-in only, so no test ever runs a real tailscale serve.
@@ -243,14 +243,14 @@ export async function handleRequest(req, res, ctx) {
     }
     // -----------------------------------------------------------------------
 
-    // Both halves of the accept screen (M9), on one pathname because they are
+    // Both halves of the accept screen, on one pathname because they are
     // one thing. The POST reads NO request body: the body is empty by
     // contract, and running it through readJsonObject would turn a
     // correctly-empty POST into a 400. Nothing in the body could change what
     // this route does, so there is nothing to parse.
     if (url.pathname === '/api/acknowledge') {
       if (req.method === 'GET') {
-        // shared_folders is T100's OQ-A: the phone cannot otherwise tell
+        // shared_folders is here because the phone cannot otherwise tell
         // "nothing shared" from "shared, empty", or notice a root that has
         // vanished. rootsFrom(ctx), never a fresh config read - it is the
         // same set /api/projects lists from, so the two can never disagree.
@@ -272,7 +272,7 @@ export async function handleRequest(req, res, ctx) {
       // Any other method falls through to the 404 at the bottom.
     }
 
-    // Lane 7's Change passcode. Deliberately NOT under /api/auth/*: those
+    // Settings' Change passcode. Deliberately NOT under /api/auth/*: those
     // three are the routes that run BEFORE the gate, and this one is their
     // opposite - it sits behind the token gate above and re-checks the
     // current passcode on top of it. The prefix matters on the client too:
@@ -355,7 +355,7 @@ export async function handleRequest(req, res, ctx) {
       if (authz.viaFirstRun) spendFirstRun(req, ctx);
       // The set every route reads is ctx.sharedFolders, not the file
       // putSharedFolders just wrote - rootsFrom(ctx) never re-reads disk.
-      // ponytail: an agent restart is still needed if the file is ever
+      // Known limit: an agent restart is still needed if the file is ever
       // hand-edited instead of written through this route - unchanged ceiling.
       ctx.sharedFolders = result.shared_folders;
       sendJson(res, 200, { shared_folders: result.shared_folders });
@@ -464,7 +464,7 @@ export async function handleRequest(req, res, ctx) {
       return;
     }
 
-    // Lane 23: the phone address for the desk's "Open it on your phone"
+    // The phone address for the desk's "Open it on your phone"
     // screen and Settings > Agent status. POST reads no body, like
     // /api/acknowledge: TRY AGAIN has nothing to say but "again".
     if (url.pathname === '/api/phone' && req.method === 'GET') {
@@ -489,7 +489,7 @@ export async function handleRequest(req, res, ctx) {
       // an mkdirSync ENOENT failure to a 500 of the same code - app.js maps
       // on the code, not the status, so no client change is needed for
       // either status).
-      // R20: `root` names the folder of projects the phone is looking at. It
+      // `root` names the folder of projects the phone is looking at. It
       // is a LOOKUP KEY against a closed server-side set, never a path to
       // build from: a shared container root, or a folder of projects that
       // listProjects itself reports under one (the drilled-in screen - it is
@@ -577,7 +577,7 @@ export async function handleRequest(req, res, ctx) {
       }
       // Two keys, one contract. `project` is what the client sends for
       // anything resolveProjectPath will accept: a top-level project and,
-      // since T68, a project exactly one level inside a container. A desk
+      // for nested projects, a project exactly one level inside a container. A desk
       // session sitting anywhere else under a project - deeper than one
       // level, or under a folder that is not a container - has no `project`
       // the client could legally name, so it sends session_name instead, and
@@ -639,7 +639,7 @@ if (import.meta.main) {
   // stat each one again here. The one thing worth a boot-time warn is the
   // empty set itself: on THIS install (no config.json yet) it means every
   // /api/projects call returns [] until the owner completes the accept
-  // screen (T96) and ticks a folder in the picker (T97).
+  // screen and ticks a folder in the picker.
   if (sharedFolders.length === 0) {
     console.warn('claude-remote agent: no folders are shared yet; /api/projects will return an empty list until the picker is used');
   }

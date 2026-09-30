@@ -1,4 +1,4 @@
-// Pure shell module for Lane 10 (R1, R2) - the hand-off to the Claude app.
+// Pure shell module for the hand-off to the Claude app.
 // No DOM access anywhere, not at module scope and not inside a function, so
 // `node --test` imports it directly the same way it imports update-ui.js,
 // folders-ui.js and copy.js. app.js is the only place any of this touches
@@ -16,7 +16,7 @@
  *
  * !! UNVERIFIED ON A DEVICE. Read this before trusting the button. !!
  *
- * The owner chose a deep link over `https://claude.ai/code` (Artifact Q3),
+ * The owner chose a deep link over `https://claude.ai/code`,
  * accepting one known ceiling: on a device WITHOUT the Claude app installed
  * the link does nothing and shows no error. That ceiling is deliberate.
  *
@@ -61,7 +61,7 @@ export function handoffReady(session) {
 /**
  * The banner's two lines. `project` is the project's own display name.
  *
- * The Claude app is NAMED rather than described (Artifact Q2). A generic
+ * The Claude app is NAMED rather than described. A generic
  * "your session is ready elsewhere" is not an instruction - it tells someone
  * who does not already know the flow exactly nothing, which is the failure
  * this banner exists to fix.
@@ -91,7 +91,7 @@ export function handoffCopy(project) {
 }
 
 /**
- * Browser-storage key for R2's once-only sheet. (Named, not spelled: a test
+ * Browser-storage key for the once-only sheet. (Named, not spelled: a test
  * asserts this module references no browser global at all, and it reads the
  * source rather than the bindings - so writing the API's name here, even in a
  * comment, fails it. Same trap this project has hit twice before.)
@@ -99,7 +99,7 @@ export function handoffCopy(project) {
  * Per DEVICE, not per install, and that is the right scope: the sheet
  * explains that this app hands off to another one, which is something each
  * new phone's owner needs telling once. It is also the only per-device state
- * in the app - everything else is derived from the PC (Artifact Lane 14), and
+ * in the app - everything else is derived from the PC, and
  * this is a viewer convenience rather than product state, which is exactly
  * what browser storage is for.
  *

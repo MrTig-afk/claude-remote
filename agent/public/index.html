@@ -32,7 +32,7 @@
       <rect x="286" y="290" width="126" height="106" rx="10"/>
       <path d="M 214 226 L 298 290"/>
     </symbol>
-    <!-- Lane 6 and Lane 7 of the userflow artifact put an icon on the LEFT of
+    <!-- The approved Settings screens put an icon on the LEFT of
          every settings row: "icon or control on the LEFT, name and state
          stacked in the middle, chevron on the right. No exceptions anywhere
          in the app." These are the artifact's own paths, copied verbatim so
@@ -89,7 +89,7 @@
              A literal here would be a fifth copy the drift test does not know
              about, and it is visible behind the passcode screen. -->
         <div class="ver" id="hdr-ver"></div>
-        <!-- Lane 5, step 1: the update marker. A plain dot on the gear, and
+        <!-- The update marker. A plain dot on the gear, and
              the artifact is explicit that it does NOT animate - "a pulsing dot
              is a nag, and you picked the quiet option". It ships hidden; only
              renderUpdateDot reveals it, by the hidden attribute, so the
@@ -134,7 +134,7 @@
         </span>
       </button>
 
-      <!-- R6. Two wrappers, and they are LAYOUT ONLY: at >=900px they are the
+      <!-- Two wrappers, and they are LAYOUT ONLY: at >=900px they are the
            main column, above and below the sidebar's row. Below 900px both are
            `display: contents`, so the phone's flex flow and DOM order are
            byte-identical to before they existed. They exist because several
@@ -144,7 +144,7 @@
       <div id="pane-top">
       <div class="banner" id="banner" role="status" aria-live="polite" hidden></div>
 
-      <!-- Lane 10 / R1. A sibling of #banner, not a child: setBanner() clears
+      <!-- A sibling of #banner, not a child: setBanner() clears
            the banner's innerHTML on every call, so a button living inside it
            would be wiped by the next message. An <a href> rather than a
            button so the deep link is the browser's job - nothing in app.js
@@ -166,7 +166,7 @@
         </div>
       </div>
 
-      <!-- Lane 21 step 5: the nothing-shared prompt, repeated in the wide pane
+      <!-- The nothing-shared prompt, repeated in the wide pane
            at >=900px only (app.css). Filled by renderProjects. -->
       <div class="pane-empty" id="pane-empty" hidden><svg width="34" height="34" aria-hidden="true"><use href="#mark"/></svg><div id="pane-empty-body"></div></div>
 
@@ -180,10 +180,10 @@
 
       </div><!-- /#pane-top -->
 
-      <!-- id is R6's: at >=900px this whole section becomes the desktop
+      <!-- id is the desktop layout's: at >=900px this whole section becomes the desktop
            sidebar. -->
       <section class="zone" id="zone-list">
-        <!-- Lane 9: with ONE shared folder this header is named after that
+        <!-- With ONE shared folder this header is named after that
              folder ("All projects" told you nothing), and the list below it
              stays flat and expanded so a single-folder install looks exactly
              as it did before folders existed. With two or more it is hidden
@@ -196,7 +196,7 @@
         <div class="list" id="projects"></div>
       </section>
 
-      <!-- Lane 22: the + opens a menu. The GLYPH turns into an x, not its box,
+      <!-- The + opens a menu. The GLYPH turns into an x, not its box,
            so it has a span of its own. The scrim is the tap-anywhere-to-close
            target and covers the header too; the blur and dim are on the list
            behind it (app.css). -->
@@ -263,7 +263,7 @@
         <div class="gate-title" id="gate-title">Enter passcode</div>
         <div class="gate-sub" id="gate-sub">6 digits. Asked every time the app opens.</div>
 
-        <!-- Lane 1 and Lane 2 both draw an eye beside the digits. NOT a
+        <!-- The approved gate draws an eye beside the digits. NOT a
              <label> wrapper: a click on a button inside a <label> is
              forwarded to the labelled control, so the reveal would also move
              the caret. `for` gives the same association without that.
@@ -299,11 +299,11 @@
         <button class="gate-go" id="gate-go" type="submit" disabled>UNLOCK</button>
         <div class="gate-msg" id="gate-msg" role="status" aria-live="polite"></div>
 
-        <!-- Lane 19 step 15 (sequence 11, owner: "Yes, show the fix"). Under
+        <!-- The serve_missing fix (owner: "Yes, show the fix"). Under
              the waiting line above, never instead of it. Revealed by
              lock.js's showServeMissingNotice(), hidden again once the PC
              answers (checkStatus succeeds) - the same SERVE_MISSING copy and
-             serveCommand() step 14 uses, so there is one source for these
+             serveCommand() the serve_missing alert uses, so there is one source for these
              words, not two. -->
         <div class="gate-serve-missing" id="gate-serve-missing" hidden>
           <div class="banner set-warn"><span id="gate-serve-missing-banner"></span></div>
@@ -354,7 +354,7 @@
       </div>
     </main>
 
-    <!-- Lane 23 steps 3-4 (Artifact sequence 17): the desk's last first-run
+    <!-- The desk's last first-run
          screen, shown once after the picker's SAVE or SKIP. Words verbatim
          from the Artifact; phone.js only picks the variant and fills in the
          address, which the agent reads from Tailscale. Both variants ship
@@ -367,7 +367,7 @@
           <p class="phone-lede">Your phone needs the Tailscale app too, from tailscale.com/download, signed in to the same Tailscale account as this PC. Then scan this with its camera, or type the address.</p>
           <div class="phone-qr" id="phone-qr"></div>
           <div class="phone-url"><span id="phone-url"></span><button class="phone-copy" id="phone-copy" type="button">COPY</button></div>
-          <!-- Lane 23 step 3b (Artifact sequence 24): closed by default. -->
+          <!-- Closed by default. -->
           <details class="ts-more">
             <summary><svg class="ico" width="14" height="14" aria-hidden="true"><use href="#i-info"/></svg><span>No Tailscale on your phone?</span><svg class="ico chev" width="14" height="14" aria-hidden="true"><use href="#i-chev"/></svg></summary>
             <div class="ts-panel">
@@ -400,12 +400,12 @@
       </div>
     </main>
 
-    <!-- Settings root (T77). One <main> per screen, listed in SCREEN_MAIN -
-         showScreen is the only thing that reveals it. T79-T85 add their own
+    <!-- Settings root. One <main> per screen, listed in SCREEN_MAIN -
+         showScreen is the only thing that reveals it. The settings screens add their own
          group headings and rows beside FOLDERS; this ships with the one
          destination that already exists. -->
     <main id="settings" hidden>
-      <!-- The Artifact's Lane 6 frame header is a title plus an X. The title
+      <!-- The approved Settings header is a title plus an X. The title
            shipped as 9px var(--dim) - the palette's DISABLED colour - and the
            X did not ship at all, so the only ways out of Settings were the
            header mark and the Android back gesture. On an installed PWA with
@@ -422,19 +422,19 @@
       <!-- Group headers and rows are both built by renderSettings from one
            table, so the artifact's grouping lives in exactly one place. It
            shipped once as a single hard-coded FOLDERS section holding one
-           row; Lane 6 of the userflow artifact draws four groups. -->
+           row; the approved Settings root draws four groups. -->
       <div id="settings-list"></div>
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 7 destinations. Every settings row leads to one of these, or to
+    <!-- The settings screens. Every settings row leads to one of these, or to
          an action; there are no rows that answer a tap with nothing. Each is
          its own <main> and is listed in SCREEN_MAIN, so they inherit
          showScreen, goHome and the Android back handling for free. -->
 
     <main id="set-see" hidden>
       <div class="set-head">
-        <!-- The crumb from Lane 7: every sub-screen names the screen it
+        <!-- The crumb: every sub-screen names the screen it
              returns to. data-set-back is what wires it, so a screen added
              later gets the behaviour by copying the markup. -->
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
@@ -449,7 +449,7 @@
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 3, step 2 - "Editing one". Reached from a Shared folders row,
+    <!-- "Editing one". Reached from a Shared folders row,
          so its crumb names that screen. The rows here are the picker's own
          .share-row / .share-tick, because they are the same control doing the
          same job - ticking a folder. -->
@@ -473,7 +473,7 @@
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 5, step 3. Reached from About's update row, so its crumb says
+    <!-- The update screen. Reached from About's update row, so its crumb says
          About and not Settings - it is the one screen in the app two levels
          below the settings root. -->
     <main id="set-update" hidden>
@@ -510,11 +510,11 @@
         <div class="set-label">Shared folders</div>
       </div>
       <div class="set-body">
-        <!-- Lane 4's "folder is gone" banner. Revealed by renderSharedScreen
+        <!-- The "folder is gone" banner. Revealed by renderSharedScreen
              only when the agent reports a root missing. -->
         <div class="banner set-gone" id="shared-gone" role="status" aria-live="polite" hidden></div>
         <div id="shared-rows"></div>
-        <!-- Lane 8's remove confirmation. One panel for the whole screen, not
+        <!-- The remove confirmation. One panel for the whole screen, not
              one per row: only one removal can be in flight at a time, and a
              panel per row would put N copies of the same words on the page. -->
         <div class="set-confirm" id="shared-confirm" hidden>
@@ -537,7 +537,7 @@
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 19. renderNotify() draws every state from state.push; the two
+    <!-- renderNotify() draws every state from state.push; the two
          inputs here are the only ones the Chrome input-zoom guard can see, so
          both are static markup even though everything around them is built
          by script. -->
@@ -578,7 +578,7 @@
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 19 states 8/9 - two panels, one open at a time, moved under
+    <!-- Two panels, one open at a time, moved under
          whichever device row raised them (openNotifyRename/openNotifyRemove). -->
     <div class="set-confirm" id="notify-rename" hidden>
       <div class="gate-field">
@@ -601,7 +601,7 @@
       <button class="set-btn" id="notify-remove-cancel" type="button">CANCEL</button>
     </div>
 
-    <!-- Lane 20 - the one inline passcode panel every share-changing action
+    <!-- The one inline passcode panel every share-changing action
          opens (openReauth in app.js), moved to sit where its caller's own
          buttons were. -->
     <div class="set-confirm" id="reauth" hidden>
@@ -627,7 +627,7 @@
 
     <main id="set-passcode" hidden>
       <div class="set-head">
-        <!-- The crumb from Lane 7: every sub-screen names the screen it
+        <!-- The crumb: every sub-screen names the screen it
              returns to. data-set-back is what wires it, so a screen added
              later gets the behaviour by copying the markup. -->
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
@@ -705,7 +705,7 @@
 
     <main id="set-agent" hidden>
       <div class="set-head">
-        <!-- The crumb from Lane 7: every sub-screen names the screen it
+        <!-- The crumb: every sub-screen names the screen it
              returns to. data-set-back is what wires it, so a screen added
              later gets the behaviour by copying the markup. -->
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
@@ -715,7 +715,7 @@
       </div>
       <div class="set-body">
         <div id="agent-facts"></div>
-        <!-- Lane 23: the phone address, the same code and COPY as the
+        <!-- The phone address, the same code and COPY as the
              first-run screen. Hidden until sharing is on (phone.js). -->
         <div class="phone-row" id="agent-phone" hidden>
           <div class="row folder set-row">
@@ -742,7 +742,7 @@
 
     <main id="set-reset" hidden>
       <div class="set-head">
-        <!-- The crumb from Lane 7: every sub-screen names the screen it
+        <!-- The crumb: every sub-screen names the screen it
              returns to. data-set-back is what wires it, so a screen added
              later gets the behaviour by copying the markup. -->
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
@@ -771,7 +771,7 @@
 
     <main id="set-about" hidden>
       <div class="set-head">
-        <!-- The crumb from Lane 7: every sub-screen names the screen it
+        <!-- The crumb: every sub-screen names the screen it
              returns to. data-set-back is what wires it, so a screen added
              later gets the behaviour by copying the markup. -->
         <button class="set-back" type="button" data-set-back aria-label="Back to Settings">
@@ -790,7 +790,7 @@
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 7, Contact me. Reached from About, so its crumb says About - the
+    <!-- Contact me. Reached from About, so its crumb says About - the
          second screen in the app two levels below the settings root. Two
          rows and no sub-lines, per the Artifact's Decided table ("LinkedIn
          and email only. No Medium, no descriptions under the rows"). Static
@@ -824,7 +824,7 @@
       <div class="spacer"></div>
     </main>
 
-    <!-- Lane 10 / R2. The once-only sheet explaining the two-app flow.
+    <!-- The once-only sheet explaining the two-app flow.
          A SIBLING of the screens, never inside one. It used to live in
          #picker, which meant Settings > About could "open" it into a
          display:none subtree: nothing drew, focus() did nothing, but the

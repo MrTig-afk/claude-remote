@@ -22,7 +22,7 @@ function b64u(s) {
   return Buffer.from(s, 'base64url');
 }
 
-// --- T128: state ---
+// --- state ---
 
 test('readPushState: missing file, corrupt JSON, bad VAPID shape -> empty, never throws', () => {
   const ctx = tmpCtx();
@@ -62,7 +62,7 @@ test('ensureVapid is idempotent: same keys, file unchanged on the second call', 
   fs.rmSync(ctx.dir, { recursive: true, force: true });
 });
 
-test('M22-C3: a VAPID pair whose halves do not match reads as no keys, and regeneration drops the dead subscriptions', () => {
+test('a VAPID pair whose halves do not match reads as no keys, and regeneration drops the dead subscriptions', () => {
   const ctx = tmpCtx();
   const a = generateVapidKeys();
   const b = generateVapidKeys();
@@ -82,7 +82,7 @@ test('M22-C3: a VAPID pair whose halves do not match reads as no keys, and regen
   fs.rmSync(ctx.dir, { recursive: true, force: true });
 });
 
-test('M22-D2-S1: a push.json that exists but cannot be read is never overwritten', () => {
+test('a push.json that exists but cannot be read is never overwritten', () => {
   const ctx = tmpCtx();
   assert.equal(ensureVapid(ctx).ok, true);
   const bytes = fs.readFileSync(ctx.pushPath);
@@ -103,7 +103,7 @@ test('M22-D2-S1: a push.json that exists but cannot be read is never overwritten
   fs.rmSync(ctx.dir, { recursive: true, force: true });
 });
 
-test('M22-C3: sendPush reports a signing failure instead of throwing', async () => {
+test('sendPush reports a signing failure instead of throwing', async () => {
   const keys = generateVapidKeys();
   const sub = { endpoint: 'https://web.push.apple.com/abc', keys: { p256dh: keys.publicKey, auth: Buffer.alloc(16, 2).toString('base64url') } };
   let fetched = false;
@@ -132,7 +132,7 @@ test('generateVapidKeys shape, and a vapidJwt signed with it verifies against it
   );
 });
 
-test('R19: changePasscode success leaves push.json byte-identical', () => {
+test('changePasscode success leaves push.json byte-identical', () => {
   const ctx = tmpCtx();
   ctx.passcodePath = path.join(ctx.dir, 'passcode.json');
   ctx.attemptsPath = path.join(ctx.dir, 'passcode-attempts.json');
@@ -148,7 +148,7 @@ test('R19: changePasscode success leaves push.json byte-identical', () => {
   fs.rmSync(ctx.dir, { recursive: true, force: true });
 });
 
-// --- T129: sender ---
+// --- sender ---
 
 const V = {
   plaintext: b64u('V2hlbiBJIGdyb3cgdXAsIEkgd2FudCB0byBiZSBhIHdhdGVybWVsb24'),

@@ -50,7 +50,7 @@ const state = {
   // app always opens on the passcode gate, before boot() has asked the
   // agent anything.
   screen: 'gate',
-  // Lane 9: which folder sections are expanded, by name. Held here rather
+  // Which folder sections are expanded, by name. Held here rather
   // than read off the DOM so a re-render cannot collapse what the owner
   // opened. A single section ignores this and is always open.
   openSections: [],
@@ -65,7 +65,7 @@ const state = {
   // True once the service worker has swapped in a shell newer than the one
   // this page is running. Set by controllerchange, never polled.
   shellStale: false,
-  // R4. Set from navigator.onLine at the moment a request comes back with
+  // Set from navigator.onLine at the moment a request comes back with
   // nothing, never polled: a stale reading here would blame the wrong end.
   offline: false,
   // GET /api/status's body, or null = not asked yet / it failed. Only the
@@ -85,10 +85,10 @@ const state = {
   // { path, mode, excludes, new_folders, missing }, or null = it has not told
   // us. null and absent mean the same thing everywhere - see listZoneState.
   shared: null,
-  // Lane 19. null = refreshPush has not answered yet. Otherwise
+  // null = refreshPush has not answered yet. Otherwise
   // { reason, mine, devices, publicKey } - see refreshPush.
   push: null,
-  // Lane 19 step 14/15 - set when the page is opened from the serve_missing
+  // Set when the page is opened from the serve_missing
   // notification (the URL fragment, or the service worker's postMessage on an
   // already-open tab), cleared by the next successful load().
   serveMissing: false,
@@ -99,16 +99,16 @@ const state = {
 const reported = new Set();
 
 // The whole routing table. One <main> per screen, exactly one visible at a
-// time. T79-T85 add a key and a <main> here and inherit showScreen, goHome
+// time. Each settings screen adds a key and a <main> here and inherits showScreen, goHome
 // and the back handling with no further wiring.
 const SCREEN_MAIN = {
   gate: 'gate',
   accept: 'accept',
   list: 'picker',      // #picker IS the project list - it predates the folder picker
-  folders: 'folders',  // the folder picker (T97)
-  phone: 'phone',      // Lane 23 - "Open it on your phone", once, after the first-run picker
+  folders: 'folders',  // the folder picker
+  phone: 'phone',      // "Open it on your phone", once, after the first-run picker
   settings: 'settings',
-  // Lane 7 destinations. Exactly one level below the settings root - the app
+  // The settings screens. Exactly one level below the settings root - the app
   // is never three screens deep in Settings - which is what lets the history
   // handling below stay a root flag plus one sub, rather than a stack.
   shared: 'set-shared',
@@ -120,7 +120,7 @@ const SCREEN_MAIN = {
   reset: 'set-reset',
   about: 'set-about',
   contact: 'set-contact',  // two deep, About -> Contact me; the settingsSubs stack carries it
-  notify: 'set-notify',    // Lane 19 - Settings > Alerts > Notifications
+  notify: 'set-notify',    // Settings > Alerts > Notifications
 };
 
 // The screens that are BELOW the settings root. Membership is what tells
@@ -134,7 +134,7 @@ const SETTINGS_SUBS = new Set(['shared', 'passcode', 'see', 'agent', 'reset', 'a
 // hideAccept() comment in boot() describes), records which screen the app is
 // on, and keeps the two pieces of header chrome that depend on it honest.
 function showScreen(name, direction = null) {
-  // Leaving a screen closes whatever Lane 20/19 panel was open on it, the
+  // Leaving a screen closes whatever passcode or notification panel was open on it, the
   // same way CANCEL does - a panel left wired behind a screen that is no
   // longer showing is a stale listener set waiting to fire on the wrong
   // target the next time one of these opens.
@@ -353,7 +353,7 @@ function rowState(p) {
     }
     if (session.status === 'ending') {
       // The brief claim between STOP and the process actually being gone.
-      // Called 'handoff' until T101; an agent is never older than its own
+      // Called 'handoff' until 2026-09-05; an agent is never older than its own
       // shell, so this side needs no back-compat.
       // The reverse pairing IS possible - a CACHED shell against a newer agent
       // - and it is worse than a single wrong poll: the old shell's
@@ -476,7 +476,7 @@ function buildTile(p, rs) {
   el.appendChild(status);
 
   if (state.confirmName === p.name) {
-    // Artifact Lane 2, approved sequence 3. The app writes no handoff, so the
+    // As approved. The app writes no handoff, so the
     // confirm says so and points at the only thing that can - Claude itself,
     // while the session still has its context. A WARNING, not a gate: END
     // ANYWAY is one tap, because a stop you cannot perform from a train is
@@ -574,11 +574,11 @@ function buildRow(p, rs) {
   return btn;
 }
 
-// The way out (T100). `withAction` is false for 'unknown-shared' only - see
+// The way out. `withAction` is false for 'unknown-shared' only - see
 // the safety rule on onChooseFolders; it is the one state that must NOT
 // offer the picker.
 // `action` is 'choose', 'retry', or null for an empty state with no control.
-// It was a boolean until R4 needed a second kind; a second builder would have
+// It was a boolean until the offline state needed a second kind; a second builder would have
 // been two copies of the same four elements.
 function buildEmptyState({ title, body }, action) {
   const el = document.createElement('div');
@@ -602,7 +602,7 @@ function buildEmptyState({ title, body }, action) {
   return el;
 }
 
-// Lane 19 step 14, drawn only while state.serveMissing holds: the PC's own
+// Drawn only while state.serveMissing holds: the PC's own
 // warning, the command it already told the phone to run, and the same TRY
 // AGAIN control the ordinary CANNOT_REACH screen carries (onProjectTap's
 // [data-retry] branch answers both).
@@ -637,7 +637,7 @@ function buildServeMissingState() {
   return el;
 }
 
-// One gone root's notice (T100), additive above the rows - see the
+// One gone root's notice, additive above the rows - see the
 // precedence rules in renderProjects. `.share-new` is reused wholesale for
 // REMOVE: same bordered, unfilled, colourless language as everywhere else in
 // this app, and no new rule to carry.
@@ -676,7 +676,7 @@ let launchBannerFor = null;
 
 function setBanner(tone, parts) {
   launchBannerFor = null;
-  // R1: the hand-off button belongs to ONE banner - the hand-off one. Any
+  // The hand-off button belongs to ONE banner - the hand-off one. Any
   // other message replacing that banner must take the button with it, or a
   // "could not end the session" line would sit above a button offering to
   // open it. Cleared here and in hideBanner(), which between them are the
@@ -705,7 +705,7 @@ function hideBanner() {
   el.innerHTML = '';
 }
 
-// ---- Lane 10 / R1: the hand-off ------------------------------------------
+// ---- The hand-off to the Claude app ---------------------------------------
 // The app starts sessions on the PC and cannot show them - they are driven
 // from the Claude app's Code tab, because launch-session.ps1 runs
 // `claude.cmd --remote-control`. Everything below exists to say so at the one
@@ -744,7 +744,7 @@ function showHandoff(project) {
   maybeShowSheet();
 }
 
-// ---- Lane 10 / R2: the once-only sheet ------------------------------------
+// ---- The once-only sheet --------------------------------------------------
 
 // Every access is wrapped: localStorage throws outright in some contexts
 // (private windows, blocked site data) and a thrown read here would break the
@@ -802,7 +802,7 @@ function showSheet() {
  * confirmStarting and watchSessions, which keep polling whatever screen is
  * showing - so tapping a project and then opening Settings before the launch
  * lands would un-hide the sheet behind Settings, mark it seen, and push a
- * history entry under the owner. The one piece of onboarding R2 exists for
+ * history entry under the owner. The one piece of onboarding this sheet exists for
  * would be consumed without ever being rendered, and never shown again.
  */
 function maybeShowSheet() {
@@ -855,7 +855,7 @@ function closeSheet() {
   // hideSheet, NOT closeSheetHard: the flag must survive until the pop this
   // issues actually lands, or onPopState misses the sheet branch and the
   // SETTINGS branch reads it instead - popping About out from under the
-  // owner. A ponytail pass folded these two together and reintroduced exactly
+  // owner. A simplification pass folded these two together and reintroduced exactly
   // that; the browser caught it, the suite did not.
   hideSheet();
   // The flag is deliberately NOT cleared here - the popstate branch owns it.
@@ -907,7 +907,7 @@ function clearSettledLaunchBanner() {
   const s = sessionFor(p);
   if (s) {
     if (s.status === 'starting') return; // still coming up, the banner is the only signal
-    // R1. The launch landed. If it landed LIVE this is the one moment the
+    // The launch landed. If it landed LIVE this is the one moment the
     // hand-off is worth saying, so the "start requested" line is replaced by
     // it rather than just cleared. Any other landing (failed, already tearing
     // down) falls through and clears as before - sending someone to the
@@ -1167,7 +1167,7 @@ async function watchHealth() {
 // leaves behind is the same one load() reaches on the same failure, so the
 // screen lands exactly where it would have.
 function markUnreachable() {
-  // R4, same rule as load(): navigator.onLine is read only to explain a
+  // Same rule as load(): navigator.onLine is read only to explain a
   // failure that has already happened, never to predict one. Answering
   // `false` is the case it is reliable for.
   state.offline = navigator.onLine === false;
@@ -1269,7 +1269,7 @@ function renderConn() {
     text.textContent = 'AGENT REACHABLE';
     text.classList.add('reachable');
   } else if (state.offline) {
-    // R4. Names THIS device, not the PC. "CANNOT REACH AGENT" here would be
+    // Names THIS device, not the PC. "CANNOT REACH AGENT" here would be
     // true and useless - it is the sentence that sends someone to go and
     // check a machine that is working.
     setDot(dot, 'dim');
@@ -1313,7 +1313,7 @@ function renderProjects() {
     : (state.projects.find((p) => p.name === state.openFolder && p.container) ?? null);
   if (state.openFolder !== null && !open) state.openFolder = null;
 
-  // Section 2a of T100's spec, driven by one call - see listZoneState for the
+  // The empty and broken list states, driven by one call - see listZoneState for the
   // precedence order and why "unreachable" must beat every shared-set check.
   const zone = listZoneState({
     reachable: state.reachable,
@@ -1322,10 +1322,10 @@ function renderProjects() {
     projectCount: state.projects.length,
     shared: state.shared,
   });
-  // Lane 22: what the + offers here. New project is left out where the agent
+  // What the + offers here. New project is left out where the agent
   // could only answer base_unavailable; Share folder works whenever the set is
   // known, which is why the + no longer hides on nothing-shared or all-gone.
-  // Inside a folder it is New project alone (sequence 18).
+  // Inside a folder it is New project alone.
   renderBackBar(open, plusMenuItems(state.shared, open !== null));
 
   const rows = open
@@ -1399,7 +1399,7 @@ function renderProjects() {
   runCount.textContent = String(tiles.length);
 
   // The whole Running section goes away when the agent cannot be reached, as
-  // both unreachable frames in Artifact Lane 13 draw it. Left up it read
+  // both unreachable frames in the approved design draw it. Left up it read
   // "RUNNING 0 - nothing running - tap a project to start a session", which is
   // two lies and an invitation: state.sessions is null (UNKNOWN, which is what
   // the footer says), sessions may well still be running on the PC, and there
@@ -1407,14 +1407,14 @@ function renderProjects() {
   // a minute to notice; it is on screen in seconds now.
   document.getElementById('zone-run').hidden = state.reachable !== true;
 
-  // State 2 (T100): additive, above the rows it never blanks. An unreachable
+  // State 2: additive, above the rows it never blanks. An unreachable
   // agent never gets to accuse a folder of being gone, and the drill-in
   // screen is scoped to one container - a whole-share notice there is noise.
   if (state.reachable === true && state.openFolder === null) {
     for (const root of missingRoots(state.shared)) listEl.appendChild(buildGoneNotice(root));
   }
 
-  // Lane 21 step 5 (sequence 15): at desktop width the NOTHING-SHARED prompt
+  // At desktop width the NOTHING-SHARED prompt
   // is drawn in the wide pane too, where the eye lands, instead of only in the
   // 264px sidebar beside a pane saying "tap a project" to someone who has
   // none. Hidden for every other state; app.css shows it only at >=900px.
@@ -1436,7 +1436,7 @@ function renderProjects() {
     // go and check a working machine (2026-09-04). It retries either way, so
     // TRY AGAIN just repeats what is already happening rather than offering
     // something new.
-    // Lane 19 step 14: when the app was opened from the serve_missing PC
+    // When the app was opened from the serve_missing PC
     // alert, this screen additionally carries the fix the PC already named -
     // it knows which end is broken, so the app stops guessing.
     listEl.appendChild(state.serveMissing ? buildServeMissingState() : buildEmptyState(CANNOT_REACH, 'retry'));
@@ -1478,7 +1478,7 @@ function renderProjects() {
 }
 
 /**
- * Lane 9, option C. Inside a drilled-in container the list is flat - that
+ * Home grouped by folder. Inside a drilled-in container the list is flat - that
  * screen is already scoped to one folder, and grouping it by root would be a
  * second answer to a question the back bar has already answered.
  *
@@ -1494,7 +1494,7 @@ function renderRowZone(listEl, rows, open) {
   const label = document.getElementById('all-label');
   // Only list-zone rows are DRAWN here - a running project is a tile above -
   // but the sections are built from ALL of them, or a folder's header could
-  // never count the sessions running inside it, which is the number Lane 9
+  // never count the sessions running inside it, which is the number the folder header
   // puts on it.
   const list = rows.filter((r) => r.rs.zone === 'list');
 
@@ -1623,7 +1623,7 @@ function childProject(container, child) {
 
 
 // open = the resolved container entry (from renderProjects), or null.
-// plus = plusMenuItems' answer for this level (Lane 22); [] hides the +.
+// plus = plusMenuItems' answer for this level; [] hides the +.
 function renderBackBar(open, plus) {
   document.getElementById('backbar').hidden = open === null;
   // The + shows on the list and inside a folder alike. Hidden only when it
@@ -1652,7 +1652,7 @@ async function load() {
   state.results = new Map();
   hideBanner();
 
-  // Four in parallel, not three. /api/status is what Lane 5's update marker
+  // Four in parallel, not three. /api/status is what the update marker
   // is derived from, and it has to be asked for on the PROJECT LIST - the dot
   // lives on the gear there. Previously only the Agent status screen fetched
   // it, so the dot could never appear before someone had already gone looking
@@ -1663,7 +1663,7 @@ async function load() {
     getProjects(), getSessions(), getAcknowledged(), getStatus(),
   ]);
   const p = proj.value; // api.js never throws - always fulfilled
-  // R4. Read ONLY here, at the moment a request has come back with nothing -
+  // Read ONLY here, at the moment a request has come back with nothing -
   // never polled and never trusted on its own. navigator.onLine is famously
   // optimistic (true on a captive portal, true on a tailnet that is down), so
   // it is used to DISAMBIGUATE a failure that already happened rather than to
@@ -1733,9 +1733,9 @@ async function load() {
 }
 
 async function onProjectTap(e) {
-  // The two T100 checks come first, each with an early return, so neither
+  // The two list-state checks come first, each with an early return, so neither
   // can fall through to [data-folder] or [data-project].
-  // R4. Same delegate as CHOOSE FOLDERS, and checked first for the same
+  // Same delegate as CHOOSE FOLDERS, and checked first for the same
   // reason: it is a control inside the list, not a project row.
   if (e.target.closest('[data-retry]')) {
     // Reset the ladder: a tap means someone is watching, so the next
@@ -1755,7 +1755,7 @@ async function onProjectTap(e) {
   // requires the confirm's entry to always be the top one, and renderProjects' stale-
   // confirm reconcile assumes it can pop that entry safely - a folder opened
   // underneath it would break that assumption.
-  // Lane 9's collapsible folder header. Checked before [data-folder]: a
+  // The collapsible folder header. Checked before [data-folder]: a
   // section header is not a project row and must not open a drill-in.
   const section = e.target.closest('[data-section]');
   if (section) { toggleSection(section.dataset.section); return; }
@@ -1803,7 +1803,7 @@ async function onProjectTap(e) {
   watchSessions();
 }
 
-// T100's two new #projects delegate targets - onProjectTap's first two
+// The list-state #projects delegate targets - onProjectTap's first two
 // checks, above.
 
 async function onChooseFolders() {
@@ -1819,8 +1819,8 @@ let removingRoot = false;
 
 /**
  * The one write that removes a shared root, shared by the two screens that
- * can ask for it: the project list's all-gone state (T100) and the Shared
- * folders screen (Lane 3). Returns the api result - or null if a write was
+ * can ask for it: the project list's all-gone state and the Shared
+ * folders screen. Returns the api result - or null if a write was
  * already in flight - so each caller reports a failure on the surface the
  * owner is actually looking at, rather than one of them writing to a banner
  * on a screen that is not showing.
@@ -1846,7 +1846,7 @@ async function removeRoot(rootPath, passcode) {
   return res;
 }
 
-// Lane 20: the project list's own REMOVE, on the "<folder> is not on the PC
+// The project list's own REMOVE, on the "<folder> is not on the PC
 // any more" notice, asks for the passcode exactly like every other
 // share-changing action. `btn` is the tapped REMOVE button - openReauth hides
 // it. Anchored just above #projects, never next to the button: that list is
@@ -2045,7 +2045,7 @@ function goHome() {
 // owner back out of the folder. Same class of race the single-entry code
 // already had, and a second tap recovers.
 function onPopState() {
-  // R2's sheet is checked FIRST because its entry is always the topmost one
+  // The once-only sheet is checked FIRST because its entry is always the topmost one
   // while it is open: it is pushed from a launch landing, the sheet covers
   // the list so nothing under it can be tapped to push another, and it is
   // closed before anything else can be reached. Its own pop lands here, so
@@ -2091,7 +2091,7 @@ function onPopState() {
     render();
     return;
   }
-  // The phone screen opened from Settings (sequence 29) sits on Settings'
+  // The phone screen opened from Settings sits on Settings'
   // entry, so this pop is that entry's: leave both, and settle the screen's
   // promise so a later unlock does not bring it back.
   if (state.screen === 'phone' && settingsPushed) {
@@ -2111,7 +2111,7 @@ function onPopState() {
 // A synthetic desk-subfolder tile is named by the subfolder's BASENAME -
 // registry.js reports a desk view's `project` as path.basename(cwd) - so it
 // carries no container prefix and is a SINGLE segment, not the
-// '<container>/<child>' form resolveProjectPath also accepts since T68
+// '<container>/<child>' form resolveProjectPath also accepts for a project inside a folder of projects
 // (sessions.js). Resolved as a single segment it would point at a top-level
 // folder, not the subfolder, so such a tile must END by session_name instead
 // (see agent/server.js, the end-session route). Any name that IS a listed
@@ -2267,9 +2267,9 @@ async function onCreateProject() {
 
   // Name stays in the field so it can be corrected. The target line is
   // refreshed FIRST: for a name the phone thinks valid it hides the error,
-  // which swallowed every refusal from the PC until 2026-09-27 (TS-C1-02).
+  // which swallowed every refusal from the PC until 2026-09-27.
   // The refusal is about the name that was SENT; if the field was edited
-  // while the PC answered, it describes nothing on screen (TS-C1-D2-01).
+  // while the PC answered, it describes nothing on screen.
   updateNewProjectTarget();
   if (currentNameTrimmed() !== name) return;
   errorEl.textContent = newProjectErrorCopy(res.code);
@@ -2277,14 +2277,14 @@ async function onCreateProject() {
 }
 
 // ============================================================================
-// Lane 22 - the + opens a menu: Share folder / New project.
+// The + opens a menu: Share folder / New project.
 // ============================================================================
 
 // Everything behind the menu: made inert while it is open so a keyboard cannot
 // reach what the scrim stops a finger reaching - the gear or a folder row
 // would push a history entry above the menu's and desync the back stack, the
 // same reason the sheet makes `.hdr` inert.
-// ponytail: the sheet can open over the menu (a launch landing) and un-inerts
+// Known limit: the sheet can open over the menu (a launch landing) and un-inerts
 // `.hdr` when it closes; the scrim still covers it, only Tab can reach it.
 const PLUS_BEHIND = '.hdr, #backbar, #pane-top, #zone-list, #pane-bottom';
 
@@ -2338,7 +2338,7 @@ function closePlusMenu(then = null) {
 
 // Its own listener, the way the picker has onFoldersPop, so onPopState needs
 // no branch: on the list its fall-through is a no-op for this pop. history.state
-// tells the pop apart - still on the menu's entry means one ABOVE it went (R2's
+// tells the pop apart - still on the menu's entry means one ABOVE it went (the once-only
 // sheet, which onPopState owns).
 function onPlusPop() {
   if (history.state && history.state.plusMenu) return;
@@ -2397,7 +2397,7 @@ function onPlusKey(e) {
 }
 
 // ============================================================================
-// The folder picker (T97). One screen, three steps: drive list -> drill-in ->
+// The folder picker. One screen, three steps: drive list -> drill-in ->
 // checkbox list. Its own state lives here, module-level but off `state` - the
 // screen is entirely expressed by `hidden` plus an awaited promise, the same
 // way the accept screen is, so no existing test that builds a `state` object
@@ -2406,14 +2406,14 @@ function onPlusKey(e) {
 
 const share = {
   ticks: [],        // [{ path, name, newFolders, mode? }] - client-side until SAVE
-  modeOpen: null,   // the ticked path whose "Share X as" choice is open (Lane 18)
+  modeOpen: null,   // the ticked path whose "Share X as" choice is open
   path: null,       // the folder being listed, or null = the drive list
   parent: null,     // the agent's own answer for UP; null = the drive list
   rows: [],         // drives, or folders, as returned
   total: 0,
   loading: false,   // a fetch for the current level is in flight - the list
                      // zone draws one dim line and no rows while this is true
-  // ponytail: bumped by openDrives/openPath, compared after their await - a
+  // Known limit: bumped by openDrives/openPath, compared after their await - a
   // response whose token no longer matches share.nav is stale (an older
   // request that lost a race with a newer one) and is dropped rather than
   // repainted. Ceiling: per in-flight request only, never needs a reset.
@@ -2422,7 +2422,7 @@ const share = {
   error: null,      // { text, retry } | null - the one banner this screen owns
   busy: false,      // a PUT is in flight
   pushed: 0,        // history entries THIS run pushed
-  firstRun: false,  // Lane 20: only the genuine ensureAccepted() first-run
+  firstRun: false,  // Only the genuine ensureAccepted() first-run
                      // open may SAVE with no passcode; set by showFolders.
 };
 
@@ -2451,7 +2451,7 @@ function shareEls() {
 
 // Windows join only - every base path here is the agent's own `resolved` or
 // `path`, already backslash-formed. A drive root already carries its
-// trailing separator (T92's normal form is "F:\"); a deeper folder does not.
+// trailing separator (the drive list's normal form is "F:\"); a deeper folder does not.
 function joinShare(base, name) {
   return base.endsWith('\\') ? `${base}${name}` : `${base}\\${name}`;
 }
@@ -2491,11 +2491,11 @@ function buildInertRow(name, status) {
 // checkbox stays present (same alignment as a covered row) but disabled
 // rather than removed, which is buildInertRow's job.
 /**
- * The drawn tick box (Lane 8). Both glyphs go in and CSS picks one off
+ * The drawn tick box. Both glyphs go in and CSS picks one off
  * :checked, so a toggle is a paint rather than a rebuild - which is what lets
  * the tick animate its own glyph. aria-hidden: the real input beside it
  * already says everything a screen reader needs.
- * Shared by the picker and by Lane 3's per-folder editor - one control, so
+ * Shared by the picker and by the per-folder editor in Settings - one control, so
  * the two screens cannot drift into looking like different checkboxes.
  */
 function buildChk() {
@@ -2525,7 +2525,7 @@ function buildTickableRow({
   if (coverage === 'ticked') input.checked = true;
   if (coverage === 'covered' || coverage === 'covers' || !tickable) input.disabled = true;
   label.appendChild(input);
-  // Lane 8, first half: "an empty box reads as 'unset', an X reads as
+  // The picker's tick, as drawn: "an empty box reads as 'unset', an X reads as
   // deliberately off". The X and the tick are drawn HERE, in a span over the
   // real checkbox input built just above - which is visually hidden but still
   // focusable and still announced, so the keyboard, the screen reader and the
@@ -2593,10 +2593,10 @@ function buildFolderRow(folder, basePath, ticks) {
   });
   const tick = coverage === 'ticked' ? ticks.find((t) => t.path === childPath) : null;
   if (!tick) return row;
-  // Lane 18: a ticked row says how it is shared. The choice itself opens
+  // A ticked row says how it is shared. The choice itself opens
   // under the row just ticked (share.modeOpen); every other ticked row shows
   // its answer as a line that opens the same choice when tapped. On a
-  // one-project row the chevron is dimmed, not removed (Q3).
+  // one-project row the chevron is dimmed, not removed.
   if (tick.mode === 'single') row.classList.add('share-row-single');
   if (share.modeOpen !== childPath) return [row, buildModeLine(tick)];
   // Named per path, so two open choices could never share one radio group.
@@ -2618,7 +2618,7 @@ function buildModeLine(tick) {
 
 // A radio change re-renders its whole list, which destroys the input that
 // had focus; put focus back on its replacement so arrow keys and a screen
-// reader keep their place (SS1-D1-C02).
+// reader keep their place.
 function refocusRadio(attr, key, value) {
   const hit = [...document.querySelectorAll(`[data-${attr}]`)]
     .find((i) => i.value === value && (key === null || i.getAttribute(`data-${attr}`) === key));
@@ -2627,7 +2627,7 @@ function refocusRadio(attr, key, value) {
 
 /**
  * "Share <name> as" and two radios - one control, used by the picker and by
- * Lane 3's editor, so the two screens cannot drift. `data` is copied onto
+ * the Settings folder editor, so the two screens cannot drift. `data` is copied onto
  * each input as data-* so each screen's own delegate hears only its own.
  */
 function buildModeRadios(name, mode, group, data) {
@@ -2772,11 +2772,11 @@ function renderShare() {
       msg.textContent = 'No folders in here.';
       el.list.appendChild(msg);
     }
-    // Moved above the row loop (T100): a cap notice printed under 500 rows
+    // Moved above the row loop: a cap notice printed under 500 rows
     // is not a notice - the owner would have to scroll past all of them to
     // read it.
     // Only where a row on screen actually carries the line it talks about.
-    // The row whose choice is OPEN shows radios, not the line (SS1-D2-C01).
+    // The row whose choice is OPEN shows radios, not the line.
     const tickedHere = share.rows.some((f) => {
       const p = joinShare(share.path, f.name);
       return p !== share.modeOpen && share.ticks.some((t) => t.path === p);
@@ -2794,7 +2794,7 @@ function renderShare() {
       t.textContent = note;
       el.list.appendChild(t);
     }
-    // A ticked row comes back as [row, its "shared as" line] (Lane 18).
+    // A ticked row comes back as [row, its "shared as" line].
     for (const f of share.rows) {
       for (const n of [].concat(buildFolderRow(f, share.path, share.ticks))) el.list.appendChild(n);
     }
@@ -2826,7 +2826,7 @@ function toggleTick(path, checked) {
       return;
     }
     share.error = null;
-    // Lane 18 Q1: pre-set from the agent's `project` flag (a .git or a
+    // Pre-set from the agent's `project` flag (a .git or a
     // CLAUDE.md inside). A drive row carries none, and is never tickable.
     const folder = share.path === null ? null : share.rows.find((x) => joinShare(share.path, x.name) === path);
     share.ticks.push({
@@ -2857,7 +2857,7 @@ function toggleNewFolders(path) {
 }
 
 async function openDrives() {
-  const nav = ++share.nav; // ponytail: see share.nav's comment
+  const nav = ++share.nav; // Known limit: see share.nav's comment
   share.path = null;
   share.parent = null;
   share.error = null;
@@ -2884,7 +2884,7 @@ async function openDrives() {
 // a retry replaying the same level without touching history.
 async function openPath(p, opts = {}) {
   const push = opts.push !== false;
-  const nav = ++share.nav; // ponytail: see share.nav's comment
+  const nav = ++share.nav; // Known limit: see share.nav's comment
   share.loading = true;
   renderShare();
   const res = await getFolders(p);
@@ -2917,7 +2917,7 @@ async function openPath(p, opts = {}) {
 function shareAuthLost(res) { return !res.ok && res.status === 401; }
 
 // ---------------------------------------------------------------------------
-// Lane 20 - the inline passcode panel every share-changing action opens
+// The inline passcode panel every share-changing action opens
 // through. One shared implementation, `#reauth`, moved to wherever it is
 // needed rather than five copies of the same six-digit field.
 // ---------------------------------------------------------------------------
@@ -2945,7 +2945,7 @@ function closeActiveReauth() {
 }
 
 /**
- * Opens the Lane 20 panel in place of `buttons` (each hidden for the
+ * Opens the passcode panel in place of `buttons` (each hidden for the
  * duration). It is inserted right before `before` (default `buttons[0]`) -
  * a caller whose buttons live inside a container some render rebuilds
  * wholesale passes an element outside it, so the panel itself never is.
@@ -2981,7 +2981,7 @@ function openReauth({
   pin.disabled = false;
   pin.value = '';
   setPinRevealed('reauth-pin', false);
-  // Lane 21 step 4: at the desk the next thing is typing, so the field takes
+  // At the desk the next thing is typing, so the field takes
   // focus. Not on a touch screen, where focusing would throw up the keyboard
   // unasked - a landscape tablet is wider than 900px too, hence the pointer.
   if (globalThis.matchMedia?.('(min-width: 900px) and (pointer: fine)')?.matches) pin.focus();
@@ -3042,7 +3042,7 @@ function openReauth({
       updateEnabled();
       return;
     }
-    // 'locked' - same words as the lock screen's own lockout (Lane 12).
+    // 'locked' - same words as the lock screen's own lockout.
     setMsg(msg, messageFor('too_many_attempts', 429, res.data), 'warn');
     pin.disabled = true;
     action.disabled = true;
@@ -3117,7 +3117,7 @@ function finishFolders() {
 }
 
 // Pure application of a PUT result onto share's own state - shared by
-// onSave's first-run direct write and its Lane 20 reauth path, so the two
+// onSave's first-run direct write and its passcode reauth path, so the two
 // ways of getting here leave the screen in the same shape.
 function finishSave(res) {
   const result = applySaveResult(share, res);
@@ -3148,7 +3148,7 @@ async function onSave() {
   share.error = null;
   share.errorIndex = null;
 
-  // Lane 20: only the genuine first-run picker may try a passcode-less
+  // Only the genuine first-run picker may try a passcode-less
   // write at all - everyone else goes straight through the panel below.
   if (!share.firstRun) {
     openSaveReauth();
@@ -3234,7 +3234,7 @@ function showFolders(initial, { firstRun = false } = {}) {
   if (pendingFolders) { reloadShareLevel(); return pendingFolders; }
 
   // mode/excludes are carried through ONLY when the caller supplied them
-  // (T100's onChooseFolders, via sharedToTicks) - a tick made by ticking a
+  // (onChooseFolders, via sharedToTicks) - a tick made by ticking a
   // row in this screen never has them, and that shape must stay exactly
   // 3 keys for sharedBody's own defaulting to apply.
   share.ticks = (initial || []).map((t) => {
@@ -3277,7 +3277,7 @@ function showFolders(initial, { firstRun = false } = {}) {
 }
 
 // ============================================================================
-// Settings root (T77). One screen: a group heading, a list of navigation
+// Settings root. One screen: a group heading, a list of navigation
 // rows, and nowhere else to go but the home control in the shared header.
 // ============================================================================
 
@@ -3289,7 +3289,7 @@ let settingsPushed = false;
 // documents: cancelOpenConfirm() must run FIRST, or Settings' entry could
 // land above a live confirm entry and break "the confirm's entry is always
 // the top one".
-/** Settings > Open it on your phone: step 3's screen again; DONE returns to Settings. */
+/** Settings > Open it on your phone: the first-run phone screen again; DONE returns to Settings. */
 async function openPhoneAgain() {
   await openPhoneScreen(() => showScreen('phone', 'deeper'));
   if (state.screen !== 'phone') return;   // the back button already left
@@ -3317,7 +3317,7 @@ function closeSettings() {
 }
 
 // ---------------------------------------------------------------------------
-// Lane 7: the screens below the settings root.
+// The screens below the settings root.
 //
 // One level deep, never two, so this is a single nullable rather than a stack.
 // The moment a sub-screen needs its own sub-screen (About -> Contact me is the
@@ -3325,7 +3325,7 @@ function closeSettings() {
 // on beside it.
 // ---------------------------------------------------------------------------
 // The settings screens open BELOW the root, innermost last. A stack, not a
-// single key: About -> Update is two deep (Lane 5), and the artifact's
+// single key: About -> Update is two deep, and the artifact's
 // About -> Contact me will be too. The previous single `settingsSub` plus a
 // `subPushed` flag carried its own instruction to become this the moment a
 // sub-screen needed a sub-screen of its own, rather than growing a second
@@ -3424,7 +3424,7 @@ function renderSettingsSub(key) {
   if (key === 'see') { renderSections(document.getElementById('see-sections')); return; }
   if (key === 'about') { renderAbout(); return; }
   if (key === 'agent') { renderAgentStatus(); return; }
-  // Lane 19. renderNotify() draws whatever state.push already holds (loading,
+  // renderNotify() draws whatever state.push already holds (loading,
   // most likely, on the first open); refreshPush() then asks the agent and
   // re-renders when it answers.
   if (key === 'notify') { renderNotify(); refreshPush(); return; }
@@ -3433,7 +3433,7 @@ function renderSettingsSub(key) {
 }
 
 // ---------------------------------------------------------------------------
-// Change passcode (Lane 7). Three fields, each with its own reveal, and a
+// Change passcode. Three fields, each with its own reveal, and a
 // success that signs this device out along with every other one.
 // ---------------------------------------------------------------------------
 
@@ -3508,7 +3508,7 @@ function renderAbout() {
   // to the repo's releases page, which is empty until a GitHub release
   // exists. Rows that would open a dead link are omitted rather than drawn.
   const rows = [];
-  // Lane 5: the ONE row on this screen that carries a dot, so the news stands
+  // The ONE row on this screen that carries a dot, so the news stands
   // out against plain rows. Absent entirely when there is nothing waiting -
   // a row saying "you are up to date" is a row that is never worth a tap.
   if (updateWaiting(state.shellStale, SHELL_VERSION, state.status)) {
@@ -3520,22 +3520,22 @@ function renderAbout() {
   // Artifact order: the update row, Source code, Report a problem, Contact
   // me, then What this app can see. No sub-lines - the Decided table says no
   // descriptions, and buildSettingsRow draws none for an empty state. The
-  // two repo rows waited for the repo to exist (T66, 2026-09-15).
+  // two repo rows waited for the repo to exist (2026-09-15).
   rows.push({ id: 'source', icon: 'i-ext', name: 'Source code', state: '', enterable: true, href: REPO_URL });
   rows.push({ id: 'issues', icon: 'i-ext', name: 'Report a problem', state: '', enterable: true, href: `${REPO_URL}/issues` });
   rows.push({ id: 'contact', icon: 'i-mail', name: 'Contact me', state: '', enterable: true });
   rows.push({
     id: 'see', icon: 'i-eye', name: 'What this app can see', state: '', enterable: true,
   });
-  // Lane 10 / R2. The once-only sheet's own last line says "Always in
+  // The once-only sheet's own last line says "Always in
   // Settings > About", so this row is what makes that sentence true rather
   // than a promise the app breaks the first time someone goes looking.
   rows.push({
     id: 'howto', icon: 'i-info', name: 'How this works', state: 'the two-app flow', enterable: true,
   });
-  // R5. ABSENT once installed, which is the failure this placement is most
+  // ABSENT once installed, which is the failure this placement is most
   // likely to produce: a row that is always there becomes a control that does
-  // nothing the moment it has been used. Same rule as Lane 5's update row.
+  // nothing the moment it has been used. Same rule as the update row.
   // Two shapes, because the platforms genuinely differ and inventing a
   // screen the Artifact does not draw would be worse than either. Chromium
   // hands us a real dialog to raise, so the row is a button. iOS Safari
@@ -3553,7 +3553,7 @@ function renderAbout() {
 }
 
 // ---------------------------------------------------------------------------
-// Lane 5 - updates. The quiet route: a dot on the gear, the news in About,
+// Updates. The quiet route: a dot on the gear, the news in About,
 // and nothing that interrupts the project list or a running session.
 //
 // "Update available" means the phone's cached shell is older than the agent,
@@ -3626,14 +3626,14 @@ function renderAgentStatus() {
 }
 
 async function refreshAgentStatus() {
-  refreshAgentPhone();   // Lane 23's Phone address row; phone.js owns it
+  refreshAgentPhone();   // The Phone address row; phone.js owns it
   const res = await getStatus();
   state.status = res.ok ? res.data : null;
   if (currentSub() === 'agent') renderAgentStatus();
 }
 
 // ---------------------------------------------------------------------------
-// Lane 19 - Settings > Alerts > Notifications. state.push is the agent's own
+// Settings > Alerts > Notifications. state.push is the agent's own
 // answer (null until refreshPush has run once); notifyTransient and the test/
 // rename/remove locals below hold the phone-only states that answer has no
 // room for - mid-enable, a failed attempt with its typed name kept, an
@@ -3957,7 +3957,7 @@ function renderNotifyDevices() {
   for (const row of rows) host.appendChild(buildNotifyDeviceRow(row));
 }
 
-/** Every Lane 19 state, from state.push and the transients above. */
+/** Every notification state, from state.push and the transients above. */
 function renderNotify() {
   const els = {
     nameField: document.getElementById('notify-name-field'),
@@ -4019,7 +4019,7 @@ function renderNotify() {
     buildNotifyStatusRow(CANT_NAME, sub);
     els.alert.hidden = false;
     els.alertText.textContent = bannerText;
-    // Lane 19 step 2: no name field, and TURN ON drawn quiet and off.
+    // No name field, and TURN ON drawn quiet and off.
     els.nameField.hidden = true;
     els.onBtn.classList.remove('set-btn-solid');
     els.onBtn.disabled = true;
@@ -4136,12 +4136,12 @@ async function resetApp() {
 // the pop costs one redundant GET /api/drives and nothing else.
 // CORRECTED 2026-08-29. This block previously ended "There is no separate
 // Shared Folders screen - the row goes straight into the picker", which was
-// true for T78 and is now the opposite of what ships: Lane 3's screen sits
+// true once and is now the opposite of what ships: the Shared folders screen sits
 // between them, and ADD A FOLDER on it is the door. onChooseFolders is still
 // the ONLY way in, so no door can route around the unknown-set guard - do not
 // add a third call into showFolders.
 // ---------------------------------------------------------------------------
-// Shared folders (Lane 3). The settings row used to jump straight into the
+// Shared folders. The settings row used to jump straight into the
 // picker; this is the screen the artifact puts between them - what is shared
 // now, a way to stop sharing one, and one button into the picker.
 //
@@ -4159,7 +4159,7 @@ function renderSharedScreen() {
   const host = document.getElementById('shared-rows');
   host.innerHTML = '';
 
-  // Lane 4: name the missing ones above the list, so the dim rows below have
+  // Name the missing ones above the list, so the dim rows below have
   // an explanation rather than just looking broken.
   const gone = rows.filter((r) => r.missing);
   const goneEl = document.getElementById('shared-gone');
@@ -4184,7 +4184,7 @@ function renderSharedScreen() {
 }
 
 // Row anatomy, unchanged from the rest of the app: icon left, name and state
-// stacked, controls right. A live root is TAPPABLE - it opens Lane 3's
+// stacked, controls right. A live root is TAPPABLE - it opens the folder
 // "Editing one" - and carries the remove X beside it; a MISSING one carries
 // only the X, because there is nothing on disk left to edit and a row that
 // offered it would be the dead control this app keeps refusing to ship.
@@ -4192,7 +4192,7 @@ function buildSharedRow(row) {
   const el = document.createElement('div');
   el.className = row.missing ? 'row folder set-row shared-gone-row' : 'row folder set-row';
 
-  // The folder icon on EVERY row, missing ones included - Lane 4 draws a gone
+  // The folder icon on EVERY row, missing ones included - the approved design draws a gone
   // root as a dimmed folder row, not as a warning glyph. The warning lives in
   // the banner above the list, once, rather than being repeated per row; and
   // an #i-warn here inherits .set-ico's accent green, which is the one colour
@@ -4295,7 +4295,7 @@ async function confirmStopSharing() {
 }
 
 // ---------------------------------------------------------------------------
-// Lane 3, step 2 - editing one shared folder.
+// Editing one shared folder.
 //
 // The child list comes from GET /api/folders, not from state.projects: an
 // EXCLUDED child never appears in the projects list, so a screen built from
@@ -4319,7 +4319,7 @@ async function openRootEditor(rootPath) {
   // Opened BEFORE the fetch so the screen and its history entry exist while
   // the listing is in flight - the same shape openSettingsSub gives every
   // other sub-screen, rather than a blank frame appearing later.
-  // mode / savedMode (Lane 18): the kind on screen, and the kind on disk -
+  // mode / savedMode: the kind on screen, and the kind on disk -
   // the switch warning is about the difference between the two.
   const savedMode = (Array.isArray(state.shared) ? state.shared : [])
     .some((r) => r.path === rootPath && r.mode === 'single') ? 'single' : 'container';
@@ -4381,7 +4381,7 @@ function renderRootEditor() {
   // SAVE is live only once the listing has landed: saving from an empty
   // working copy would write excludes for every child at once.
   // One project has no excludes to write, so its SAVE does not wait on the
-  // listing (SS1-D2-C02); the unknown-set guard in saveRootEdit still holds.
+  // listing; the unknown-set guard in saveRootEdit still holds.
   document.getElementById('root-save').disabled = rootEdit.rows === null && !single;
   // One project has no children to tick; its list stays empty.
   if (rootEdit.rows === null || single) return;
@@ -4529,7 +4529,7 @@ function openPickerFromShared() {
 }
 
 // A settings row carries an ICON on the left, name and state stacked in the
-// middle, chevron on the right. Lane 7 of the userflow artifact states the
+// middle, chevron on the right. The approved settings design states the
 // rule and leaves no room in it: "icon or control on the LEFT, name and state
 // stacked in the middle, chevron on the right. No exceptions anywhere in the
 // app."
@@ -4567,7 +4567,7 @@ function buildSettingsRow({
   ico.querySelector('use').setAttribute('href', `#${icon}`);
   el.appendChild(ico);
 
-  // Lane 5: "the marker repeats on the row that holds the news, so the trail
+  // "the marker repeats on the row that holds the news, so the trail
   // never breaks". Same dot as the one on the gear, and the same decision
   // about it - no animation.
   if (dot) {
@@ -4619,8 +4619,8 @@ function buildSettingsRow({
 }
 
 /**
- * Lane 6 of the userflow artifact, as data. Groups and their order come
- * straight off the drawn frame, ALERTS included (Lane 19, M22) - its single
+ * The approved Settings root, as data. Groups and their order come
+ * straight off the drawn frame, ALERTS included - its single
  * row is Notifications.
  *
  * `state(facts)` returns the sub-line, or '' for a row that has no fact worth
@@ -4649,7 +4649,7 @@ function settingsGroups(facts) {
     {
       heading: 'SECURITY',
       rows: [
-        // First in the group, and on i-lock - which Lane 6 also gives to
+        // First in the group, and on i-lock - which the Settings root also gives to
         // 'Lock now'. Two rows sharing an icon is what the artifact draws;
         // picking a different one here to make them distinguishable would be
         // inventing a screen it does not.
@@ -4672,7 +4672,7 @@ function settingsGroups(facts) {
     {
       heading: 'THIS APP',
       rows: [
-        // Lane 23 step 3c / Lane 6 (sequence 29): for desktop browsers only.
+        // For desktop browsers only.
         ...(deskBrowser() ? [{
           id: 'phone', icon: 'i-ext', name: 'Open it on your phone',
           state: 'the code to scan, and how to add it', enterable: true,
@@ -4688,7 +4688,7 @@ function settingsGroups(facts) {
           id: 'reset', icon: 'i-rot', name: 'Reset the app',
           state: 'clears cache, gets the latest', enterable: true,
         },
-        // Lane 5, step 2: Settings carries the dot down to the row that
+        // Then Settings carries the dot down to the row that
         // holds the news, and the sub-line names the waiting version.
         {
           id: 'about', icon: 'i-info', name: 'About',
@@ -4726,7 +4726,7 @@ function renderSettings() {
 
 /**
  * A desk browser (Chrome, Edge...): not the installed app and not a touch
- * device, where "Open it on your phone" would point at itself (sequence 29,
+ * device, where "Open it on your phone" would point at itself (owner,
  * "for desktop browsers only").
  */
 function deskBrowser() {
@@ -4824,7 +4824,7 @@ async function ensureAccepted() {
   // fall through to the list, where load() reports the agent unreachable, which
   // is the truth.
   const reopen = pendingFolders !== null;
-  // Lane 23 step 3: the phone screen follows the genuine first-run picker,
+  // The phone screen follows the genuine first-run picker,
   // once. A re-entry (a 401 on either screen) finds it pending and waits on
   // the same DONE/SKIP instead of racing it to the project list.
   const phoneDue = !reopen && firstRun && knownShared !== null;
@@ -4839,7 +4839,7 @@ async function ensureAccepted() {
 /**
  * The accept screen. Resolves ONLY once the agent has confirmed the write -
  * there is no skip, no cancel and no dismiss on this screen (skipping is
- * offered later, from the empty project list, T100). Same shape as
+ * offered later, from the empty project list). Same shape as
  * lock.js's showGate(): put the screen up, resolve on success, and remove
  * every listener on the way out so a second run cannot stack a duplicate
  * closure over the same nodes.
@@ -4960,7 +4960,7 @@ function wireEvents() {
   document.getElementById('plusmenu').addEventListener('click', onPlusMenuClick);
   document.getElementById('plus-scrim').addEventListener('click', () => closePlusMenu());
   document.addEventListener('keydown', onPlusKey);
-  // R2. GOT IT is the sheet's only control and its only exit.
+  // GOT IT is the sheet's only control and its only exit.
   document.getElementById('sheet-go').addEventListener('click', closeSheet);
   document.getElementById('refresh').addEventListener('click', () => load());
   document.getElementById('newproj-cancel').addEventListener('click', closeNewProjectPanel);
@@ -4990,10 +4990,10 @@ function wireEvents() {
     if (!row) return;
     const id = row.dataset.settings;
     if (id === 'lock') { lockNow(); return; }
-    // Not a sub-screen: R2's sheet is an overlay, so it opens ON TOP of About
+    // Not a sub-screen: the once-only sheet is an overlay, so it opens ON TOP of About
     // and GOT IT drops the owner back there rather than anywhere new.
     if (id === 'howto') { showSheet(); return; }
-    // R5. Only reachable when a prompt was captured - the informational form
+    // Only reachable when a prompt was captured - the informational form
     // of this row is not enterable and carries no data-settings at all.
     if (id === 'install') { runInstall(); return; }
     if (id === 'phone') { openPhoneAgain(); return; }
@@ -5025,7 +5025,7 @@ function wireEvents() {
   for (const el of document.querySelectorAll('[data-set-back]')) {
     el.addEventListener('click', closeSettingsSub);
   }
-  // Shared folders (Lane 3). The remove X is delegated because its rows are
+  // Shared folders. The remove X is delegated because its rows are
   // rebuilt on every render; the three fixed buttons are wired once.
   document.getElementById('shared-rows').addEventListener('click', (e) => {
     const remove = e.target.closest('[data-shared-remove]');
@@ -5033,7 +5033,7 @@ function wireEvents() {
     const open = e.target.closest('[data-shared-open]');
     if (open) openRootEditor(open.dataset.sharedOpen);
   });
-  // Lane 3, step 2. Scoped to this screen's own list, never the document: the
+  // Editing one. Scoped to this screen's own list, never the document: the
   // picker's rows carry their own data-tick and must not answer here.
   document.getElementById('root-rows').addEventListener('change', (e) => {
     const box = e.target.closest('[data-root-tick]');
@@ -5057,7 +5057,7 @@ function wireEvents() {
   for (const id of PW_FIELDS) {
     document.getElementById(id).addEventListener('input', updatePwEnabled);
   }
-  // One handler, three eyes: the toggle is per FIELD, as Lane 7 specifies,
+  // One handler, three eyes: the toggle is per FIELD, as the approved design specifies,
   // never one switch for the form. Scoped to #set-passcode: the gate's two
   // eyes are wired by lock.js, which owns that screen, and an unscoped
   // selector would put a SECOND listener on them - two toggles per tap, which
@@ -5071,7 +5071,7 @@ function wireEvents() {
   document.getElementById('reset-cancel').addEventListener('click', closeSettingsSub);
   document.getElementById('reset-go').addEventListener('click', resetApp);
   document.getElementById('agent-recheck').addEventListener('click', refreshAgentStatus);
-  // Lane 19 - Notifications.
+  // Notifications.
   document.getElementById('notify-on').addEventListener('click', onNotifyOn);
   document.getElementById('notify-test').addEventListener('click', onSendTest);
   document.getElementById('notify-off').addEventListener('click', onTurnOffThisDevice);
@@ -5100,7 +5100,7 @@ function wireEvents() {
       navigator.serviceWorker.getRegistration().then((reg) => reg && reg.update()).catch(() => {});
     }
   });
-  // R4. The offline state deliberately has no retry ladder of its own - this
+  // The offline state deliberately has no retry ladder of its own - this
   // is what ends it. Only when we were actually showing the offline screen,
   // so a spurious `online` on a working connection costs nothing. Recovery
   // is silent by design: load() clears the banner and the dim, and a "you
@@ -5110,7 +5110,7 @@ function wireEvents() {
 }
 
 // ---------------------------------------------------------------------------
-// R5 (Lane 15) - installing to the home screen.
+// Installing to the home screen.
 //
 // A ROW in Settings > About, never a prompt. The owner chose that over a
 // one-time bar, accepting the cost: nobody browsing Settings is looking for
@@ -5141,7 +5141,7 @@ let installPromptUsed = false;
 // above the gate for the same class of reason.
 // preventDefault stops Chromium's own mini-infobar, which is the interruption
 // the owner rejected; the saved event is raised only from the About row.
-// THE DOM GUARD (T104). Every line above this point is a declaration; these
+// THE DOM GUARD. Every line above this point is a declaration; these
 // listeners and the boot() call at the end of the file are the ONLY things
 // that RUN when this module is imported. Guarding them is the whole cost of
 // making app.js importable under node - without it the import throws on
@@ -5157,7 +5157,7 @@ if (IN_BROWSER) window.addEventListener('beforeinstallprompt', (e) => {
 // releasing the stale event keeps the two in step.
 if (IN_BROWSER) window.addEventListener('appinstalled', () => { installPrompt = null; });
 
-// Lane 19 step 14/15: sw.js's notificationclick handler postMessages this tab
+// sw.js's notificationclick handler postMessages this tab
 // for a serve_missing notification when a window was already open (it has no
 // window to openWindow into then). Module-scope so it fires whichever screen
 // is up: the list re-renders its own variant, the gate reveals its notice in
@@ -5227,11 +5227,11 @@ function registerServiceWorker() {
   // showed yesterday's build forever with no way to notice (owner: "Its not
   // updated in the PWA dude"). The visibilitychange handler now asks the
   // worker to re-check, which means a controllerchange can arrive with the
-  // owner mid-session - and Lane 5 is explicit that "an update never installs
+  // owner mid-session - and the update design is explicit that "an update never installs
   // itself mid-session".
   // So: inside the launch window it still collapses the two launches into
   // one. After it, the new shell is cached and waiting, and the app says so
-  // with the quiet dot Lane 5 chose rather than reloading underneath him.
+  // with the quiet dot the update design chose rather than reloading underneath him.
   let refreshing = false;
   const hadController = navigator.serviceWorker.controller !== null;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -5274,7 +5274,7 @@ async function maybeResetCache() {
 
 async function boot() {
   if (await maybeResetCache()) return;
-  // Lane 19 step 14/15: `#serve_missing` is the fragment sw.js's openWindow
+  // `#serve_missing` is the fragment sw.js's openWindow
   // uses when no window was already open. AFTER maybeResetCache - a
   // ?reset-cache open never carries this fragment, so the order does not
   // matter there, but reading location before the one thing that might
@@ -5285,7 +5285,7 @@ async function boot() {
   if (location.hash === '#serve_missing') {
     state.serveMissing = true;
     history.replaceState(history.state, '', location.pathname + location.search);
-    // The common case (PRD/Lane 19 step 15): the restart that sent this
+    // The common case (the serve_missing alert): the restart that sent this
     // alert dropped every token, so the tap almost always lands here, on the
     // gate, rather than on the list variant below.
     showServeMissingNotice();

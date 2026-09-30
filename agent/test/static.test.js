@@ -151,7 +151,7 @@ test('every static 200 refuses framing and sends no referrer', async () => {
   }
 });
 
-// --- Regression: the T27/T28/T29 surface is untouched ---
+// --- Regression: the original launch surface is untouched ---
 
 test('GET /api/projects still 200 with a projects array (static did not shadow it)', async () => {
   const res = await authedFetch('/api/projects');

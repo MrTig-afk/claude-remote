@@ -1,7 +1,7 @@
 // The iOS input-zoom floor, checked the only way it can be checked correctly:
 // by asking a browser what font-size it actually computed.
 //
-// WHY THIS FILE EXISTS. T103 replaced a regex sweep of app.css with
+// WHY THIS FILE EXISTS. A later change replaced a regex sweep of app.css with
 // scripts/check-input-font-sizes.mjs, and for a while that script was run by
 // nobody - no test, no npm script, no CI. Review proved the hole: an
 // under-16px input rule could be added and the whole suite stayed green. A

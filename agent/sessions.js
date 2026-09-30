@@ -63,7 +63,7 @@ async function defaultPidImageName(pid) {
  * denylist. That divergence is the security fix described on slugSegment, and
  * it must not be "resynced" by loosening this side.
  *
- * T53 deleted the PowerShell implementation on 2026-09-05, so this is now the
+ * The PowerShell implementation was deleted on 2026-09-05, so this is now the
  * ONLY session-name rule in the tree and there is no second one to drift from.
  * The history is kept here because it explains WHY the rule is an allowlist -
  * that reasoning outlives the file it came from.
@@ -81,7 +81,7 @@ async function defaultPidImageName(pid) {
  * for the same path, or listSessions emits two views for one live session -
  * both now delegate to sessionNameFor so they cannot drift.
  *
- * ponytail: the caller must opt in by passing a root. Call sites that do so
+ * Known limit: the caller must opt in by passing a root. Call sites that do so
  * always pass a root drawn from rootsFrom(ctx)/resolveProjectPath's return,
  * never ctx.baseDir directly; every other caller - projects.js, the tests -
  * passes a bare name or a flat path and is unaffected.
@@ -97,7 +97,7 @@ export const slugSegment = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 /**
  * How many hex characters of the path digest ride on the end of a root slug.
  * Six is a readability/uniqueness trade, not a security parameter - see the
- * ponytail note on rootSlug.
+ * Known limit note on rootSlug.
  */
 const ROOT_SLUG_HASH_CHARS = 6;
 
@@ -135,7 +135,7 @@ const ROOT_SLUG_HASH_CHARS = 6;
  * identical across agent restarts and reboots. Hex only, so it introduces no
  * character slugSegment's allowlist does not already emit.
  *
- * ponytail: 6 hex = 24 bits. Two roots collide only if their readable slugs
+ * Known limit: 6 hex = 24 bits. Two roots collide only if their readable slugs
  * ALSO collide (the digest is a fixed-width suffix, so equal full strings force
  * equal readable halves) AND the digests collide - roughly 3e-5 across a
  * 32-root ceiling, and the owner will have two. Upgrade path if that is ever
@@ -163,7 +163,7 @@ export function rootSlug(rootPath) {
  * root's session name.
  * THE ONE IMPLEMENTATION. deriveSessionName and deriveDeskSessionName both
  * delegate here, so they cannot drift; a second copy of this rule is exactly
- * how one live session renders as two tiles, and since T72 that would end the
+ * how one live session renders as two tiles, and since the folder drill-in screen that would end the
  * WRONG session.
  */
 export function sessionNameFor(rootPath, targetPath) {
@@ -193,7 +193,7 @@ export function deriveSessionName(projectPath, root) {
 }
 
 // Used by both the single- and two-segment branches of resolveProjectPath.
-// Predicate set and order preserved verbatim from the pre-T68 whole-string
+// Predicate set and order preserved verbatim from the earlier whole-string
 // check: '\' '/' ':' control-chars leading-'.' absolute.
 const badSegment = (s) => /[\\/]/.test(s) || s.includes(':')
   || /[\u0000-\u001f]/.test(s) || s.startsWith('.') || path.isAbsolute(s);
@@ -215,7 +215,7 @@ function resolveRootItself(base) {
   return { ok: true, path: base, root: base };
 }
 
-/** A direct child of base (the pre-T94 SINGLE branch, byte-identical). */
+/** A direct child of base (the original SINGLE branch, byte-identical). */
 function resolveFlatChild(base, seg) {
   if (badSegment(seg)) {
     return { ok: false, status: 400, error: 'invalid_project' };
@@ -247,7 +247,7 @@ function resolveFlatChild(base, seg) {
   return { ok: true, path: resolved, root: base };
 }
 
-/** '<container>/<child>' under base (the pre-T94 NESTED branch, byte-identical). */
+/** '<container>/<child>' under base (the original NESTED branch, byte-identical). */
 function resolveNestedChild(base, seg1, seg2) {
   // S3n - per-segment, in order. Must run before S6n: S6n's
   // containerChildrenOf console.warn's the folder path on a failed readdir,
@@ -315,7 +315,7 @@ function resolveNestedChild(base, seg1, seg2) {
   // to the real 'Vercel' folder anyway, and the flat branch has always
   // accepted 'email-Lint' - matching the platform keeps the two branches
   // symmetric.
-  // ponytail: container status is RECOMPUTED from disk on every call, so it
+  // Known limit: container status is RECOMPUTED from disk on every call, so it
   // is not stable state. Drop a README.md into 'Pull Requests' and it stops
   // being a container: every nested identifier under it stops resolving, and
   // because registry.js's prune drops any entry whose resolveProjectPath call
@@ -349,8 +349,8 @@ function resolveNestedChild(base, seg1, seg2) {
   // would let a child named '-weird' through as 'pull-requests/-weird'.
   // Refused: a leading dot, dash or space (as before), and a name with no
   // letter or digit at all - `项目` slugs to a bare '-' that every such folder
-  // would share (F16-C05). NOT refused: `_scratch`, `(old) api`, `#2`, which
-  // name a real session and must keep their STOP (F16-D2-C02).
+  // would share. NOT refused: `_scratch`, `(old) api`, `#2`, which
+  // name a real session and must keep their STOP.
   const unusable = (s) => /^[\s.-]/.test(s) || !/[a-z0-9]/.test(slugSegment(s));
   if (unusable(seg1) || unusable(seg2)) {
     return { ok: false, status: 400, error: 'invalid_project' };
@@ -738,7 +738,7 @@ export function launchSession(ctx, project) {
 
   const pidFilePath = path.join(pidDir, pidFileNameFor(sessionName));
 
-  // T140: answer Claude Code's workspace-trust modal for this shared folder
+  // Answer Claude Code's workspace-trust modal for this shared folder
   // before the session can meet it - see trust.js. Opt-in through ctx like
   // watchLaunches, so only the real server writes the profile's .claude.json
   // and no test can touch the developer's own.
@@ -764,7 +764,7 @@ export function launchSession(ctx, project) {
     '-PidFile', pidFilePath,
     // Only when configured. An absent claude_config_dir must pass NO -ConfigDir
     // at all, so launch-session.ps1 leaves CLAUDE_CONFIG_DIR unset and Claude
-    // Code uses its own default profile (T56). Passing an empty string here
+    // Code uses its own default profile. Passing an empty string here
     // would defeat that - PowerShell would bind it and the `if ($ConfigDir)`
     // guard is what turns it back into "absent".
     ...(claudeConfigDir ? ['-ConfigDir', claudeConfigDir] : []),
@@ -800,11 +800,11 @@ export function launchSession(ctx, project) {
   child.on('error', (err) => {
     inFlightLaunches.delete(key);
     console.error(`claude-remote agent: launch of '${sessionName}' failed to spawn:`, err);
-    // F15-D2-C01. A spawn that never happened (PowerShell missing or
+    // A spawn that never happened (PowerShell missing or
     // unstartable) is the one failure launch-session.ps1 cannot report, since
     // it never runs - so the reason is written here, in the script's own .err
     // shape. A project folder that vanished before the tap is NOT this case:
-    // listSessions drops an entry whose folder is gone (F16-C02).
+    // listSessions drops an entry whose folder is gone.
     try {
       fs.writeFileSync(`${pidFilePath}.err`, `could not start: ${err.message}`, 'utf8');
     } catch { /* nothing better to do from here */ }
@@ -849,7 +849,7 @@ function killTree(ctx, pid, label) {
  * note where that spawn was.
  *
  * `target` is either a project name (string, the original contract - a
- * launched session, a desk session sitting at a project ROOT, and SINCE T68
+ * launched session, a desk session sitting at a project ROOT, and, with nested projects,
  * also a session exactly one level inside a container, which the client CAN
  * now legally name) or `{ session_name }` (a desk session in a subfolder the
  * client still cannot name: one DEEPER than one level, or one under a folder
@@ -1041,12 +1041,12 @@ async function endResolvedSession(ctx, { sessionName, projectPath, project, exis
   // someone stops paying attention.
   //
   // The app writes nothing now. The stop confirm asks for one from Claude
-  // first (Artifact Lane 2, approved sequence 3) and this ends the session and
+  // first (as approved) and this ends the session and
   // stops.
   //
   // The claim status is the string 'ending' - the concurrency mutex that stops
   // two STOPs racing, never shown to anyone. It was called 'handoff' until
-  // T101 (2026-09-05), left that way on purpose for one release because
+  // 2026-09-05, left that way on purpose for one release because
   // renaming it reaches the whole of registry.js and two suites, and that is
   // not a change to bury in the same commit as a behaviour removal.
   markSessionState(ctx, sessionName, 'ending', {

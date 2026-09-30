@@ -1,5 +1,5 @@
 // hooks/check-update.mjs: the SessionStart hook that installs and updates the
-// agent by itself (Lane 23 / R21.1-R21.2). Real temp folders; every outside
+// agent by itself. Real temp folders; every outside
 // effect - tailscale, the background job, PowerShell, the browser - is a fake
 // handed in, so no test installs anything or opens anything.
 //
@@ -104,7 +104,7 @@ test('nothing installed: starts the install in the background, says the setup li
   assert.equal(JSON.parse(fs.readFileSync(w.files.lock, 'utf8')).token, lockToken, 'the job carries the lock\'s token');
 });
 
-// RED WHEN (SS-C1-C01): the task check goes. THIS PC runs its agent from the
+// RED WHEN: the task check goes. THIS PC runs its agent from the
 // F: checkout through the logon task; the first plugin load would have stopped
 // it and re-pointed the task at a fresh copy.
 test('a logon task running an agent from elsewhere: no install, no update, no line, no lock', async () => {
@@ -213,7 +213,7 @@ test('prerequisites: Tailscale, then Node, then claude.cmd - one line, nothing i
   }
 });
 
-// RED WHEN: the agentRunning check is install-only again (SS-C1-D2-C01) - an
+// RED WHEN: the agentRunning check is install-only again - an
 // old copy here, no logon task, and an agent run by hand from a checkout: the
 // update would stop that agent and register the task at the old copy.
 test('an update with no logon task and an agent already answering: left alone, no job, no line', async () => {
@@ -228,7 +228,7 @@ test('an update with no logon task and an agent already answering: left alone, n
 });
 
 // RED WHEN: the three questions are asked one after another again
-// (SS-C1-D2-C02) - their timeouts then add up to the hook's 10s limit.
+// - their timeouts then add up to the hook's 10s limit.
 test('the task, agent and Tailscale questions are asked at the same time', async () => {
   const w = world();
   const slow = (v) => () => new Promise((r) => { setTimeout(() => r(v), 150); });
@@ -242,7 +242,7 @@ test('the task, agent and Tailscale questions are asked at the same time', async
 });
 
 // RED WHEN: the claude.cmd line is returned without being recorded
-// (SS-C1-D2-C03) - it then repeats at every start in every project.
+// - it then repeats at every start in every project.
 test('claude.cmd missing: said once for this plugin version, then silent; a newer plugin tries again', async () => {
   const w = world();
   const deps = { ...w.deps, pathValue: '' };
@@ -383,7 +383,7 @@ test('run as the hook: silent when nothing changed, the pending line as systemMe
   assert.equal(run(), '');
 });
 
-// --- the lock (SS-C1-C02 / C03) ---------------------------------------------
+// --- the lock ----------------------------------------------------------------
 
 function lockDir() {
   const dir = path.join(base, `lock${n += 1}`);
@@ -505,7 +505,7 @@ test('removing a stale lock never removes a newer one that replaced it', () => {
   assert.ok(!fs.existsSync(lockFile), 'the one judged: removed');
 });
 
-// --- an update does not need Tailscale (SS-C1-C04) ---------------------------
+// --- an update does not need Tailscale ---------------------------
 
 // RED WHEN: the Tailscale check runs for an update too - a PC whose Tailscale
 // is signed out would be told it "needs Tailscale before it can set itself up",
@@ -519,7 +519,7 @@ test('an update neither asks Tailscale nor says NEEDS_TAILSCALE', async () => {
   assert.equal(w.jobs[0].kind, 'update');
 });
 
-// --- the job that never started (SS-C1-C05) ----------------------------------
+// --- the job that never started ----------------------------------
 
 // RED WHEN: realStartJob has no 'error' listener - the spawn failure is an
 // uncaught exception in the hook, the lock stays for the whole stale window,
@@ -548,7 +548,7 @@ test('a spawn that throws outright is handled the same way', async () => {
   assert.equal(readState(w).last.reason, 'the background install could not start (EINVAL)');
 });
 
-// --- tailscale's working folder (SS-C1-S01) ----------------------------------
+// --- tailscale's working folder ----------------------------------
 
 // RED WHEN: cwd goes. With the bare-name fallback, libuv looks for tailscale in
 // the child's cwd first - unset, the project folder Claude was opened in.
@@ -563,7 +563,7 @@ test('tailscale runs with its cwd in System32, no window, fixed args', async () 
   assert.equal(await realTailscale(['status'], (f, a, o, cb) => cb(new Error('x'))), null);
 });
 
-// --- the phone code in the terminal (Lane 23 step 8, R21.7) ------------------
+// --- the phone code in the terminal ------------------
 
 const SERVE_ON = JSON.stringify({ TCP: { 8790: { HTTPS: true } }, Web: { 'desktop-abc1234.tail1a2b3c.ts.net:8790': { Handlers: { '/': { Proxy: 'http://127.0.0.1:8790' } } } } });
 const STATUS = JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'desktop-abc1234.tail1a2b3c.ts.net.' } });
@@ -655,7 +655,7 @@ test('--now finds its own plugin root: the folder above hooks/', () => {
 // RED WHEN: the README sentence, AGENTS.md's steps and the hook drift apart -
 // the sentence must name AGENTS.md, AGENTS.md must give the reason BEFORE the
 // commands and run the hook's real --now mode with the PS 5.1-safe lookup, and
-// the README must carry no instructions addressed to Claude (sequence 21).
+// the README must carry no instructions addressed to Claude.
 test('install docs: README names AGENTS.md; AGENTS.md reasons first, then the three commands', () => {
   const repo = fileURLToPath(new URL('../..', import.meta.url));
   const readme = fs.readFileSync(path.join(repo, 'README.md'), 'utf8');
@@ -672,7 +672,7 @@ test('install docs: README names AGENTS.md; AGENTS.md reasons first, then the th
 });
 
 // RED WHEN: --now maps a silent branch to one catch-all sentence again
-// (SO-C1-C01) - it denied an update that was starting and hid a failed setup.
+// - it denied an update that was starting and hid a failed setup.
 // Every branch a session start keeps quiet, --now names.
 test('--now names every outcome, and never takes the phone code', async () => {
   const ex = (w, more = {}) => sessionStart({ ...w.deps, explain: true, ...more });
@@ -754,7 +754,7 @@ test('a failed re-registration is not retried at every start', async () => {
   assert.deepEqual(w.jobs, []);
 });
 
-// RED WHEN (SL-C1-01) Smart App Control and the task are asked one after the
+// RED WHEN Smart App Control and the task are asked one after the
 // other again, or phoneLine asks for the task a second time: each has a 2s
 // timeout, and in series with the phone address this reached the hook's 10s.
 test('up to date: Smart App Control and the task are asked together, and the task only once', async () => {

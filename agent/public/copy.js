@@ -1,5 +1,5 @@
 // The words on the accept screen, and - read only, with no checkbox - in
-// Settings > What this app can see (T81). ONE copy of them, because two
+// Settings > What this app can see. ONE copy of them, because two
 // copies drift.
 //
 // Source of record: design/accept-screen-copy.txt, written and reviewed
@@ -30,7 +30,7 @@ export const SECTIONS = [
     items: [
       'The folders you pick, and the names of folders inside them.',
       'While you are choosing folders, folder names on your other drives.',
-      // Added 2026-09-23, owner's choice (Lane 18 Q2): the picker checks that
+      // Added 2026-09-23, owner's choice: the picker checks that
       // these two names EXIST to pre-set a new share; it never opens either.
       'Whether a folder holds a .git or CLAUDE.md, to suggest how to share it.',
     ],
@@ -43,9 +43,9 @@ export const SECTIONS = [
     ],
   },
   {
-    // Added 2026-09-27, Artifact sequence 15 ("Approve as drawn"): the one
+    // Added 2026-09-27, approved as drawn: the one
     // thing the agent writes outside its own folder - Claude Code's trust
-    // answer for a shared folder at launch (agent/trust.js, T140).
+    // answer for a shared folder at launch (agent/trust.js).
     heading: 'WHAT IT CHANGES ON THIS PC',
     items: [
       "When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask. That also lets the folder's own Claude Code hooks and MCP servers run, so share only folders whose code you trust.",
@@ -71,7 +71,7 @@ export const CONSENT_LABEL = 'I understand what this can see';
 export const SETTINGS_NOTE = 'You can change which folders are shared at any time in Settings.';
 export const ACCEPT_BUTTON = 'CHOOSE FOLDERS';
 
-// The accept screen collapses SECTIONS behind this control (T103); Settings >
+// The accept screen collapses SECTIONS behind this control; Settings >
 // What this app can see renders the same SECTIONS expanded, with no
 // disclosure, because a screen someone navigates to on purpose must not hide
 // its payload behind a second tap.
@@ -80,7 +80,7 @@ export const ACCEPT_BUTTON = 'CHOOSE FOLDERS';
 // sections in their own order, so the collapsed screen still states the shape
 // of what is behind it. Do not shorten it to two of the four, and do not make
 // it sound reassuring - the file header's banned-wording rule binds this
-// string too. WHAT IT CHANGES ON THIS PC (sequence 15) is not named in it: the
+// string too. WHAT IT CHANGES ON THIS PC is not named in it: the
 // approved frame kept this string unchanged, and the consent box cannot be
 // ticked until the sections have been opened (E6), so the line is always shown
 // before anyone accepts. Naming it here is an Artifact change for the owner.
@@ -88,8 +88,8 @@ export const SECTIONS_TOGGLE = 'What it can see, what it cannot, who can reach i
 
 /**
  * Draws SECTIONS into `host`, replacing whatever is there. The one piece of
- * DOM in this module, so the accept screen (T96) and the read-only Settings
- * screen (T81) cannot render the same words two different ways. Touches
+ * DOM in this module, so the accept screen and the read-only Settings
+ * screen cannot render the same words two different ways. Touches
  * `document` only inside this body, so node can import this module.
  */
 export function renderSections(host) {
@@ -111,15 +111,15 @@ export function renderSections(host) {
   }
 }
 
-// Below: the empty/broken project list (T100) - state 1 (nothing shared),
+// Below: the empty/broken project list - state 1 (nothing shared),
 // state 2 (a shared root gone), and state 4 (shared, empty on day one).
-// T78 added no screen and no words: the Settings row re-enters this same picker.
+// The Settings door added no screen and no words: the Settings row re-enters this same picker.
 
 export const CHOOSE_FOLDERS_BUTTON = 'CHOOSE FOLDERS';
 export const PICKER_SKIP = 'SKIP FOR NOW';
 export const PICKER_CANCEL = 'CANCEL';
 export const REMOVE_BUTTON = 'REMOVE';
-// R4. The offline state's only control: there is nothing to choose here,
+// The offline state's only control: there is nothing to choose here,
 // only something to fix, and it is on this device.
 export const RETRY_BUTTON = 'TRY AGAIN';
 
@@ -149,7 +149,7 @@ export const CANNOT_REACH = {
 };
 
 /**
- * R4 (Lane 13). The DEFINITIVE case: the device says it has no network at
+ * The DEFINITIVE case: the device says it has no network at
  * all. Rare, and worth its own words when it happens, because it is the one
  * time the app can honestly say the PC is fine.
  *
@@ -164,7 +164,7 @@ export const PHONE_OFFLINE = {
   body: 'Nothing is wrong with your PC. Check your connection, then check Tailscale is on.',
 };
 
-// Lane 19 step 14/15 - the PC's own warning, opened from its serve_missing
+// The PC's own warning, opened from its serve_missing
 // notification. Verbatim from the approved Artifact.
 export const SERVE_MISSING = {
   banner: 'Your PC reported that its Tailscale sharing is switched off, so this phone can’t reach it.',

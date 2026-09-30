@@ -277,7 +277,7 @@ app's Code tab.
 ```
 
 With it, give the phone code - the same drawing a Claude start shows once
-sharing is on (Lane 23 step 8). The plugin's hook prints it (`$src` is step 3's
+sharing is on. The plugin's hook prints it (`$src` is step 3's
 plugin folder; find it again the same way in a new shell):
 
 ```powershell

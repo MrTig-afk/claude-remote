@@ -491,10 +491,9 @@ hard rules, and where things are.
 
 ## Reading the source
 
-Comments cite internal task ids like `T94` or `M9`. Those refer to this
-project's own task history and are not needed to follow the code - they are kept
-because each one records *why* a line is the way it is, and several mark bugs
-that were expensive to find.
+Comments record *why* a line is the way it is, often with the date the
+decision was made, and several mark bugs that were expensive to find. Read them
+before changing the line they sit on.
 
 ## Tests
 

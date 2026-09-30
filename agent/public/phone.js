@@ -1,4 +1,4 @@
-// Lane 23 steps 3-4 - "Open it on your phone", the desk's last first-run
+// "Open it on your phone", the desk's last first-run
 // screen, and the Phone address row in Settings > Agent status.
 //
 // The words live in index.html, verbatim from the approved Artifact; this
@@ -18,7 +18,7 @@ const ADDRESS = /^https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)+:\d{1,5}$/;
  * 'ready' only when the PC says sharing is on AND knows its address;
  * 'failed' only when the PC ANSWERED and said otherwise; 'pending' when the
  * request itself failed (401, network, timeout) - that says nothing about
- * sharing, so neither variant may claim anything (SS-C1-C06).
+ * sharing, so neither variant may claim anything.
  */
 export function phoneView(res) {
   if (!res || !res.ok || !res.data) return 'pending';
@@ -48,7 +48,7 @@ async function copyAddress(url, button, text) {
   }
 }
 
-// Lane 23 step 3b: Tailscale Inc.'s own store pages, behind "No Tailscale on
+// Tailscale Inc.'s own store pages, behind "No Tailscale on
 // your phone?" under every address code.
 export const STORES = {
   ios: ['https://apps.apple.com/app/tailscale/id1470499037', 'QR code of Tailscale on the App Store'],

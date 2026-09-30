@@ -77,9 +77,9 @@ Lint the launcher with `Invoke-ScriptAnalyzer -Path .\agent\launch-session.ps1`.
 - **User-visible changes follow the approved design.** The PWA's surfaces were
   decided deliberately, and small "improvements" tend to undo one of those
   decisions. This is why a new screen, state or wording needs an issue first.
-- **Keep comments true.** Many comments here cite a task id (`T94`) and state
-  why a line exists. If your change makes one false, fix the comment in the
-  same commit.
+- **Keep comments true.** Many comments here state why a line exists, and
+  several mark bugs that were expensive to find. If your change makes one
+  false, fix the comment in the same commit.
 
 ## Commits and pull requests
 

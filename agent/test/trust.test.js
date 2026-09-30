@@ -45,7 +45,7 @@ test('trustFolder - keeps the fields of an existing entry for the same key', () 
   assert.deepEqual(read(dir).projects['F:/Dev/WIL'], { hasTrustDialogAccepted: true, history: [1] });
 });
 
-test('trustFolder - writes the EXACT key; a differently-cased entry is left alone (RF-C02)', () => {
+test('trustFolder - writes the EXACT key; a differently-cased entry is left alone', () => {
   const dir = profile({ projects: { 'd:/assignments/cml': { hasTrustDialogAccepted: false, history: [1] } } });
   assert.equal(trustFolder('D:\\Assignments\\CML', dir), true);
   const s = read(dir);
@@ -81,7 +81,7 @@ test('trustFolder - never rewrites a file it cannot parse or does not recognise'
   }
 });
 
-test('trustFolder - a session writing the file mid-merge is kept, not overwritten (RF-C03)', () => {
+test('trustFolder - a session writing the file mid-merge is kept, not overwritten', () => {
   const dir = profile({ projects: {} });
   const file = path.join(dir, STATE);
   const realWrite = fs.writeFileSync;
@@ -110,7 +110,7 @@ test('trustFolder - a session writing the file mid-merge is kept, not overwritte
   assert.equal(fs.existsSync(`${file}.claude-remote-tmp`), false);
 });
 
-test('trustFolder - a rename refused for a moment (file busy) is retried, and gives up after the last attempt (RF2-C01)', () => {
+test('trustFolder - a rename refused for a moment (file busy) is retried, and gives up after the last attempt', () => {
   const realRename = fs.renameSync;
   let refusals = 1;
   fs.renameSync = function (...a) {
@@ -132,7 +132,7 @@ test('trustFolder - a rename refused for a moment (file busy) is retried, and gi
   }
 });
 
-test('trustFolder - writes through a symlinked state file instead of replacing the link (RF-C06)', (t) => {
+test('trustFolder - writes through a symlinked state file instead of replacing the link', (t) => {
   const dir = profile();
   const realDir = profile({ projects: {} });
   const link = path.join(dir, STATE);

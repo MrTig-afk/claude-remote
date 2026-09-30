@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 
-// THE FIRST TEST THAT EXECUTES agent/public/app.js (T104).
+// THE FIRST TEST THAT EXECUTES agent/public/app.js.
 //
 // Every other assertion about that file in this suite is
 // read('app.js').includes(...) over SOURCE TEXT. That is why three tests were
@@ -16,7 +16,7 @@ import { test } from 'node:test';
 // the app would simply be dead in the browser with a green suite behind it.
 //
 // It is deliberately NOT a fake DOM and NOT a suite. It is the enabler: the
-// module is importable now, so the executable tests T104 actually wants -
+// module is importable now, so the executable tests actually wanted -
 // ensureAccepted, openRootEditor, the onPopState machine - have somewhere to
 // stand. Do not grow this file into that; give them their own.
 const APP = new URL('../public/app.js', import.meta.url).href; // a file:// URL - a bare Windows path is not importable

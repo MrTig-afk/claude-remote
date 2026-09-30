@@ -25,7 +25,7 @@ fs.mkdirSync(path.join(base, 'email-lint'));
 fs.mkdirSync(path.join(base, '-weird'));
 fs.writeFileSync(path.join(base, 'notes.txt'), 'hello');
 
-// T68 fixtures - container-folder nesting. The notes.md line is
+// Container-folder nesting fixtures. The notes.md line is
 // load-bearing, without it email-lint becomes all-directories-no-files and
 // would classify as a container itself, making 'email-lint/sub' legal.
 fs.mkdirSync(path.join(base, 'Pull Requests', 'Vercel'), { recursive: true });
@@ -49,7 +49,7 @@ const VERCEL = nameUnder(base, 'vercel');
 const PULL_REQUESTS_VERCEL = nameUnder(base, 'pull-requests', 'vercel');
 // The launcher '-SessionName' argument collapses EVERY '/' to '.' - every
 // rooted name now carries at least one '/' (the root prefix), so this
-// collapse is exercised even for a depth-1 project, unlike before T95.
+// collapse is exercised even for a depth-1 project, unlike before multi-root sharing.
 // What -SessionName carries: the Code-tab ROW name, which is the folder leaf.
 // It was the derived session name collapsed on '/' until 2026-09-04, when the
 // owner opened a session and found the row reading
@@ -57,7 +57,7 @@ const PULL_REQUESTS_VERCEL = nameUnder(base, 'pull-requests', 'vercel');
 // telling him to look for and which does not exist.
 const argForm = (sessionName) => sessionName.replace(/\//g, '.');
 
-// A SECOND root, for the T95 multi-root acceptance tests (AT-12/14/15/19).
+// A SECOND root, for the multi-root acceptance tests.
 // Its 'Vercel' shares a name with `base`'s own top-level 'Vercel' (the
 // fixture behind the VERCEL constant above) deliberately - that is exactly
 // the B2 shape the legacy (unprefixed) form must refuse as ambiguous, and
@@ -217,7 +217,7 @@ test('deriveSessionName - naming contract', () => {
   }
 });
 
-// --- T68: nested project naming and rejection -------------------------------
+// --- Nested project naming and rejection ------------------------------------
 
 test('deriveSessionName - nested name carries the root AND the parent', () => {
   assert.equal(
@@ -240,7 +240,7 @@ test('deriveSessionName - the one-argument form is opt-in and unchanged', () => 
 // Owner decision 1, 2026-08-29: the root prefix is ALWAYS present and every
 // segment between root and target is carried, at every depth - there is no
 // longer a depth where the two-argument form falls back to the basename.
-// This SUPERSEDES the pre-T95 "depth 3 falls back to basename" behaviour;
+// This SUPERSEDES the earlier "depth 3 falls back to basename" behaviour;
 // deriveDeskSessionName (registry.js) already joined every segment, so the
 // two now agree everywhere (see the invariant test below).
 test('deriveSessionName - depth 1 and depth 3+ both carry the root and every segment', () => {
@@ -297,7 +297,7 @@ test('resolveProjectPath - nested rejection table', () => {
 });
 
 test('resolveProjectPath - a nested name slugging to "-" is refused, as it is at the top level', () => {
-  // F16-C05. The nested check used a denylist ([\s.]+) while the session name
+  // The nested check used a denylist ([\s.]+) while the session name
   // is built with slugSegment, so `Work/项目` passed and slugged to '-', and a
   // sibling `Work/工作` got the same session name. Its own root, so the shared
   // fixtures' child counts are untouched.
@@ -311,13 +311,13 @@ test('resolveProjectPath - a nested name slugging to "-" is refused, as it is at
   assert.equal(bad.ok, false);
   assert.equal(bad.error, 'invalid_project');
   assert.equal(calls.length, 0);
-  // F16-D2-C02: a leading non-alphanumeric that is not a dot, dash or space
+  // A leading non-alphanumeric that is not a dot, dash or space
   // still names a real session - refusing it strands a running one's STOP.
   for (const n of ok) assert.equal(launchSession(ctx, `Work/${n}`).ok, true, `Work/${n} must still launch`);
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-// --- T70: the routes, end to end - nested-target pins ----------------------
+// --- The routes, end to end - nested-target pins ---------------------------
 // These sit here, above 'endSession - handoff exit with HANDOFF.md mtime
 // moved -> ended record written/true', because that test writes a HANDOFF.md
 // into the shared 'Pull Requests' fixture and never removes it. A FILE in
@@ -325,7 +325,7 @@ test('resolveProjectPath - a nested name slugging to "-" is refused, as it is at
 // (containerChildrenOf returns null once it sees a non-directory dirent - see
 // projects.js), so a later test naming 'Pull Requests/Vercel' would fail with
 // invalid_project for a reason that has nothing to do with what it asserts.
-// T68's own nested tests above sit here for the same reason. TWO tests leak
+// The nested tests above sit here for the same reason. TWO tests leak
 // into that fixture, not one - 'endSession - desk session: claim/kill/handoff
 // argv gets -SessionId, discovery stops seeing it, ended banner after exit'
 // writes a HANDOFF.md there as well, twice, also without cleanup. A sweep
@@ -341,7 +341,7 @@ test('launchSession - nested identifier: exact args array, and the registry key 
   const regCtx = makeRegCtx();
   // claudeConfigDir null for the same reason the flat exact-args test pins it:
   // an unpinned ctx reads the REAL config, so this argv would depend on whether
-  // the machine running the suite has a profile configured (T56).
+  // the machine running the suite has a profile configured.
   // openingReport pinned for the same reason as claudeConfigDir: off the real config file.
   const r = launchSession({ baseDir: base, spawner, claudeConfigDir: null, openingReport: false, ...regCtx }, 'Pull Requests/Vercel');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
@@ -441,7 +441,7 @@ test('HTTP - POST /api/sessions/end ends a nested LAUNCHED session by project', 
   }
 });
 
-test('endSession - a nested DESK session can now be ended by project (newly reachable since T68)', async () => {
+test('endSession - a nested DESK session can now be ended by project (newly reachable with nested projects)', async () => {
   const regCtx = makeRegCtx();
   const killer = makeKillingSpawner(7803);
   regCtx.isPidAlive = killer.isPidAlive;
@@ -512,7 +512,7 @@ test('resolveProjectPath - a junction child of a container cannot be named', (t)
   // NON-container for every test after it in this file - containerChildrenOf
   // sees a non-directory dirent and returns null - so a later nested test
   // fails 400 for a reason that has nothing to do with what it asserts. That
-  // trap cost T70 an investigation; it is a leaked fixture, not a deliberate
+  // trap cost one investigation already; it is a leaked fixture, not a deliberate
   // one. Assertions unchanged.
   try {
     const { spawner, calls } = makeFakeSpawner();
@@ -592,7 +592,7 @@ test('launchSession - exact args array', () => {
   // claudeConfigDir null ON PURPOSE - it is the default (no profile
   // configured), and pinning it keeps this assertion off the real config file.
   // Without it the expected argv would depend on whether the machine running
-  // the suite happens to have set claude_config_dir (T56).
+  // the suite happens to have set claude_config_dir.
   launchSession({ baseDir: base, spawner, claudeConfigDir: null, openingReport: false, ...regCtx }, 'Video Editing');
   const LAUNCH_SCRIPT = path.join(path.resolve(import.meta.dirname, '..'), 'launch-session.ps1');
   assert.deepEqual(calls[0].args, [
@@ -607,7 +607,7 @@ test('launchSession - exact args array', () => {
   ]);
 });
 
-test('launchSession - no -ConfigDir at all when no profile is configured (T56)', () => {
+test('launchSession - no -ConfigDir at all when no profile is configured', () => {
   // The stranger case, and the DEFAULT. An unset CLAUDE_CONFIG_DIR is what
   // makes Claude Code choose its own profile; passing the flag with an empty
   // value would bind it in PowerShell and defeat that.
@@ -665,7 +665,7 @@ test('launchSession - passes -NoOpeningReport when the report is off (the defaul
   assert.ok(calls[0].args.includes('-NoOpeningReport'));
 });
 
-test('launchSession - passes -ConfigDir when a profile IS configured (T56)', () => {
+test('launchSession - passes -ConfigDir when a profile IS configured', () => {
   const { spawner, calls } = makeFakeSpawner();
   const dir = path.join(base, 'some-profile');
   launchSession({ baseDir: base, spawner, claudeConfigDir: dir, ...makeRegCtx() }, 'Video Editing');
@@ -1123,7 +1123,7 @@ test('HTTP - GET /api/sessions/ (trailing slash) -> 404 not_found', async () => 
   }
 });
 
-test('HTTP - DELETE /api/sessions -> 404 not_found (no kill surface in M7)', async () => {
+test('HTTP - DELETE /api/sessions -> 404 not_found (no kill surface)', async () => {
   const { spawner } = makeFakeSpawner();
   const regCtx = makeRegCtx();
   const server = fixtureServer({ baseDir: base, spawner, ...regCtx });
@@ -1309,7 +1309,7 @@ test('HTTP - second POST past STARTING_GRACE_MS while the launcher still runs ->
 });
 
 test("launchSession - a spawn that never happened still tells the phone WHY", () => {
-  // F15-D2-C01: PowerShell itself failing to start (see the comment in sessions.js).
+  // PowerShell itself failing to start (see the comment in sessions.js).
   const { spawner, calls } = makeFakeSpawner();
   let currentTime = Date.now();
   const regCtx = makeRegCtx({ now: () => currentTime });
@@ -1502,7 +1502,7 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
     'utf8',
   );
   assert.ok(script.includes('CLAUDE_CONFIG_DIR'));
-  // T56. This assertion used to be `script.includes('.claude-max')` - it PINNED
+  // This assertion used to be `script.includes('.claude-max')` - it PINNED
   // the owner's personal profile into the launch recipe, so a stranger got every
   // session launched against a profile directory that does not exist on their
   // machine. The profile is now a config value and the flag is ABSENT BY
@@ -1513,7 +1513,7 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   const noComments = script.replace(/^\s*#.*$/gm, '');
   assert.ok(
     !/\.claude-(max|pro)/.test(noComments),
-    'launch-session.ps1 must not hardcode a personal Claude profile - it breaks anyone who is not the owner (T56)',
+    'launch-session.ps1 must not hardcode a personal Claude profile - it breaks anyone who is not the owner',
   );
   assert.match(
     noComments,
@@ -1599,7 +1599,7 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   // launcher had lost the behaviour entirely. detachment.test.js already
   // documents that failure for real: the `.claude-max` token once survived only
   // inside the comment explaining its own removal.
-  // ponytail: second local copy of this one-line strip (detachment.test.js has
+  // Known limit: second local copy of this one-line strip (detachment.test.js has
   // the other). Not extracted, deliberately - a shared PowerShell stripper is a
   // third file in a diff that has already been reviewed, and codeOnly() in
   // helper-source.js strips `//`, which is the wrong comment syntax. Upgrade
@@ -1627,7 +1627,7 @@ test('recipe-integrity - launch-session.ps1 preserves the proven launch recipe',
   assert.ok(!/--rc/.test(script));
 });
 
-// --- Regression tests for the T29 review BLOCK ------------------------------
+// --- Regression tests for an early review BLOCK ------------------------------
 // The pid directory was never created by production code; only tests created
 // it, so 98 green tests passed while the mechanism could never work. These two
 // deliberately do NOT pre-create it.
@@ -1686,7 +1686,7 @@ test('launchSession still succeeds when the pid dir cannot be created - fails to
   assert.equal(calls.length, 1, 'the spawn must still happen');
 });
 
-// --- POST /api/sessions/end - the gate, validation and Lane D1 -------------
+// --- POST /api/sessions/end - the gate and validation --------------------------
 
 test('HTTP - POST /api/sessions/end with no token -> 401, the route sits below the gate', async () => {
   const regCtx = makeRegCtx();
@@ -2174,7 +2174,7 @@ test('source - defaultPidImageName\'s tasklist call hides its console window and
   const src = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'sessions.js'), 'utf8');
   // Anchored on CODE, not on the next function's comment prose. It used to
   // end the slice at ' * Byte-for-byte port', the first line of
-  // deriveSessionName's docblock - so T68's mandated rewrite of that docblock
+  // deriveSessionName's docblock - so the nested-projects rewrite of that docblock
   // (it had become untrue) broke this unrelated test. A test must not depend
   // on a neighbour's wording. '\n}' is the function's own closing brace at
   // column 0: every inner brace is indented, and it is CRLF-safe because the
@@ -2496,7 +2496,7 @@ test('endSession - desk session: pidImageName is never called before a successfu
   await started.handoff;
 });
 
-// --- T50: END by session_name for a desk session in a project subfolder ----
+// --- END by session_name for a desk session in a project subfolder ----
 
 test('endSession - end by session_name for a subfolder desk session: registry claim survives the prune, handoff -> ended with the SUBFOLDER path (review round 1, issue 1)', async () => {
   const regCtx = makeRegCtx();
@@ -2554,7 +2554,7 @@ test('endSession - a body carrying neither project nor session_name -> 400 inval
   assert.deepEqual(result, { ok: false, status: 400, error: 'invalid_request' });
 });
 
-// --- T74 security fix: the session-name slug is an allowlist ----------------
+// --- Security fix: the session-name slug is an allowlist ----------------
 // Regression tests for a real command-injection path, not hygiene tests.
 // A session name reaches launch-session.ps1, which passes it to Start-Process
 // for `claude.cmd`; a .cmd runs through cmd.exe, so a metacharacter that
@@ -2604,12 +2604,12 @@ test('deriveSessionName - every real project name is unchanged by the allowlist'
 
 // AT-16 - THE INVARIANT that would actually break if registry.js kept a
 // second copy of the slug: deriveDeskSessionName and deriveSessionName must
-// return the same string for the same path under the same root. Since T72
+// return the same string for the same path under the same root. Since the folder drill-in screen
 // that string is the identity a nested session's STOP resolves on, so a
 // divergence ends the WRONG session. Behavioural, not a source scan - the
 // first version of this test WAS a source scan, and its regex was subtly
 // wrong, so it passed while a re-introduced duplicate slug sat in
-// registry.js. SUPERSEDES the pre-T95 "depth 3+ disagree BY DESIGN" note:
+// registry.js. SUPERSEDES the earlier "depth 3+ disagree BY DESIGN" note:
 // both now delegate to sessionNameFor (sessions.js), THE ONE
 // IMPLEMENTATION, so they agree at every depth including 0 (the root
 // itself) and 3 - there is no longer a depth where they may diverge.
@@ -2649,7 +2649,7 @@ test('slugSegment - a name of only metacharacters cannot pass the launchability 
   }
 });
 
-// --- T95 acceptance tests, continued (multi-root, HTTP-level) --------------
+// --- Multi-root acceptance tests, continued (multi-root, HTTP-level) --------------
 
 // R-1 - THE COLLISION TEST, the whole point of SB3. Two SIBLING roots whose
 // only difference is a path separator vs a literal hyphen used to slug to
@@ -2912,7 +2912,7 @@ test('R-7 - a single-mode root launched by its bare root slug survives two polls
   }
 });
 
-// T140: a launch answers Claude Code's workspace-trust modal for the folder
+// A launch answers Claude Code's workspace-trust modal for the folder
 // first, but ONLY when ctx opts in (the real server does; see server.js).
 test('launchSession - trusts the folder in the configured profile before spawning, when ctx opts in', () => {
   const order = [];
@@ -2953,6 +2953,6 @@ test('launchSession - no trust write without the opt-in, and a failed trust stil
   }
   assert.equal(r.ok, true);
   assert.equal(second.calls.length, 1);
-  // RF2-C02: the miss is logged, so a tile stuck on the modal has a cause in agent.log.
+  // The miss is logged, so a tile stuck on the modal has a cause in agent.log.
   assert.ok(warnings.some((w) => w.includes('could not mark') && w.includes('email-lint')), warnings.join('\n'));
 });

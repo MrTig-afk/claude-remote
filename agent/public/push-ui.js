@@ -1,9 +1,9 @@
-// Lane 19's words and pure state logic. No DOM access anywhere - app.js is
+// The notification words and pure state logic. No DOM access anywhere - app.js is
 // the only place any of this touches the page, same rule as folders-ui.js
 // and copy.js. Every string below is copied verbatim from the approved
 // Artifact (design/userflow.artifact.html) - do not reword, do not invent.
 
-// --- Settings root row (Lane 6) --------------------------------------------
+// --- Settings root row --------------------------------------------
 
 export const ROW_OFF = 'off';
 export const ROW_CANT = 'can’t turn on here';
@@ -138,7 +138,7 @@ export function notifyRowState(push) {
     : { text: ROW_OFF, enterable: true };
 }
 
-/** 'no other devices yet' | '1 other device' | 'N other devices' (D13). */
+/** 'no other devices yet' | '1 other device' | 'N other devices'. */
 export function otherDevicesLine(n) {
   if (n === 0) return 'no other devices yet';
   return n === 1 ? '1 other device' : `${n} other devices`;

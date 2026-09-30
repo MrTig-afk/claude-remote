@@ -119,7 +119,7 @@ after(() => {
   cleanupAuthCtx(mainCtx);
 });
 
-test('B1 - GET /api/acknowledge on a fresh ctx -> 200 { acknowledged: false, shared_folders: [] } (T100 OQ-A: re-pinned to include the new field, not loosened)', async () => {
+test('B1 - GET /api/acknowledge on a fresh ctx -> 200 { acknowledged: false, shared_folders: [] } (re-pinned to include the new field, not loosened)', async () => {
   const res = await mainFetch('/api/acknowledge');
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { acknowledged: false, shared_folders: [] });
@@ -138,7 +138,7 @@ test('B2 - POST /api/acknowledge -> 200, acknowledged:true and an ISO acknowledg
   assert.equal(onDisk.acknowledged_at, firstAcknowledgedAt);
 });
 
-test('B3 - GET after the POST -> { acknowledged: true, shared_folders: [] } (T100 OQ-A: re-pinned to include the new field, not loosened)', async () => {
+test('B3 - GET after the POST -> { acknowledged: true, shared_folders: [] } (re-pinned to include the new field, not loosened)', async () => {
   const res = await mainFetch('/api/acknowledge');
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { acknowledged: true, shared_folders: [] });
@@ -305,7 +305,7 @@ test('B10 - POST /api/acknowledge does not drop shared_folders (the HTTP twin of
 });
 
 // ============================================================
-// H - GET /api/acknowledge's shared_folders field (T100 OQ-A). Fixture
+// H - GET /api/acknowledge's shared_folders field. Fixture
 // recipe borrowed from folders-ui.test.js's makeShareServer: the temp dir's
 // own drive letter as a fixed drive plus one other letter as the blocked
 // system drive, systemDirs: [] because os.tmpdir() on Windows lives under
@@ -500,7 +500,7 @@ test('C1 - copy.js imports successfully under node (no DOM access at module top 
 
 test('C2 - SECTIONS headings match the five reviewed literals, in order', () => {
   assert.deepEqual(copy.SECTIONS.map((s) => s.heading), [
-    // WHAT IT CHANGES ON THIS PC: Artifact sequence 15, 2026-09-27 (T140).
+    // WHAT IT CHANGES ON THIS PC: approved 2026-09-27.
     'WHAT IT CAN SEE', 'WHAT IT CANNOT SEE', 'WHAT IT CHANGES ON THIS PC', 'WHO CAN REACH IT', 'WHAT LEAVES THIS MACHINE',
   ]);
 });
@@ -514,7 +514,7 @@ test('C3 - every items line and every top-level string pins to its reviewed lite
   assert.deepEqual(copy.SECTIONS[0].items, [
     'The folders you pick, and the names of folders inside them.',
     'While you are choosing folders, folder names on your other drives.',
-    // Owner-approved 2026-09-23 (Artifact sequence 9, Lane 18 Q2).
+    // Owner-approved 2026-09-23.
     'Whether a folder holds a .git or CLAUDE.md, to suggest how to share it.',
   ]);
   assert.deepEqual(copy.SECTIONS[1].items, [
@@ -522,7 +522,7 @@ test('C3 - every items line and every top-level string pins to its reviewed lite
     'Your C: drive. It is blocked and cannot be shared.',
   ]);
   assert.deepEqual(copy.SECTIONS[2].items, [
-    // Owner-approved 2026-09-27 (Artifact sequence 15, T140; second sentence sequence 22).
+    // Owner-approved 2026-09-27 (the second sentence later the same day).
     "When a session starts in a folder you shared, Claude Code is told you trust that folder, so the session starts without stopping to ask. That also lets the folder's own Claude Code hooks and MCP servers run, so share only folders whose code you trust.",
   ]);
   assert.deepEqual(copy.SECTIONS[3].items, [

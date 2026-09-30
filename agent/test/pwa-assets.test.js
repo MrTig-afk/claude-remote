@@ -208,7 +208,7 @@ test('the offline navigate fallback reads /index.html from THIS cache, not the o
   );
 });
 
-test('T109: a named cache lookup that REJECTS falls through instead of failing the request', async () => {
+test('a named cache lookup that REJECTS falls through instead of failing the request', async () => {
   // RED WHEN: either `.catch(() => undefined)` is dropped from sw.js. Under the
   // older Service Worker spec a named caches.match rejects with NotFoundError
   // once that cache is gone; matchAcross above models only the modern
@@ -300,7 +300,7 @@ const TOKEN_SET = new Set([
   '0a0d0a', '0f150f', 'eafbea', 'c9d1c9', '9aab9a', '4a5a4a',
   '3d4a3d', '2a332a', '7ee787', '5fae6f', '1b231b', '6b7a6b',
   'ff7b72', 'e5534b',
-  // Added with Lane 7's "Reset the app" screen, which needs a CAUTION colour.
+  // Added with the "Reset the app" screen, which needs a CAUTION colour.
   // design/tokens.md had none - it has an accent and a danger and nothing
   // between them - so this is the userflow artifact's own amber, now recorded
   // in tokens.md as well. Caution is not danger: --danger stays reserved for
@@ -390,7 +390,7 @@ test('lock.js never calls fetch() directly - it only calls into api.js', () => {
 
 // --- No egress ---
 
-// Two exemptions (T83), both for links the owner TAPS rather than anything the
+// Two exemptions, both for links the owner TAPS rather than anything the
 // app LOADS: an <a href> in index.html, and app.js's one REPO_URL constant,
 // which buildSettingsRow turns into rows. Each must carry rel="noreferrer" so
 // the tailnet hostname never travels as a Referer - asserted below.
@@ -731,9 +731,9 @@ test('the + button is anchored to the bottom corner and the page reserves the ba
   );
 });
 
-// Lane 22 steps 1-2, the parts a static read can prove: the label, the two
+// The + menu, the parts a static read can prove: the label, the two
 // choices in their drawn order with the Artifact's icons, same width, 44px.
-test('Lane 22: the + is "Add" with aria-expanded, and its menu is Share folder over New project, equal width, 44px', () => {
+test('the + is "Add" with aria-expanded, and its menu is Share folder over New project, equal width, 44px', () => {
   const html = read('index.html');
   const btn = html.match(/<button class="newproj"[^>]*>/);
   assert.ok(btn);
@@ -824,14 +824,14 @@ test('a list row folds its elapsed time into the status line, so the removed idl
 // --- STOP / confirm / watch loop ---
 
 // The rule is "var(--danger) means THIS ENDS SOMETHING", not "danger belongs
-// to the session tiles". Lane 3 and Lane 8 of the artifact put red on the
+// to the session tiles". The approved design puts red on the
 // shared-folder remove and its confirmation in exactly those words -
 // "destructive, so it asks; red is this palette's one danger colour and
 // appears nowhere else" - so those selectors are on the list below. It stays
 // an ALLOWLIST: a new red thing must be added here on purpose, and the two
 // base banner rules must stay neutral whatever else does.
-// Input errors joined it on 2026-09-27 (owner, "Make errors red"; Artifact
-// Lanes 11, 12 and 20): the New project error line and its panel edge, and a
+// Input errors joined it on 2026-09-27 (owner, "Make errors red"):
+// the New project error line and its panel edge, and a
 // message line whose tone lock.js setMsg marked 'error'. Nothing else.
 const DANGER_SELECTORS = /tile-stop|tile-confirm|shared-remove|set-danger|set-gone|set-btn-danger|newproj-error|gate-msg\[data-tone="error"\]/;
 
@@ -1065,7 +1065,7 @@ test('the confirm carries CANCEL, the warning, the route out, and END ANYWAY - a
   const buildTile = js.slice(js.indexOf('function buildTile('), js.indexOf('function buildRow('));
   assert.match(buildTile, /'CANCEL'/);
   assert.match(buildTile, /'END ANYWAY'/);
-  // Artifact lane 2, approved sequence 3: the confirm warns that nothing
+  // As approved: the confirm warns that nothing
   // writes a handoff and points at the only thing that can, then still lets
   // the owner through. A warning, not a gate.
   assert.match(buildTile, /'OPEN CLAUDE FIRST'/);
@@ -1303,18 +1303,18 @@ test('statusLine appends an optional suffix on top of its existing behaviour', (
 });
 
 test("app.js never asks the owner to go and VERIFY a launch in the Claude app", () => {
-  // T47's invariant, and it still holds: the owner's words were "it should
+  // The original invariant, and it still holds: the owner's words were "it should
   // just know". The agent proves the pid, so the app must never send someone
   // to another app to check whether a launch worked.
   const js = read('app.js');
   assert.doesNotMatch(js, /not confirmed/);
 
-  // NARROWED by Lane 10 / R1, 2026-09-04. This used to assert that only
+  // NARROWED by the hand-off banner, 2026-09-04. This used to assert that only
   // maybeFailedBanner could mention the Claude app at all. That is no longer
   // right, and the two decisions do not actually conflict:
-  //   T47 cut "open the Code tab to CHECK IT APPEARED" - verification the app
+  //   It first cut "open the Code tab to CHECK IT APPEARED" - verification the app
   //        can do itself, which is what "just knows" killed.
-  //   R1  adds "Ready in the Claude app... to START TYPING" - fired only once
+  //   The hand-off adds "Ready in the Claude app... to START TYPING" - fired only once
   //        handoffReady() confirms the session is running, i.e. exactly after
   //        the app has done the knowing. It names a destination, not a check.
   // What survives is the real rule: no verification prompts. The hand-off copy
@@ -1327,7 +1327,7 @@ test('the hand-off copy names a destination, never a check', () => {
   // The distinction above, enforced on the copy itself rather than on a count.
   const src = read('handoff-ui.js');
   for (const verify of [/check it appeared/i, /to check/i, /confirm it/i, /make sure/i]) {
-    assert.doesNotMatch(src, verify, "R1 must not reintroduce T47's verification prompt");
+    assert.doesNotMatch(src, verify, "the hand-off must not reintroduce the old verification prompt");
   }
 });
 
@@ -1391,7 +1391,7 @@ test('clearSettledLaunchBanner keeps the banner while the session is still start
 });
 
 test('clearSettledLaunchBanner hands off as soon as the session is running', () => {
-  // CHANGED by Lane 10 / R1. This used to assert hideBanner(). The launch
+  // CHANGED by the hand-off banner. This used to assert hideBanner(). The launch
   // banner still must not sit there until a manual refresh - the original
   // bug - but "landed and live" is now the one moment the hand-off to the
   // Claude app is worth saying, so the line is REPLACED rather than cleared.
@@ -1409,7 +1409,7 @@ test('clearSettledLaunchBanner drops the banner for a failed session too, so may
   const handoff = spy();
   makeClearSettled(hide, { ...PROJ, sessions: [{ path: 'F:/p/Beacon', status: 'failed' }] }, 'Beacon', handoff)();
   assert.equal(hide.calls.length, 1);
-  // Lane 10 / R1: a failed launch must NEVER hand off. Sending someone to the
+  // A failed launch must NEVER hand off. Sending someone to the
   // Claude app to look for a session that did not start is worse than silence
   // - they go, find nothing, and stop trusting what the app tells them.
   assert.equal(handoff.calls.length, 0, 'a failed launch must not offer to open it');
@@ -1805,7 +1805,7 @@ test('a nested launch banner clears once the nested session is running', () => {
     src + '; return clearSettledLaunchBanner;',
   )(state, sessionFor, hide, 'Pull Requests/Vercel', handoffReady, handoff);
   clearSettledLaunchBanner();
-  // CHANGED by Lane 10 / R1, same as the top-level case: a running session
+  // CHANGED by the hand-off banner, same as the top-level case: a running session
   // hands off rather than blanking. The claim under test is unchanged and is
   // still about the pathless stand-in - without it this nested launch resolves
   // to no session at all and the banner is left up forever.
@@ -1883,7 +1883,7 @@ test('backbar click: with no confirm open, the tap closes the folder', () => {
 
 // Integration-level: renderProjects itself, with a folder open, scoped to
 // only that folder's children and sessions - not the piecewise helpers.
-// T100's trap: renderProjects now also references listZoneState, missingRoots,
+// The list-state trap: renderProjects now also references listZoneState, missingRoots,
 // buildEmptyState, buildGoneNotice and five copy.js constants at module
 // scope - every one of them has to be added to BOTH the parameter list and
 // the call arguments below, or a test that reaches those branches dies with
@@ -1900,18 +1900,18 @@ function makeRenderProjectsIntegration(stubs) {
   return new Function(
     'document', 'state', 'buildTile', 'buildRow', 'renderBackBar',
     'listZoneState', 'missingRoots', 'buildEmptyState', 'buildGoneNotice', 'crumbSegments',
-    // R4's offline branch reads it; without this the one list state added by
-    // R4 is the only one that cannot be integration-tested.
+    // The offline branch reads it; without this the one list state added by
+    // the offline state is the only one that cannot be integration-tested.
     'PHONE_OFFLINE', 'CANNOT_REACH',
     'SHARED_UNKNOWN', 'NOTHING_SHARED', 'ALL_ROOTS_GONE', 'EMPTY_DAY_ONE_BODY', 'emptyDayOneTitle',
-    // Lane 9's grouping runs inside renderProjects now, so the row zone's own
+    // The folder grouping runs inside renderProjects now, so the row zone's own
     // dependency comes in here too.
     'projectSections',
-    // Lane 19 step 14, and the C1 fix: buildServeMissingState is read only on
+    // And the serve_missing alert's fix: buildServeMissingState is read only on
     // the serveMissing branch (dormant for every pre-existing test here);
     // closeActiveReauth runs unconditionally at the top of every call.
     'buildServeMissingState', 'closeActiveReauth',
-    // Lane 22: renderProjects asks what the + offers and hands it to renderBackBar.
+    // renderProjects asks what the + offers and hands it to renderBackBar.
     'plusMenuItems',
     src + '; return renderProjects;',
   )(
@@ -1982,7 +1982,7 @@ function makePopState(state, historyStub) {
   const src = js.slice(js.indexOf('function onPopState('), js.indexOf('function endTargetFor('));
   // The settings stack is EMPTY in these tests: they exercise the drill/confirm
   // branches, which sit below the settings branch and must be unaffected by it.
-  // 'sheetPushed' is Lane 10's flag, injected false: its branch is first in
+  // 'sheetPushed' is the once-only sheet's flag, injected false: its branch is first in
   // onPopState and would otherwise swallow every pop these tests issue.
   return new Function('state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
     'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
@@ -2105,13 +2105,13 @@ function makeRenderBackBar(newProjectAt = null) {
   return { renderBackBar, els, closeCalls, syncs };
 }
 
-// Lane 22 (was: the + hid inside a folder). It now shows there too, and hides
+// The + used to hide inside a folder; it now shows there too, and hides
 // only when plusMenuItems has nothing to offer.
 test('renderBackBar reveals the bar and keeps the + inside a folder; the + hides only with nothing to offer', () => {
   const open = makeRenderBackBar();
   open.renderBackBar({ name: 'Pull Requests', path: 'F:/p/Pull Requests' }, ['share', 'new']);
   assert.equal(open.els.backbar.hidden, false);
-  assert.equal(open.els.newproj.hidden, false, 'Lane 22 step 6: the + shows inside a folder of projects');
+  assert.equal(open.els.newproj.hidden, false, 'the + shows inside a folder of projects');
   assert.equal(open.els['backbar-name'].textContent, 'Pull Requests');
   assert.equal(open.els['backbar-path'].textContent, 'F:/p/Pull Requests');
   assert.ok(open.els.backbar.attrs['aria-label'], 'an aria-label must be set');
@@ -2120,7 +2120,7 @@ test('renderBackBar reveals the bar and keeps the + inside a folder; the + hides
   const closed = makeRenderBackBar();
   closed.renderBackBar(null, ['share']);
   assert.equal(closed.els.backbar.hidden, true);
-  assert.equal(closed.els.newproj.hidden, false, 'Lane 22 step 5: Share folder alone still shows the +');
+  assert.equal(closed.els.newproj.hidden, false, 'Share folder alone still shows the +');
 
   const unknown = makeRenderBackBar();
   unknown.renderBackBar(null, []);
@@ -2253,7 +2253,7 @@ test('renderProjects gives a synthetic row its parent and a listed project none'
   assert.equal(beacon.parent, undefined);
 });
 
-// --- T100: the empty/broken project list ------------------------------
+// --- The empty/broken project list ------------------------------------
 
 // Same createElement shape makeBuildRow uses - dataset/className/textContent
 // plain objects, enough for buildEmptyState/buildGoneNotice to build a real
@@ -2279,7 +2279,7 @@ function makeEmptyGoneBuilders() {
   const src = js.slice(start, end);
   return new Function(
     'document', 'CHOOSE_FOLDERS_BUTTON', 'REMOVE_BUTTON', 'rootGoneTitle', 'ROOT_GONE_BODY', 'crumbSegments',
-    // buildEmptyState takes an ACTION name since R4 - 'choose' or 'retry' -
+    // buildEmptyState takes an ACTION name since the offline state - 'choose' or 'retry' -
     // and reads the label for each. Same rule as the renderProjects harness
     // above: a constant it references has to be injected here too.
     'RETRY_BUTTON',
@@ -2319,7 +2319,7 @@ function baseEmptyListState(overrides) {
 function makeProjectsEls() {
   return {
     tiles: makeStubEl(), projects: makeStubEl(), 'run-count': makeStubEl(), 'all-count': makeStubEl(),
-    // Lane 9's row zone renames or hides the ALL PROJECTS header depending on
+    // The folder-grouped row zone renames or hides the ALL PROJECTS header depending on
     // how many shared folders there are, so these three are read every render.
     'all-header': makeStubEl(), 'all-rule': makeStubEl(), 'all-label': makeStubEl(), 'zone-run': makeStubEl(), 'pane-empty': makeStubEl(), 'pane-empty-body': makeStubEl(),
   };
@@ -2363,7 +2363,7 @@ test('D1 - state 1: #projects holds exactly one [data-choose] and zero rows', ()
   assert.equal(countByDataset(els.projects, 'project'), 0);
 });
 
-// Lane 21 step 5 (Artifact sequence 15): at desktop width the nothing-shared
+// At desktop width the nothing-shared
 // prompt is also drawn in the wide pane. Only for THAT state - the other empty
 // states keep it hidden, and it is rebuilt, not appended to, on every render.
 test('D1b - nothing shared fills #pane-empty with its own CHOOSE FOLDERS; every other state hides it', () => {
@@ -2481,7 +2481,7 @@ test('D5 - reachable:\'waiting\' with shared:[]: the waiting .msg renders and NO
   assert.match(body, /waking up/, 'and the likeliest cause still leads');
 });
 
-// Lane 22 changed this: nothing-shared used to hide the + (canCreate=false).
+// The + menu changed this: nothing-shared used to hide the + (canCreate=false).
 // It now offers Share folder alone, and only an unknown set hides it.
 test('D6 - renderBackBar gets Share folder alone for nothing-shared, both for empty-day-one, nothing when unknown', () => {
   function canCreateFor(sharedVal) {
@@ -2540,7 +2540,7 @@ test('load() waits and retries only on network/timeout, and dead-ends on every o
   assert.match(load, /p\.code === 'network' \|\| p\.code === 'timeout'/);
   assert.match(load, /state\.reachable = 'waiting'/);
   assert.match(load, /waitForAgent\(\)/);
-  // Three branches since R4, and their ORDER is the precedence:
+  // Three branches since the offline state, and their ORDER is the precedence:
   //   offline  - this device has no network      (beats everything)
   //   waiting  - the PC has not answered yet
   //   else     - the agent answered with a refusal, which waiting cannot fix
@@ -2685,7 +2685,7 @@ test('sw.js does not fail a good network response because the cache write failed
   assert.equal(res.status, 200, 'the served response must survive a failing cache write');
 });
 
-// --- the accept screen (T96) -----------------------------------------------
+// --- the accept screen -----------------------------------------------
 
 test('boot() awaits ensureAccepted() between the unlock and wireEvents(), so the project list cannot show ahead of the warning', () => {
   const js = read('app.js');
@@ -2750,7 +2750,7 @@ test('the accept path pushes no history entry, and onPopState is unchanged', () 
   assert.ok(!onPopState.includes('accept'), 'onPopState must know nothing about the accept screen');
 });
 
-// --- the folder picker (T97) ------------------------------------------------
+// --- the folder picker ------------------------------------------------
 
 test('A4 - in ensureAccepted, showFolders( runs after await showAccept() and before picker.hidden = false', () => {
   const js = read('app.js');
@@ -2802,7 +2802,7 @@ function makeShareStubEl(tag) {
       this.children.push(child);
       return child;
     },
-    // Lane 20's openReauth moves #reauth to sit beside whichever buttons it
+    // The passcode panel's openReauth moves #reauth to sit beside whichever buttons it
     // hid, via the real DOM's parentElement/insertBefore - so the stub needs
     // both, not just appendChild.
     get parentElement() { return el.parent || null; },
@@ -2968,7 +2968,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
     folders.crumbSegments, folders.sharedBody, folders.coverageOf, folders.driveRowState,
     folders.truncatedNote, folders.shareErrorMessage, folders.applySaveResult, folders.MAX_SHARED_ROOTS,
     copy.PICKER_SKIP, copy.PICKER_CANCEL,
-    () => {}, // showFolders' router call (T77) - this helper only exercises the picker's own wiring
+    () => {}, // showFolders' router call - this helper only exercises the picker's own wiring
   );
   picker.document = doc;
   picker.window = win;
@@ -2976,7 +2976,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
   return picker;
 }
 
-// --- the shared-folders door (T78) ------------------------------------------
+// --- the shared-folders door ------------------------------------------
 
 // Two slices of app.js, concatenated - function declarations hoist across
 // the whole `new Function` body, so order does not matter. The second slice
@@ -2984,7 +2984,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
 // finishFolders, onSave, closeSettings, openPickerFromShared, renderSettings
 // and buildSettingsRow); the first adds onChooseFolders, the ONLY way in for
 // either door.
-// The Settings door is now two screens: the row opens Lane 3's Shared
+// The Settings door is now two screens: the row opens the Shared
 // folders screen, and ADD A FOLDER there is what reaches the picker. That
 // button's handler is openPickerFromShared, so it is the door these tests
 // drive - every assertion below is about what the picker does once opened,
@@ -3061,7 +3061,7 @@ return { share, showFolders, renderShare, openDrives, openPath, onFoldersPop, on
   door.state = state;
   door.screens = screens;
   door.puts = puts;
-  // Lane 20: SAVE from this door always opens the panel (share.firstRun is
+  // SAVE from this door always opens the panel (share.firstRun is
   // false here, as it is for the real Settings door) - types the passcode
   // into it and submits.
   door.submitReauth = async (passcode) => {
@@ -3320,7 +3320,7 @@ test('A16 - finishFolders removes all six listeners and nulls pendingFolders', a
   const picker = loadPicker({ getDrives, putShared });
 
   // firstRun: true - this test is about finishFolders' own teardown, not
-  // about Lane 20; the first-run picker still writes directly.
+  // about the passcode panel; the first-run picker still writes directly.
   picker.showFolders([], { firstRun: true });
   await flush();
   picker.share.ticks = [{ path: 'F:/Dev', name: 'Dev', newFolders: 'show' }];
@@ -3433,12 +3433,12 @@ test('D10 - the SKIP/CANCEL label depends on whether anything is already shared'
   assert.equal(picker2.document.getElementById('share-skip').textContent, copy.PICKER_CANCEL);
 });
 
-// --- T78: the shared folders door - pins the composite path end to end -----
+// --- The shared folders door - pins the composite path end to end ----------
 
-test("F1 - the Settings row leads to Lane 3's screen, and one place reaches the picker from it", () => {
+test("F1 - the Settings row leads to the Shared folders screen, and one place reaches the picker from it", () => {
   // RED WHEN: the row renders with a chevron and answers a tap with nothing -
   // the dead control the whole enterable/inert split exists to prevent.
-  // 'shared' used to be an ACTION that jumped straight into the picker; Lane 3
+  // 'shared' used to be an ACTION that jumped straight into the picker; the Shared folders screen
   // makes it a screen, so what this pins is that it is a real destination and
   // that exactly one control still reaches the picker from there.
   const js = read('app.js').replace(/\r/g, '');
@@ -3452,7 +3452,7 @@ test("F1 - the Settings row leads to Lane 3's screen, and one place reaches the 
   const body = js.slice(start, js.indexOf('});', start));
   assert.ok(
     !/openSharedFolders\(\)/.test(body),
-    'the row must not jump straight into the picker any more - that is what Lane 3 replaced',
+    'the row must not jump straight into the picker any more - that is what the Shared folders screen replaced',
   );
 
   const callSites = [...js.matchAll(/openPickerFromShared\b/g)].filter((m) => {
@@ -3489,13 +3489,13 @@ test('F2 - re-entry seeds the ticks, so the Settings door never opens blank', as
 
 test('F3 - an unknown shared set cannot enter the picker from the Settings door', () => {
   // RED WHEN: either guard layer is bypassed by the second door. This is the
-  // merge gate T100's review set.
+  // merge gate, as the list-state review set it.
   const door = loadDoor({});
   door.state.shared = null;
 
   door.renderSettings();
   // Named explicitly. findByDataset returns the FIRST tappable row in the
-  // tree, and since Lane 6 landed that is 'What this app can see' - a row
+  // tree, and since the Settings root landed that is 'What this app can see' - a row
   // that SHOULD be enterable. Asserting "no tappable row at all" would now be
   // asserting the settings screen is broken, which is not this test's claim:
   // the claim is that the SHARED row specifically refuses to open the picker
@@ -3545,7 +3545,7 @@ test('F4 - SAVE writes the right PUT body, and the list reload runs only after t
   tick.checked = true;
   door.onShareListChange({ target: tick });
 
-  // Lane 20: SAVE from this door opens the passcode panel first - nothing is
+  // SAVE from this door opens the passcode panel first - nothing is
   // written until it is submitted.
   door.document.getElementById('share-save').fire('click');
   await flush();
@@ -3807,7 +3807,7 @@ test('index.html ships every accept-screen text node empty - the words live only
   }
 });
 
-// --- E: the accept screen's progressive disclosure (T103) ------------------
+// --- E: the accept screen's progressive disclosure ------------------
 
 // Runs showAccept()'s real wiring under a stub DOM, the same recipe
 // loadPicker() uses. renderSections is a thin wrapper around the real
@@ -3847,7 +3847,7 @@ function loadAccept({ acknowledge: acknowledgeImpl } = {}) {
     copy.SECTIONS_TOGGLE, wrappedRenderSections,
     acknowledgeImpl || (async () => ({ ok: true })),
     (code, status) => `${code} ${status}`,
-    () => {}, // showAccept's router call (T77) - this helper only exercises the accept screen's own wiring
+    () => {}, // showAccept's router call - this helper only exercises the accept screen's own wiring
   );
   mod.document = doc;
   return mod;
@@ -3872,7 +3872,7 @@ test('the summary keeps the platform disclosure triangle: no list-style:none, no
   const body = rule[1];
   assert.ok(!/list-style\s*:\s*none/.test(body), 'list-style:none removes the only affordance the collapsed screen has that says "tappable"');
   assert.ok(!/display\s*:\s*(flex|block)/.test(body), 'Chrome drops the disclosure marker the moment display is not list-item');
-  // Only .ts-more (Lane 23 step 3b) may hide it: the Artifact draws a chevron
+  // Only .ts-more may hide it: the Artifact draws a chevron
   // there instead. A bare `summary::-webkit-details-marker` would reach this one.
   const hiders = [...css.matchAll(/([^{}]*)::-webkit-details-marker\s*\{\s*display\s*:\s*none/g)].map((m) => m[1].trim());
   assert.ok(hiders.every((sel) => sel === '.ts-more > summary'), `the marker must not be hidden via the webkit pseudo-element either: ${hiders}`);
@@ -3992,7 +3992,7 @@ test('E9 - a disabled consent checkbox does not swallow the tap', () => {
 });
 
 // The eye toggle is an app-wide rule, not a per-screen one: the artifact
-// draws it on the gate (Lane 1, Lane 2) and on Change passcode (Lane 7).
+// draws it on the gate and on Change passcode.
 test('every passcode field carries its own eye, found by the <input id>-eye convention', () => {
   // RED WHEN: a field is added without an eye, or an eye is added with an id
   // that setPinRevealed cannot derive - it looks the button up as

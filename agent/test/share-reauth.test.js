@@ -1,4 +1,4 @@
-// T134 - R17: every share-changing route (PUT /api/shared) requires the
+// Every share-changing route (PUT /api/shared) requires the
 // current passcode, sharing the unlock screen's own attempt counter and
 // lockout. Fixture recipe from shared.test.js/folders-ui.test.js: the temp
 // dir's own drive letter as a fixed drive, one other letter blocked,
@@ -169,7 +169,7 @@ test('route: wrong passcode -> 403 passcode_incorrect, the token stays valid, co
     assert.deepEqual(await res.json(), { error: 'passcode_incorrect', failures: 1, retry_after_ms: 0 });
 
     // MUTATION-SENSITIVE: a route answering 401 here instead of 403 would
-    // wrongly re-lock the app on a typo'd passcode - this is what T134's
+    // wrongly re-lock the app on a typo'd passcode - this is what the reauth fix's
     // 401-mutation drill (recorded in changes.md) flips to prove it red.
     assert.notEqual(res.status, 401);
 
@@ -286,7 +286,7 @@ test('route: a first-run write that FAILS (409 overlap) keeps the exemption for 
       method: 'PUT',
       body: JSON.stringify({ shared_folders: [{ path: parent }, { path: child }] }),
     });
-    assert.equal(overlapping.status, 409, 'the overlap check itself is unrelated to R17 and still applies');
+    assert.equal(overlapping.status, 409, 'the overlap check itself is unrelated to the passcode check and still applies');
 
     // The flag survives the failed write - the owner gets to fix the tick set
     // and try again without being asked for a passcode it does not need yet.
@@ -328,7 +328,7 @@ test('route: 429 carries a Retry-After header', async () => {
 });
 
 // ============================================================
-// Client - folders-ui.js's Lane 20 pure helpers
+// Client - folders-ui.js's passcode-panel pure helpers
 // ============================================================
 
 test('reauthLine: the three verbatim sentences', () => {

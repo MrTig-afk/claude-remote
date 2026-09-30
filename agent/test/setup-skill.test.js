@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
 
-// T137. The setup skill's plugin-folder lookup is PowerShell a model runs word
+// The setup skill's plugin-folder lookup is PowerShell a model runs word
 // for word, so it is run here too - under Windows PowerShell 5.1, the one every
 // Windows PC ships with, where it once matched nothing and stopped every new
 // install with "plugin folder not found" (Dell install test, 2026-09-27).

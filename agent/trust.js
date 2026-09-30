@@ -1,4 +1,4 @@
-// Claude Code's workspace-trust answer for a folder, set by the agent (T140).
+// Claude Code's workspace-trust answer for a folder, set by the agent.
 //
 // A launch into a folder that profile has never opened stops on Claude Code's
 // "Is this a project you created or one you trust?" modal, which needs a real
@@ -6,7 +6,7 @@
 // Remote Control and the tile ages into "hasn't confirmed it started". Found
 // on the Dell install test, 2026-09-27; the owner chose to have the app answer
 // it for shared folders ("go with C"), at the moment a session starts in one
-// (Artifact sequence 15, question 02). The accept screen and the README say so.
+// (owner, 2026-09-27). The accept screen and the README say so.
 //
 // It writes the same field the real dialog writes -
 // projects["<path with forward slashes>"].hasTrustDialogAccepted = true - in
@@ -46,7 +46,7 @@ export function trustFolder(folder, configDir) {
   // EXACT key, never a case-insensitive match: Claude Code looks the folder up
   // by its own cwd string, so trust set on a differently-cased key it never
   // reads would leave the modal up while this returned true on every later
-  // launch (RF-C02). A stray second key is harmless; a wrong one is not.
+  // launch. A stray second key is harmless; a wrong one is not.
   const key = folder.replace(/\\/g, '/');
 
   for (let attempt = 0; attempt < ATTEMPTS; attempt += 1) {
@@ -70,13 +70,13 @@ export function trustFolder(folder, configDir) {
     const tmp = `${file}.claude-remote-tmp`;
     try {
       fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
-      // Running Claude sessions rewrite this file often (RF-C03). If one did
+      // Running Claude sessions rewrite this file often. If one did
       // since the read, renaming now would throw its write away: drop ours
       // and merge again on the fresh copy instead.
-      // ponytail: stat-compare, not a lock, and it only protects THEIR write.
+      // Known limit: stat-compare, not a lock, and it only protects THEIR write.
       // Two windows stay open: a write landing between this check and the
       // rename is lost, and a session that read the file before our rename
-      // and saves after it drops OUR key (RF2-C03) - that one is as long as
+      // and saves after it drops OUR key - that one is as long as
       // its own read-modify-write. Either way the launch just meets the modal,
       // as it did before this file existed, and sessions.js logs the miss.
       // Upgrade path: honour Claude Code's own lock if it ever documents one.
@@ -86,7 +86,7 @@ export function trustFolder(folder, configDir) {
       }
     } catch {
       // Also a busy file: Windows refuses the rename for a moment while
-      // another process has it open (RF2-C01), so it is retried like a race.
+      // another process has it open, so it is retried like a race.
     }
     try { fs.unlinkSync(tmp); } catch { /* nothing left to clean */ }
   }

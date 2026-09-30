@@ -18,7 +18,7 @@ import {
 // Canonical from the start: a TEMP given as an 8.3 short path (CI's RUNNER~1)
 // would otherwise never equal the long-name `real` the junction tests expect.
 const tmpRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-folders-')));
-// T92 normal form: path.parse().root is "C:\\" WITH the separator; strip it.
+// The drive list's normal form: path.parse().root is "C:\\" WITH the separator; strip it.
 const tmpLetter = path.parse(path.resolve(tmpRoot)).root.replace(/[\\/]+$/, '').toUpperCase();
 const [blockedLetter, unknownLetter] = ['Q:', 'Y:', 'X:', 'W:'].filter((l) => l !== tmpLetter);
 
@@ -389,7 +389,7 @@ test('10.24 - resolveRealFolderPath: an INTERMEDIATE junction is canonicalised, 
   // RED WHEN: the realpath call is removed, or applied to something other
   // than the full resolved path. An intermediate reparse point then goes
   // uncanonicalised and the drive re-check inspects the lexical path - the
-  // exact hole T93 shipped with in round 1.
+  // exact hole the first version shipped with.
   const linkPath = path.join(tmpRoot, 'home', 'link');
   const st = fs.lstatSync(linkPath);
   assert.ok(st.isSymbolicLink(), 'junction creation did not produce a reparse point on this host - test cannot proceed');
@@ -530,7 +530,7 @@ test('10.21 - surface not widened: trailing slash and POST both 404', async () =
 test('10.13 - a directory of 600 subdirectories: total before the slice, sorted, capped at MAX_FOLDERS', async () => {
   // RED WHEN: the slice happens before the sort (the first 500 become
   // readdir-ordered and the banner's number stops matching what is shown),
-  // or total is computed after the slice and T100's banner states 500 for a
+  // or total is computed after the slice and the list-state banner states 500 for a
   // folder of 812.
   assert.equal(MAX_FOLDERS, 500);
 
@@ -807,7 +807,7 @@ test('10.28 - a malformed path against a COLD drive cache -> 400, driveExec neve
   }
 });
 
-test('Lane 18 - each folder says whether it looks like ONE project: a .git (folder or file) or a CLAUDE.md', async () => {
+test('each folder says whether it looks like ONE project: a .git (folder or file) or a CLAUDE.md', async () => {
   // RED WHEN: the flag is dropped, keyed on the wrong names, or computed
   // for an unreadable row. Existence only: the files hold nothing readable.
   const dir = path.join(tmpRoot, 'lane18');

@@ -1,4 +1,4 @@
-// T131 - agent/alerts.js: the launch-watch push and the tailscale-serve check.
+// agent/alerts.js: the launch-watch push and the tailscale-serve check.
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -135,7 +135,7 @@ test('watchLaunch: running -> no push', async () => {
 });
 
 test('watchLaunch: a launch that hangs with no pid file and no .err pushes launch_unconfirmed once its grace expires', async () => {
-  // M22-C1: the watch must outlast STARTING_GRACE_MS, because a launch that
+  // The watch must outlast STARTING_GRACE_MS, because a launch that
   // never writes its pid file is only derived `failed` when that grace ends.
   assert.ok(WATCH_WINDOW_MS > STARTING_GRACE_MS);
   const dir = tmpDir();
@@ -316,7 +316,7 @@ test('checkServeOnce: unknown stays silent and leaves the marker untouched', asy
 });
 
 test('checkServeOnce: tailscale not answering at boot is retried, so a later missing still notifies', async () => {
-  // M22-C2: at boot the agent can start before the Tailscale service; the
+  // At boot the agent can start before the Tailscale service; the
   // one check per start must not be lost to that race.
   const dir = tmpDir();
   const ctx = serveCtx(dir);

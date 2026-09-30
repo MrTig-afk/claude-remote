@@ -1,4 +1,4 @@
-// T77 - Settings root + routing. ESM, built-in node:test + node:assert/strict,
+// Settings root + routing. ESM, built-in node:test + node:assert/strict,
 // no new dependency. Same idiom as pwa-assets.test.js: pure logic imported
 // directly (folders-ui.js), everything else sliced out of app.js with
 // new Function and run under a small stub DOM - app.js is a browser module
@@ -79,8 +79,8 @@ function readScreenMain() {
 test('S1 - every SCREEN_MAIN value is a <main id> present in index.html, and the keys are the sixteen screens', () => {
   // RED WHEN: a screen is added to the map with no <main>, or a <main> is
   // renamed - the router would then hide nothing and two screens stack.
-  // All six Lane 7 destinations are here, Change passcode and Contact me
-  // included, plus Lane 19's Notifications.
+  // All six settings screens are here, Change passcode and Contact me
+  // included, plus Notifications.
   const SCREEN_MAIN = readScreenMain();
   assert.deepEqual(
     Object.keys(SCREEN_MAIN).sort(),
@@ -139,7 +139,7 @@ function makePopState(state, historyStub, showScreenSpy = () => {}, sub = null) 
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed', 'showScreen',
     'settingsSubs', 'currentSub', 'closingSub', 'SETTINGS_SUBS', 'renderSettings', 'renderSettingsSub',
-    // Lane 10's sheet flag, injected false - see the note in loadSubNav.
+    // The once-only sheet's flag, injected false - see the note in loadSubNav.
     'sheetPushed',
     `${src}; return onPopState;`,
   );
@@ -258,7 +258,7 @@ function loadGoHome({
   const fn = new Function(
     'state', 'history', 'render', 'confirmPushed', 'folderPushed', 'finishFolders', 'closeSettings',
     'settingsSubs', 'closingSub', 'settingsPushed', 'showScreen',
-    // Lane 10's sheet flag, injected false. Its branch touches the DOM, which
+    // The once-only sheet's flag, injected false. Its branch touches the DOM, which
     // this harness does not have - and the sheet cannot be open here anyway,
     // since it covers the header the home control lives in.
     'sheetPushed',
@@ -331,7 +331,7 @@ test('S8 - goHome: gate/accept do nothing, folders/settings hand off, and the li
 test('S9 - #home lives once, inside the one shared header, and no <main> screen ever carries it', () => {
   // RED WHEN: a screen added later carries its own header or its own home
   // link, or the header moves inside a screen - the force-quit the owner
-  // hit. This is the pin that covers T78-T85's screens before they exist.
+  // hit. This is the pin that covers the settings screens before they exist.
   const html = read('index.html');
   assert.equal([...html.matchAll(/id="home"/g)].length, 1, 'exactly one id="home" must exist');
 
@@ -356,7 +356,7 @@ test('S9 - #home lives once, inside the one shared header, and no <main> screen 
 
 test('S10 - sharedRowState text and enterable per shared set', () => {
   // RED WHEN: the unknown set becomes enterable, or the count reads
-  // "1 folders". The first assertion is the T100 precondition.
+  // "1 folders". The first assertion is the list-state precondition.
   assert.deepEqual(folders.sharedRowState(null), { text: 'not known yet', enterable: false });
   assert.deepEqual(folders.sharedRowState(undefined), { text: 'not known yet', enterable: false });
   assert.deepEqual(folders.sharedRowState([]), { text: 'nothing shared yet', enterable: true });
@@ -392,7 +392,7 @@ test('S11 - buildSettingsRow: enterable carries data-settings; not enterable car
   });
   assert.equal(on.tag, 'button');
   assert.equal(on.dataset.settings, 'shared');
-  // children[0] is the ICON. Lane 7 of the artifact: 'icon or control on
+  // children[0] is the ICON. The approved settings design: 'icon or control on
   // the LEFT, name and state stacked in the middle, chevron on the right.
   // No exceptions anywhere in the app.' This shipped once with an empty
   // left slot and a comment defending it - the index is pinned here so
@@ -458,9 +458,9 @@ const stubRow = (opts) => {
   return el;
 };
 
-test('S12 - renderSettings draws the groups Lane 6 names, in order, each with an icon', () => {
+test('S12 - renderSettings draws the approved Settings groups, in order, each with an icon', () => {
   // RED WHEN: the root goes back to one hard-coded FOLDERS section holding a
-  // single row. That is what shipped, and it is the deviation from Lane 6
+  // single row. That is what shipped, and it is the deviation from the approved Settings root
   // that started this rebuild - so the shape is pinned, not just described.
   const state = {
     shared: [{ path: 'F:\\A' }], reachable: true, push: { reason: null, mine: 'x', devices: [{ endpoint: 'x' }] },
@@ -476,7 +476,7 @@ test('S12 - renderSettings draws the groups Lane 6 names, in order, each with an
     rows.map((r) => r.dataset.settings),
     ['shared', 'notify', 'passcode', 'see', 'lock', 'agent', 'reset', 'about'],
   );
-  // Lane 7: 'No exceptions anywhere in the app.'
+  // 'No exceptions anywhere in the app.'
   for (const row of rows) {
     assert.ok(row.attrs.icon, `${row.attrs.name} must carry an icon`);
   }
@@ -497,8 +497,8 @@ test('S12b - every enterable settings row has somewhere to go', () => {
   assert.ok(subs.size > 0, 'SETTINGS_SUBS must name at least one screen');
   // The one id that is an ACTION rather than a screen, handled in the click
   // delegate: it drops the token. 'shared' used to be one too - it jumped
-  // straight into the picker - and is now Lane 3's own screen.
-  const actions = new Set(['lock', 'phone']);   // phone: Lane 23 step 3c, opens the phone screen
+  // straight into the picker - and is now the Shared folders screen.
+  const actions = new Set(['lock', 'phone']);   // phone: opens the phone screen, desk browsers only
   for (const row of renderedRows(listEl)) {
     const id = row.dataset.settings;
     if (id === undefined) continue;
@@ -508,7 +508,7 @@ test('S12b - every enterable settings row has somewhere to go', () => {
     );
   }
 });
-// Sequence 29: "Open it on your phone", for desktop browsers only. RED WHEN the
+// "Open it on your phone", for desktop browsers only. RED WHEN the
 // row shows in the installed app or on a touch device, or vanishes from a desk
 // browser, or loses its handler.
 test('S12c - Open it on your phone: first in THIS APP in a desk browser only, and wired', () => {
@@ -612,7 +612,7 @@ test('S13c - ADD A FOLDER refuses, and SAYS SO, when the shared set is unknown',
   assert.match(blind.msg.textContent, /Lost track/, 'the refusal has to be visible');
 });
 
-// --- S14 - the guard T78 inherits, and its one point of entry ---------------
+// --- S14 - the guard the Shared folders door inherits, and its one point of entry ---------------
 
 function loadOnChooseFolders({ shared, showFolders: showFoldersSpy }) {
   const js = read('app.js');
@@ -634,7 +634,7 @@ function loadOnChooseFolders({ shared, showFolders: showFoldersSpy }) {
 
 test('S14 - onChooseFolders never enters the picker blind, and showFolders( has exactly two call sites', async () => {
   // RED WHEN: a second call site into the picker skips the guard. This is
-  // what T78 inherits instead of re-implementing.
+  // what the Shared folders door inherits instead of re-implementing.
   let entered = false;
   const onChooseFolders = loadOnChooseFolders({ shared: null, showFolders: async () => { entered = true; } });
   await onChooseFolders();
@@ -724,7 +724,7 @@ function loadSubNav() {
   const fn = new Function(
     'state', 'history', 'showScreen', 'renderSettings', 'renderSettingsSub',
     'SETTINGS_SUBS', 'render', 'confirmPushed', 'folderPushed', 'settingsPushed',
-    // Lane 10's sheet flag. Injected false: its branch is the first one in
+    // The once-only sheet's flag. Injected false: its branch is the first one in
     // onPopState and would otherwise swallow every pop in this harness, and
     // these tests are about settings navigation, not the sheet.
     'sheetPushed',
@@ -778,7 +778,7 @@ test('S18c - a double tap on back pops exactly one entry', () => {
 
 test('S18d - three deep: back from Update lands on About, then on the settings root', () => {
   // RED WHEN: the stack goes back to being one key, or a pop empties it
-  // wholesale. Lane 5 puts Update under About, so a single back from there
+  // wholesale. The update design puts Update under About, so a single back from there
   // must land on About - which is exactly what its crumb promises - and the
   // next one on the settings root. Verified in a browser too; this is the
   // regression net.

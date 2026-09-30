@@ -23,7 +23,7 @@ const MESSAGES = {
 /**
  * A message line and its colour, set together so a colour never outlives its
  * words: 'error' red, 'warn' amber, '' plain (owner 2026-09-27, "Make errors
- * red"; Artifact Lanes 11, 12 and 20). The lockout is amber, as drawn.
+ * red"). The lockout is amber, as drawn.
  */
 export function setMsg(el, text, tone = '') {
   el.textContent = text;

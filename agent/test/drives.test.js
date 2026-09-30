@@ -128,7 +128,7 @@ test('a junk row beside a good one is skipped silently, not fatal', async () => 
 });
 
 test('drive-letter normal form: lowercase, padded, and trailing-separator forms all normalise to "F:"', async () => {
-  // RED WHEN: T93/T94 compare against a lowercase or trailing-separator
+  // RED WHEN: the sharing checks compare against a lowercase or trailing-separator
   // letter and silently never match.
   for (const deviceId of ['f:', ' F: ', 'F:\\']) {
     const stdout = JSON.stringify([{ DeviceID: deviceId, VolumeName: 'Data' }]);

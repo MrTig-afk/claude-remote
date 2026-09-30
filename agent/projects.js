@@ -46,7 +46,7 @@ export function containerChildrenOf(folderPath) {
       hasNonDir = true;
       continue;
     }
-    // ponytail: a hidden DIRECTORY is skipped here but is NOT a file, so it
+    // Known limit: a hidden DIRECTORY is skipped here but is NOT a file, so it
     // never sets hasNonDir - a repo holding .git plus subfolders and zero
     // top-level files guesses as a container. Narrower in practice than it
     // sounds: a hidden FILE takes the !isDirectory() branch above and DOES
@@ -96,7 +96,7 @@ export function rootsFrom(ctx) {
  * '-'. resolveSharedFolders only requires path.isAbsolute, and
  * path.isAbsolute('\\\\server\\share') is TRUE on win32 - a hand-edited UNC
  * root would slug to '-server-share', and that leading '-' flows into
- * launch-session.ps1's -SessionName argument. T94's write route already
+ * launch-session.ps1's -SessionName argument. The sharing write route already
  * rejects UNC; this is the backstop for the file it does not own. rootSlug
  * now always ends in a hash digest, but the digest is a fixed-width SUFFIX
  * appended after slugSegment, so an empty readable half or a UNC path still
@@ -105,15 +105,15 @@ export function rootsFrom(ctx) {
  *
  * D2 - lexically nested roots. Drop the LATER of any overlapping pair
  * (ancestor or descendant, either direction), keeping the first-listed root -
- * the same "keep the earlier index" rule T94's own 409 overlapping_root uses
+ * the same "keep the earlier index" rule the sharing write's own 409 overlapping_root uses
  * at write time. isInsideOrEqual is IMPORTED from shared.js, never
  * re-implemented - it is already case-folded and segment-aware, and it is
- * the same comparison T94 uses, so the two agree by construction.
+ * the same comparison the sharing write uses, so the two agree by construction.
  *
- * ponytail: this comparison is LEXICAL, not canonical - it drops the inner
+ * Known limit: this comparison is LEXICAL, not canonical - it drops the inner
  * one of a lexically-nested pair even when the two are canonically distinct
  * (a folder, plus a path descending through a junction inside it to an
- * unrelated target - T94 legally accepts that pair). Deliberate: listing
+ * unrelated target - the sharing write legally accepts that pair). Deliberate: listing
  * less than was ticked is safe, listing more is not. The alternative is
  * fs.realpathSync.native per root on the 5s poll, categorically refused on a
  * 7.74GB host. Upgrade path if it ever bites: canonicalise once per call and
@@ -166,7 +166,7 @@ export function usableRoots(roots) {
  * nothing may claim to hide what it does not hide.
  *
  * Every top-level entry gains `root` (the root's absolute path) and
- * `rootName` (its basename); container CHILDREN do not - T99 groups on
+ * `rootName` (its basename); container CHILDREN do not - the home grouping groups on
  * top-level entries, and a child is already inside a grouped parent.
  *
  * The combined list is sorted ONCE with the existing byName comparator, so a
@@ -231,7 +231,7 @@ export function listProjects(rootsOrBaseDir) {
         root: rootPath,
         rootName,
       };
-      // ponytail: one extra readdirSync per top-level folder per call, and
+      // Known limit: one extra readdirSync per top-level folder per call, and
       // listProjects runs on the 5s session poll (listSessions, registry.js).
       // Metadata-only reads of ~15 folders; measure before caching.
       const children = containerChildrenOf(entry.path);
@@ -330,7 +330,7 @@ export function validateProjectName(name) {
   return { ok: true };
 }
 
-// PRD R22 (Artifact Lane 11 step 3b): a name typed in the app is letters from
+// A name typed in the app is letters from
 // any language, decimal digits, spaces and - _ . - nothing else. Not \p{M} or
 // \p{N} whole: an enclosing mark (\p{Me}) and a digit make the keycap emoji
 // 1️⃣, and \p{N} lets ① and ² in. Variation selectors are Mn but only ever
@@ -349,8 +349,8 @@ export function createProject(baseDir, name) {
 
   // C1 - confinement. Byte-identical posture to resolveProjectPath's SINGLE
   // branch: createProject stays strictly one level and never creates INSIDE
-  // a container - still out of scope as of T69, which closed without adding
-  // it - while resolveProjectPath (T68) now also accepts exactly two
+  // a container - still out of scope; the question closed without adding
+  // it - while resolveProjectPath now also accepts exactly two
   // segments.
   // Unreachable after V7/V8; this is the structural backstop that makes
   // "direct child only" true rather than argued.
@@ -371,7 +371,7 @@ export function createProject(baseDir, name) {
   // excluded here on purpose: those hit mkdirSync's own EEXIST below and
   // report the more specific `project_exists`, not `name_collision`.
   //
-  // T69 asked whether this must also see NESTED projects. It must not, and
+  // Asked: must this also see NESTED projects. It must not, and
   // it structurally cannot collide with one: a rooted session name is keyed
   // '<root-slug>/<...segments>' (sessions.js's sessionNameFor - the root slug
   // now carries a hash digest too, so it is nothing like a bare folder slug),

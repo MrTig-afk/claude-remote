@@ -8,18 +8,18 @@ import { test } from 'node:test';
 import { withoutRoot, plusMenuItems } from '../public/folders-ui.js';
 import { validateProjectName } from '../projects.js';
 
-// THE FIRST TESTS THAT RUN app.js's ACTUAL LOGIC (T104 step 3).
+// THE FIRST TESTS THAT RUN app.js's ACTUAL LOGIC.
 //
 // agent/test/app-import.test.js proved the file can be EXECUTED. This proves
-// three of its functions BEHAVE - the three T104 names, chosen because each has
+// three of its functions BEHAVE - the three named for this, chosen because each has
 // already produced a HIGH finding and each was only ever read-traced.
 //
-// ponytail: SIXTH hand-rolled new-Function slice loader. There are 58 of these
+// Known limit: SIXTH hand-rolled new-Function slice loader. There are 58 of these
 // spread across five test files and this one duplicates the pattern rather than
 // sharing it - deliberate, owner-directed 2026-09-06: "The loader is CLEANUP.
 // The three tests are SAFETY. Bundling them blocks the safety work behind a
 // five-file refactor, in a repo that just spent 11 rounds demonstrating that
-// large diffs attract findings." UPGRADE PATH: T104 step 2 collapses all 59 into
+// large diffs attract findings." UPGRADE PATH: a later step collapses all 59 into
 // one shared loader (agent/test/settings.test.js's loadOpenPickerFromShared is
 // the model to copy). Do that as its own task, never bundled with a behaviour
 // change. Until then this file is ugly on purpose and must not grow a helper.
@@ -192,7 +192,7 @@ function loadEnsureAccepted({ sharedFromAgent = [], nullDuringAccept = false, fi
   return { ...mod, calls, picker, state };
 }
 
-test('ensureAccepted: the phone screen follows the first-run picker, once, before the list (Lane 23)', async () => {
+test('ensureAccepted: the phone screen follows the first-run picker, once, before the list', async () => {
   // RED WHEN: the phone screen is dropped, shown before the picker, shown on
   // an ordinary unlock, or shown after the list instead of before it.
   const first = loadEnsureAccepted({ sharedFromAgent: [] });
@@ -241,14 +241,14 @@ test('ensureAccepted: a genuine first run still opens the picker when the set is
 // ============================================================================
 // FIVE MORE, ADDED 2026-09-09 FROM A MUTATION AUDIT
 //
-// The M13 sequence remediated 28 findings across two merges and then stopped as
+// One earlier review cycle remediated 28 findings across two merges and then stopped as
 // diverging, leaving "which of those fixes is actually covered" unanswered. It
 // was answered mechanically: revert one fix, run the suite, see whether anything
 // goes red. Nine of the twenty-one behavioural fixes could be reverted with all
 // 1027 tests still green. These are the five of those nine that live in app.js.
 //
-// Same sixth-slice pattern and the same ponytail note as the three above: ugly
-// on purpose, and it must not grow a helper. T104 step 2 collapses every slice
+// Same sixth-slice pattern and the same Known limit note as the three above: ugly
+// on purpose, and it must not grow a helper. A later step collapses every slice
 // in the repo into one shared loader, as its own task, never bundled with a
 // behaviour change.
 // ============================================================================
@@ -371,7 +371,7 @@ test('removeRoot: a KNOWN set still writes, so the guard is not a blanket refusa
 });
 
 test('removeRoot: a passcode, when given, is carried in the PUT body', async () => {
-  // R17: the server reads it off exactly this key (parsed.value.passcode) -
+  // The server reads it off exactly this key (parsed.value.passcode) -
   // a client that named it differently would silently always be refused.
   const r = loadRemoveRoot({ shared: [{ path: 'F:\\Projects\\Example', mode: 'single', excludes: [] }] });
   await r.removeRoot('F:\\Projects\\Example', '481902');
@@ -492,7 +492,7 @@ test('openSettingsSub: an unknown key is refused before anything else happens', 
   assert.deepEqual(s.calls, []);
 });
 
-// ------------------------------------------------------------ Lane 22's menu
+// ------------------------------------------------------------ The + menu
 
 function loadPlusMenu({ shared = [{ path: 'F:/p', mode: 'container' }], openFolder = null, confirmOpen = false } = {}) {
   const calls = [];
@@ -522,7 +522,7 @@ function loadPlusMenu({ shared = [{ path: 'F:/p', mode: 'container' }], openFold
   const mod = new Function(
     'document', 'window', 'history', 'state', 'plusMenuItems', 'cancelOpenConfirm',
     'openNewProjectPanel', 'onChooseFolders',
-    `${slice("const PLUS_BEHIND = '", '// The folder picker (T97)')}
+    `${slice("const PLUS_BEHIND = '", '// The folder picker. One screen')}
      return { openPlusMenu, closePlusMenu, closePlusMenuHard, onPlusTap, onPlusMenuClick, onPlusKey, plusMenuOpen, syncPlusMenu };`,
   )(
     document, window, history, { shared, openFolder }, plusMenuItems,
@@ -537,7 +537,7 @@ function loadPlusMenu({ shared = [{ path: 'F:/p', mode: 'container' }], openFold
   return { ...mod, calls, history, pop, clickOn, listeners, share, neu, behind, document, attrs };
 }
 
-test('Lane 22: + opens the menu with one history entry, the list behind inert, focus on the first choice', () => {
+test('+ opens the menu with one history entry, the list behind inert, focus on the first choice', () => {
   const m = loadPlusMenu();
   m.onPlusTap();
   assert.equal(m.attrs['aria-expanded'], 'true');
@@ -548,16 +548,16 @@ test('Lane 22: + opens the menu with one history entry, the list behind inert, f
 
   const single = loadPlusMenu({ shared: [{ path: 'D:/u', mode: 'single' }] });
   single.onPlusTap();
-  assert.equal(single.neu.hidden, true, 'step 5: New project left out, Share folder only');
+  assert.equal(single.neu.hidden, true, 'only one-project folders shared: New project left out, Share folder only');
 
   const inFolder = loadPlusMenu({ shared: [{ path: 'D:/u', mode: 'single' }], openFolder: 'Uni' });
   inFolder.onPlusTap();
-  assert.equal(inFolder.neu.hidden, false, 'step 6: inside a folder of projects New project shows');
-  assert.equal(inFolder.share.hidden, true, 'sequence 18: and Share folder does not - it is all shared already');
+  assert.equal(inFolder.neu.hidden, false, 'inside a folder of projects New project shows');
+  assert.equal(inFolder.share.hidden, true, 'inside a folder of projects Share folder does not show - it is all shared already');
   assert.ok(inFolder.calls.includes('focus:new'), 'focus lands on the one choice that is there');
 });
 
-test('Lane 22: Share folder waits for the menu pop before opening the picker; New project opens at once', () => {
+test('Share folder waits for the menu pop before opening the picker; New project opens at once', () => {
   // RED WHEN: onChooseFolders runs before the pop lands. showFolders registers
   // the picker's own popstate listener, which would then receive the MENU's
   // pop and reload the drive list a second time.
@@ -581,7 +581,7 @@ test('Lane 22: Share folder waits for the menu pop before opening the picker; Ne
   assert.equal(n.calls.filter((c) => c === 'openNewProjectPanel').length, 1, 'and only once');
 });
 
-test('Lane 22: Back closes the menu without a second traversal; a pop ABOVE it leaves it open', () => {
+test('Back closes the menu without a second traversal; a pop ABOVE it leaves it open', () => {
   const b = loadPlusMenu();
   b.onPlusTap();
   b.pop({ plusMenu: true });   // the sheet's entry, pushed over the menu's, came off
@@ -592,7 +592,7 @@ test('Lane 22: Back closes the menu without a second traversal; a pop ABOVE it l
   assert.ok(b.behind.every((el) => !el.inert));
 });
 
-test('Lane 22: a double close issues one back(), and + during the pending pop does not push under it', () => {
+test('a double close issues one back(), and + during the pending pop does not push under it', () => {
   const d = loadPlusMenu();
   d.onPlusTap();
   d.closePlusMenu();
@@ -605,14 +605,14 @@ test('Lane 22: a double close issues one back(), and + during the pending pop do
   assert.equal(d.history.pushes.length, 2, 'once it lands the + works again');
 });
 
-test('Lane 22: an open STOP confirm swallows the tap, as openSettings does', () => {
+test('an open STOP confirm swallows the tap, as openSettings does', () => {
   const c = loadPlusMenu({ confirmOpen: true });
   c.onPlusTap();
   assert.deepEqual(c.calls, ['cancelConfirm']);
   assert.equal(c.history.pushes.length, 0);
 });
 
-test('Lane 22: arrow keys move between the choices, Esc closes and puts focus back on the +', () => {
+test('arrow keys move between the choices, Esc closes and puts focus back on the +', () => {
   const k = loadPlusMenu();
   const key = (name) => k.onPlusKey({ key: name, preventDefault() {} });
   k.onPlusTap();
@@ -632,7 +632,7 @@ test('Lane 22: arrow keys move between the choices, Esc closes and puts focus ba
   assert.equal(k.calls.length, before, 'with the menu shut the keys are left alone');
 });
 
-test('Lane 22: the re-lock puts the menu away with no traversal and drops a pending choice', () => {
+test('the re-lock puts the menu away with no traversal and drops a pending choice', () => {
   const h = loadPlusMenu();
   h.onPlusTap();
   h.clickOn('#plus-share');
@@ -679,7 +679,7 @@ function loadOnCreateProject({ loadSetsBanner = false, result = { ok: true, data
 test('onCreateProject: the "created" banner goes up after load(), not before it where load() wipes it', async () => {
   // RED WHEN: setBanner is called before `await load()` again - load() begins
   // with hideBanner(), so the owner never saw "<name> created." (found on the
-  // Lane 22 browser pass, 2026-09-27).
+  // + menu browser pass, 2026-09-27).
   const { onCreateProject, calls } = loadOnCreateProject();
   await onCreateProject();
   assert.deepEqual(calls, ['close', 'load', 'banner:info']);
@@ -687,7 +687,7 @@ test('onCreateProject: the "created" banner goes up after load(), not before it 
 
 // RED WHEN: updateNewProjectTarget() runs after the error is written again -
 // it hides the error for a name the phone thinks valid, so the PC's refusal
-// (409 project_exists, 400 name_not_plain) showed nothing (TS-C1-02).
+// (409 project_exists, 400 name_not_plain) showed nothing.
 test('onCreateProject: a refusal from the PC stays on screen', async () => {
   const { onCreateProject, els, calls } = loadOnCreateProject({ result: { ok: false, code: 'project_exists' } });
   await onCreateProject();
@@ -698,7 +698,7 @@ test('onCreateProject: a refusal from the PC stays on screen', async () => {
 
 // RED WHEN: the PC's refusal is written without checking the field still
 // holds the name that was sent - edited mid-request, the old name's error
-// would sit under the new one (TS-C1-D2-01).
+// would sit under the new one.
 test('onCreateProject: a refusal about a name the user has since edited is not shown', async () => {
   const { onCreateProject, els } = loadOnCreateProject({ result: { ok: false, code: 'project_exists' }, names: ['foo', 'foo2'] });
   await onCreateProject();
@@ -712,10 +712,10 @@ test('onCreateProject: a banner load() raised itself (a failed refresh) is not o
   assert.deepEqual(calls, ['close', 'load', 'banner:error']);
 });
 
-// RED WHEN: syncPlusMenu only closes on an EMPTY list again (PM-C1-D2-C01) - a
+// RED WHEN: syncPlusMenu only closes on an EMPTY list again - a
 // load() that drops New project (the last folder of projects went missing)
 // would leave it on screen, where a tap can only answer base_unavailable.
-test('Lane 22: a render whose choices differ from the open menu closes it; the same choices keep it open', () => {
+test('a render whose choices differ from the open menu closes it; the same choices keep it open', () => {
   const m = loadPlusMenu();
   m.onPlusTap();
   m.syncPlusMenu(['share', 'new']);
@@ -730,10 +730,10 @@ test('Lane 22: a render whose choices differ from the open menu closes it; the s
 
 // ------------------------------------------------------- clientValidateName
 
-// R22 (Artifact Lane 11 step 3b). The phone's check is a hand-kept copy of
+// The phone's check is a hand-kept copy of
 // validateProjectName; this runs both on the same names so the copy cannot
 // drift. RED WHEN either side drops or loosens the plain-name rule.
-test('R22: the phone and the PC give the same answer for every name', () => {
+test('the phone and the PC give the same answer for every name', () => {
   const clientValidateName = new Function(`${slice('function clientValidateName(', '// Time since session start')} return clientValidateName;`)();
   for (const n of ['email-lint', 'Pull Requests', 'café', '東京', 'rocket 🚀', '1️⃣', 'x;y', "it's", '①',
     'foo<bar', 'a/b', '50%', 'CON', '.hidden']) {

@@ -1,6 +1,6 @@
-// T83 - Contact me. The Artifact's screen below About: two rows (LinkedIn,
+// Contact me. The Artifact's screen below About: two rows (LinkedIn,
 // Email), no sub-lines, a lead sentence and a note. Built 2026-09-15; the two
-// repo rows on About (Source code, Report a problem) still wait for T66.
+// repo rows on About (Source code, Report a problem) waited for the repo to exist.
 //
 // Same idiom as settings.test.js: renderAbout is sliced out of app.js and RUN
 // under stubs, so the About row is checked by executing the code that draws it,
@@ -41,7 +41,7 @@ function aboutRows() {
   return rows;
 }
 
-test('T83 - About draws a Contact me row, with no sub-line, directly above What this app can see', () => {
+test('About draws a Contact me row, with no sub-line, directly above What this app can see', () => {
   // RED WHEN: the row is removed, given a description, or moved out of the
   // Artifact's order (update, [repo rows], Contact me, What this app can see).
   const rows = aboutRows();
@@ -55,7 +55,7 @@ test('T83 - About draws a Contact me row, with no sub-line, directly above What 
   assert.equal(row.icon, 'i-mail');
 });
 
-test('T83 - the About row leads somewhere: contact is a settings sub-screen', () => {
+test('the About row leads somewhere: contact is a settings sub-screen', () => {
   // RED WHEN: 'contact' is dropped from SETTINGS_SUBS - the click delegate
   // then ignores the row and the back gesture would close Settings outright.
   const js = read('app.js');
@@ -70,7 +70,7 @@ function contactMain() {
   return html.slice(start, html.indexOf('</main>', start));
 }
 
-test('T83 - the screen is two plain links, LinkedIn then Email, with no descriptions and no underline', () => {
+test('the screen is two plain links, LinkedIn then Email, with no descriptions and no underline', () => {
   // RED WHEN: a row is added or removed, a href changes, a row grows a
   // .row-status sub-line, a row acquires data-settings and starts being routed
   // as a screen by the settings delegate, or .row loses text-decoration: none
@@ -95,7 +95,7 @@ test('T83 - the screen is two plain links, LinkedIn then Email, with no descript
   assert.match(css.slice(rowStart, css.indexOf('}', rowStart)), /text-decoration: none/);
 });
 
-test('T83 - the crumb says About, and the copy is the Artifact\'s', () => {
+test('the crumb says About, and the copy is the Artifact\'s', () => {
   // RED WHEN: the screen is re-parented or the two sentences drift from the
   // approved frame.
   const main = contactMain();
@@ -104,11 +104,11 @@ test('T83 - the crumb says About, and the copy is the Artifact\'s', () => {
   assert.match(main, /These open your own apps\. Nothing is sent from here\./);
 });
 
-// --- T83, the other half: Source code and Report a problem on About --------
+// --- The other half: Source code and Report a problem on About --------
 
 const REPO = 'https://github.com/MrTig-afk/claude-remote';
 
-test('T83 - About draws Source code then Report a problem above Contact me, each a link to the repo', () => {
+test('About draws Source code then Report a problem above Contact me, each a link to the repo', () => {
   // RED WHEN: either row is missing, out of the Artifact's order, given a
   // description, or points anywhere but the repo and its issues page.
   const rows = aboutRows();
@@ -142,12 +142,12 @@ function stubDoc() {
 function loadBuildSettingsRow() {
   const js = read('app.js');
   const start = js.indexOf('function buildSettingsRow(');
-  const end = js.indexOf('/**\n * Lane 6 of the userflow artifact', start);
+  const end = js.indexOf('/**\n * The approved Settings root, as data', start);
   assert.ok(start !== -1 && end > start);
   return new Function('document', `${js.slice(start, end)}; return buildSettingsRow;`)(stubDoc());
 }
 
-test('T83 - buildSettingsRow: an href makes an <a> with noreferrer and NO data-settings; without one it is the routed button', () => {
+test('buildSettingsRow: an href makes an <a> with noreferrer and NO data-settings; without one it is the routed button', () => {
   // RED WHEN: a link row becomes a button (the phone then taps into nothing),
   // loses noreferrer (the tailnet hostname leaks to GitHub), or a plain row
   // stops carrying data-settings (the settings delegate then ignores it).
@@ -159,7 +159,7 @@ test('T83 - buildSettingsRow: an href makes an <a> with noreferrer and NO data-s
   assert.equal(link.rel, 'noopener noreferrer');
   assert.equal(link.dataset.settings, undefined);
   assert.ok(link.children.some((c) => c.className === 'folder-chev'), 'a link row still promises it goes somewhere');
-  // F20-C01: a link cannot be made to look inert while still navigating.
+  // A link cannot be made to look inert while still navigating.
   const inertLink = build({ id: 'source', icon: 'i-ext', name: 'Source code', state: '', enterable: false, href: REPO });
   assert.equal(inertLink.tag, 'a');
   assert.ok(inertLink.children.some((c) => c.className === 'folder-chev'), 'an href row always draws its chevron');

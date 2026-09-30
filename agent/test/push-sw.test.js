@@ -1,4 +1,4 @@
-// T132 - sw.js's push and notificationclick listeners. Harness shaped like
+// sw.js's push and notificationclick listeners. Harness shaped like
 // pwa-assets.test.js's loadServiceWorker.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

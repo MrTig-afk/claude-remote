@@ -60,24 +60,24 @@ test('CONSOLE is not reserved (V13 is not a substring match)', () => { assertAcc
 test('COM10 is not reserved (only COM1-9 are)', () => { assertAccepted('COM10'); });
 test('console.log is not reserved (stem is "console")', () => { assertAccepted('console.log'); });
 
-// --- R22: a plain name (Artifact Lane 11 step 3b) ----------------------------
+// --- A plain name ---------------------------------
 
-test('R22: letters from any language are plain, after an English letter or number', () => {
+test('letters from any language are plain, after an English letter or number', () => {
   for (const n of ['café', 'München', 'Straße', 'app 東京']) assertAccepted(n);
-  // Unchanged by R22: the session name (slugSegment) must not start with '-'.
+  // Unchanged by the plain-name rule: the session name (slugSegment) must not start with '-'.
   for (const n of ['東京', 'हिन्दी', 'éclair']) assertRejected(n, 'name_not_launchable');
 });
 
-test('R22: an emoji or any other symbol -> name_not_plain, nothing created', () => {
+test('an emoji or any other symbol -> name_not_plain, nothing created', () => {
   // 1️⃣ is a digit + variation selector + enclosing keycap mark, and ① is \p{N}:
   // both pass a rule that allows \p{M} and \p{N} whole.
-  // Each starts with an English letter or digit, so it reaches R22 rather
+  // Each starts with an English letter or digit, so it reaches the plain-name rule rather
   // than the older session-name rule (which refuses a leading ❤️ by itself).
   for (const n of ['rocket 🚀', '1️⃣', '1️', 'a❤️', 'a👨‍💻', 'x;y', 'a&b', "it's", 'a(b)', 'a!', 'a@b', 'a+b',
     'a①', 'x²', 'a​b', 'a b', 'a‮b', 'x; DROP TABLE projects;--']) assertRejected(n, 'name_not_plain');
 });
 
-test('R22: the more specific rules still answer first', () => {
+test('the more specific rules still answer first', () => {
   assertRejected('foo<bar', 'name_illegal_char');
   assertRejected('a/b', 'name_has_separator');
   assertRejected('50%', 'name_percent_encoded');

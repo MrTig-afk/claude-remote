@@ -93,7 +93,7 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const authedFetch = makeAuthedFetch(origin, token);
 
-// R17: every authenticated PUT in this file carries the current passcode -
+// Every authenticated PUT in this file carries the current passcode -
 // seeded '481902' above - so the new gate never intercepts a test written
 // before it existed. Merged in, never overridden: a call testing a specific
 // passcode value passes its own.
@@ -108,7 +108,7 @@ after(() => {
 });
 
 test('1 - valid single root round-trips through resolveSharedFolders with exactly the four-key entry', async () => {
-  // RED WHEN: the write does not round-trip through T91's reader - wrong key
+  // RED WHEN: the write does not round-trip through the config reader - wrong key
   // names, a fifth key, or a path form the reader re-normalises.
   const expected = { path: p('one'), mode: 'container', excludes: ['Archive'], new_folders: 'show' };
   const res = await putShared({ shared_folders: [expected] });
@@ -231,7 +231,7 @@ test('11 - V1-V4 shape rejections carry the matching error string and index', as
 });
 
 test('12 - a path that does not exist -> 400 not_found', async () => {
-  // RED WHEN: T94 calls validateFolderPath instead of resolveRealFolderPath
+  // RED WHEN: the sharing write calls validateFolderPath instead of resolveRealFolderPath
   // - the pure validator makes no filesystem call, so a nonexistent path
   // passes it.
   const res = await putShared({ shared_folders: [{ path: p('does-not-exist') }] });
@@ -329,7 +329,7 @@ test('20 - duplicates in every form (exact, case-different, trailing separator) 
 });
 
 test('21 - overlap is computed on the CANONICAL path: an intermediate-junction root and its lexical target-parent overlap', async () => {
-  // RED WHEN: the overlap check runs on the lexical `resolved` - the T93
+  // RED WHEN: the overlap check runs on the lexical `resolved` - the junction-vs-lexical
   // hole class at a new site.
   const res = await putShared({ shared_folders: [{ path: p('home', 'link', 'child') }, { path: p('outside') }] });
   assert.equal(res.status, 409);

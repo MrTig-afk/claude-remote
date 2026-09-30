@@ -1,4 +1,4 @@
-// Pure shell module for Lane 5 (updates). No DOM access anywhere - not at
+// Pure shell module for updates. No DOM access anywhere - not at
 // module scope, not inside a function - so `node --test` imports it directly,
 // the same way it imports folders-ui.js and copy.js. app.js is the only place
 // any of this touches the page.

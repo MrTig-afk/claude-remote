@@ -1,4 +1,4 @@
-// T79 - Change passcode (Lane 7). Three halves: auth.js's own logic, the
+// Change passcode. Three halves: auth.js's own logic, the
 // gated route in front of it, and the screen that drives it. Built-in
 // node:test + node:assert/strict, no new dependency.
 //
@@ -389,7 +389,7 @@ test('U5 - a refusal clears all three fields and says why, in the lock screen\'s
   }
   assert.equal(doc.getElementById('pw-msg').textContent, '! passcode_incorrect');
   // RED WHEN the refusal is written without its tone: input errors are red
-  // (owner 2026-09-27, "Make errors red"; Artifact Lanes 12 and 20).
+  // (owner 2026-09-27, "Make errors red").
   assert.equal(doc.getElementById('pw-msg').dataset.tone, 'error');
 });
 
@@ -437,7 +437,7 @@ test('U7 - the screen carries the artifact\'s warning, its three labelled fields
   }
   const eyes = [...screen.matchAll(/<button class="pin-eye" id="([^"]+)"/g)].map((m) => m[1]);
   assert.deepEqual(eyes, ['pw-current-eye', 'pw-new-eye', 'pw-confirm-eye'], 'one eye per field, in the artifact\'s order');
-  // Lane 7 puts the crumb on every sub-screen, and it is wired by attribute.
+  // The approved design puts the crumb on every sub-screen, and it is wired by attribute.
   assert.match(screen, /data-set-back/);
 });
 

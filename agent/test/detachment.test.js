@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { test, after } from 'node:test';
 
-// T28's whole claim is that a session launched with
+// The whole claim here is that a session launched with
 // { detached: true, stdio: 'ignore', windowsHide: true } outlives the
 // process that spawned it. The suite is (correctly) forbidden from ever
 // starting a real `claude` session, so this proves the MECHANISM instead:
@@ -15,19 +15,20 @@ import { test, after } from 'node:test';
 // child is still alive. If this ever fails, launchSession's detachment
 // claim is false regardless of anything sessions.test.js says.
 
-// R12.1 - AND THIS ONE ACTUALLY RUNS THE LAUNCHER.
+// AND THIS ONE ACTUALLY RUNS THE LAUNCHER.
 //
 // Every other assertion about launch-session.ps1 in this file reads its SOURCE
 // and checks a token is present. That is how five UI designs shipped green
-// this week against code that could not work, and T104 is the standing task
+// this week against code that could not work, and a standing task is
 // about it. This one executes the script and looks at what it DID.
 //
 // What it proves: a pre_launch_command that throws stops the launcher dead.
 // The reason is written to the .err, no pid file appears, and execution never
-// reaches Start-Process. Before R12.1 the catch fell straight through and
-// started the session anyway - which is the state Artifact sequence 7 deleted
+// reaches Start-Process. Before a broken environment refused the launch, the
+// catch fell straight through and started the session anyway - the state the
+// approved design later deleted
 // after five refuted attempts at drawing it.
-test('R12.1 - a failed pre-launch command STOPS the launcher before Start-Process', () => {
+test('a failed pre-launch command STOPS the launcher before Start-Process', () => {
   const dir = project();
 
   const r = runLauncher(dir, ['-PreLaunch', 'definitely-not-a-real-command-xyz']);
@@ -37,7 +38,7 @@ test('R12.1 - a failed pre-launch command STOPS the launcher before Start-Proces
   assert.match(r.reason, /definitely-not-a-real-command-xyz/, 'the .err must name what failed');
   assert.match(r.reason, /not recognized/i);
   assert.equal(r.pidFileExists, false, 'no pid file - nothing was started');
-  assert.equal(r.claudeStarted, false, 'the R12.1 guard is gone - it reached Start-Process');
+  assert.equal(r.claudeStarted, false, 'the refused-launch guard is gone - it reached Start-Process');
 
   cleanup(dir);
 });
@@ -150,7 +151,7 @@ function runLauncher(dir, args = [], envOverride = {}, projectPath = dir) {
       // not refused.
       //
       // (The flat 5s that preceded all this went red once under load, reporting
-      // a successful launch as a refusal. A flaky launcher test is the T110
+      // a successful launch as a refusal. A flaky launcher test is the wall-clock race
       // shape and is not tolerated.)
       const refused = fs.existsSync(errFile);
       const sleeper = new Int32Array(new SharedArrayBuffer(4));
@@ -207,7 +208,7 @@ function cleanup(dir) {
   } catch { /* the OS will get it */ }
 }
 
-test('R12 - environment.yml with no `name:` refuses the launch and says which', () => {
+test('environment.yml with no `name:` refuses the launch and says which', () => {
   const dir = project();
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'dependencies:\n  - python=3.12\n');
 
@@ -220,7 +221,7 @@ test('R12 - environment.yml with no `name:` refuses the launch and says which', 
   cleanup(dir);
 });
 
-test('R12 - a conda project on a machine with no conda refuses, and says THAT', () => {
+test('a conda project on a machine with no conda refuses, and says THAT', () => {
   // PRECONDITION, ASSERTED NOT ASSUMED. runLauncher redirects USERPROFILE and
   // LOCALAPPDATA into a scratch directory, so four of the six roots the
   // launcher searches are empty by construction. The two ProgramData roots are
@@ -255,8 +256,8 @@ test('R12 - a conda project on a machine with no conda refuses, and says THAT', 
   cleanup(dir);
 });
 
-test('R12 - an EMPTY USERPROFILE refuses cleanly instead of dying silently', () => {
-  // F14-D1-C03. The conda roots were one @(...) literal, which PowerShell
+test('an EMPTY USERPROFILE refuses cleanly instead of dying silently', () => {
+  // The conda roots were one @(...) literal, which PowerShell
   // evaluates ENTIRELY before the loop body runs - so a single unset
   // USERPROFILE made Join-Path raise a terminating
   // ParameterBindingValidationException and killed the launcher with no .err.
@@ -280,8 +281,8 @@ test('R12 - an EMPTY USERPROFILE refuses cleanly instead of dying silently', () 
   cleanup(dir);
 });
 
-test('R12 - the name is parsed as YAML means it, not as the old regex did', () => {
-  // F13-C04. The first version was `^\\s*name:\\s*([^\\s#]+)` with PowerShell's
+test('the name is parsed as YAML means it, not as the old regex did', () => {
+  // The first version was `^\\s*name:\\s*([^\\s#]+)` with PowerShell's
   // case-INSENSITIVE -match. Measured against real files, it produced `"my`
   // for `name: "my env"` - truncated at the space, opening quote kept - and it
   // matched `NAME:`, which YAML does not, and a `name:` indented under another
@@ -300,7 +301,7 @@ test('R12 - the name is parsed as YAML means it, not as the old regex did', () =
 });
 
 test('SECURITY - an environment.yml name that is a PATH is refused before conda sees it', () => {
-  // F16-C01. conda activates a value with / or \ as a prefix path, resolved
+  // conda activates a value with / or \ as a prefix path, resolved
   // inside the project, and dot-sources its etc\conda\activate.d\*.ps1 - so a
   // cloned repo could run its own script on one tap. A stand-in conda sits at
   // the first searched root and records any call: with the guard removed the
@@ -321,8 +322,8 @@ test('SECURITY - an environment.yml name that is a PATH is refused before conda 
   }
 });
 
-test('R12 - a real conda name with characters beyond [A-Za-z0-9._-] still reaches conda', () => {
-  // F16-D2-C01, the positive control for the guard above: conda forbids only
+test('a real conda name with characters beyond [A-Za-z0-9._-] still reaches conda', () => {
+  // The positive control for the guard above: conda forbids only
   // / \ : # and space, so these are real environment names and must activate.
   for (const name of ['torch2+cu118', '_base', 'env@2']) {
     const dir = project();
@@ -337,7 +338,7 @@ test('R12 - a real conda name with characters beyond [A-Za-z0-9._-] still reache
   }
 });
 
-test('R12 - an UPPERCASE NAME: is not a YAML name key, and is not treated as one', () => {
+test('an UPPERCASE NAME: is not a YAML name key, and is not treated as one', () => {
   const dir = project();
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'NAME: shouty\n');
 
@@ -349,8 +350,8 @@ test('R12 - an UPPERCASE NAME: is not a YAML name key, and is not treated as one
   cleanup(dir);
 });
 
-test('R12 - an UNREADABLE environment.yml says so, instead of blaming the file for having no name', () => {
-  // F13-C05. -ErrorAction SilentlyContinue turned every read fault into
+test('an UNREADABLE environment.yml says so, instead of blaming the file for having no name', () => {
+  // -ErrorAction SilentlyContinue turned every read fault into
   // `$envName = $null`, so a locked or unreadable file told the owner it had
   // no `name:` - sending them to fix the wrong thing. A DIRECTORY by that name
   // is the cheapest reliable unreadable file on Windows.
@@ -380,8 +381,8 @@ function fakeConda(dir, body) {
   fs.writeFileSync(path.join(hookDir, 'conda-hook.ps1'), body);
 }
 
-test('R12.1 - conda that does NOT enter the environment refuses the launch', () => {
-  // F13-C01, THE CRITICAL ONE, and the reason a try/catch could never catch it:
+test('conda that does NOT enter the environment refuses the launch', () => {
+  // THE CRITICAL ONE, and the reason a try/catch could never catch it:
   // a native command exiting non-zero raises no terminating error even under
   // $ErrorActionPreference = 'Stop' (measured on this host 2026-09-12), and
   // conda's own activate Invoke-Expressions an EMPTY string when the
@@ -392,7 +393,7 @@ test('R12.1 - conda that does NOT enter the environment refuses the launch', () 
   fakeConda(dir, 'function conda { }\n');
 
   const r = runLauncher(dir, []);
-  assert.equal(r.status, 1, 'a session in the WRONG environment is the state Artifact sequence 7 deleted');
+  assert.equal(r.status, 1, 'a session in the WRONG environment is the state the approved design deleted');
   assert.equal(r.errExists, true);
   assert.match(r.reason, /could not enter the conda environment 'never-created'/);
   assert.equal(r.pidFileExists, false);
@@ -401,7 +402,7 @@ test('R12.1 - conda that does NOT enter the environment refuses the launch', () 
   cleanup(dir);
 });
 
-test('R12 - conda that DOES enter the environment lets the launch proceed', () => {
+test('conda that DOES enter the environment lets the launch proceed', () => {
   // THE POSITIVE CONTROL. The two differ in one thing only: whether conda
   // actually set CONDA_DEFAULT_ENV. Without this, the assertion above would
   // also pass against a launcher that refused every conda project outright.
@@ -419,13 +420,13 @@ test('R12 - conda that DOES enter the environment lets the launch proceed', () =
   cleanup(dir);
 });
 
-test('R12.1 - a conda hook that defines no `conda` refuses WITH a reason', () => {
-  // F14-D2-C02. Round 1 replaced the try/catch with a post-condition; round 2
+test('a conda hook that defines no `conda` refuses WITH a reason', () => {
+  // Round 1 replaced the try/catch with a post-condition; round 2
   // showed the post-condition is NECESSARY BUT NOT SUFFICIENT. A non-zero exit
   // is not terminating, but a command-RESOLUTION failure is - a hook that loads
   // cleanly and defines no `conda` (a partial install, or a conda whose
   // CONDA_EXE is unset) throws CommandNotFoundException. Unguarded that killed
-  // the script with no .err at all, which is the reasonless failure R12.1
+  // the script with no .err at all, which is the reasonless failure the refused launch
   // exists to abolish.
   const dir = project();
   fs.writeFileSync(path.join(dir, 'environment.yml'), 'name: half-installed\n');
@@ -440,8 +441,8 @@ test('R12.1 - a conda hook that defines no `conda` refuses WITH a reason', () =>
   cleanup(dir);
 });
 
-test('R12 - a `name:` with an empty or comment-only value is treated as absent', () => {
-  // F14-D2-C03. `(.+?)` captures whitespace and a single space is TRUTHY in
+test('a `name:` with an empty or comment-only value is treated as absent', () => {
+  // `(.+?)` captures whitespace and a single space is TRUTHY in
   // PowerShell, so `name: ` sailed past the empty check and the owner was told
   // their machine had no conda - about an environment called "". A comment-only
   // value was worse: the comment became the name.
@@ -458,7 +459,7 @@ test('R12 - a `name:` with an empty or comment-only value is treated as absent',
   }
 });
 
-test('R12.1 - the SCRIPT refuses a vanished project folder (see the limit below)', () => {
+test('the SCRIPT refuses a vanished project folder (see the limit below)', () => {
   // READ THE LIMIT BEFORE TRUSTING THIS TEST. It pins the script's own guard,
   // and the script's guard is ALMOST UNREACHABLE in production: sessions.js
   // spawns it with `cwd: r.path`, the same path, so a missing folder makes NODE
@@ -469,7 +470,7 @@ test('R12.1 - the SCRIPT refuses a vanished project folder (see the limit below)
   // It is kept because the guard is still correct and costs nothing, and
   // because the day `cwd` is dropped it becomes the real guard. The REAL gap is
   // in the spawn's `error` handler, which console.errors where no phone can see
-  // it; filed as F15-D2-C01 rather than fixed here, because sessions.js is not
+  // it; filed as a finding rather than fixed here, because sessions.js is not
   // in this change's reviewed scope.
   const dir = project();
   const gone = path.join(dir, 'deleted-between-listing-and-tap');
@@ -483,8 +484,8 @@ test('R12.1 - the SCRIPT refuses a vanished project folder (see the limit below)
   cleanup(dir);
 });
 
-test('R12 - a pre_launch_command may put claude.cmd on PATH', () => {
-  // F15-D2-C04. Resolving claude.cmd BEFORE -PreLaunch refused any
+test('a pre_launch_command may put claude.cmd on PATH', () => {
+  // Resolving claude.cmd BEFORE -PreLaunch refused any
   // pre_launch_command that provides it - a version manager or toolchain shim -
   // for no security gain, since -PreLaunch is arbitrary owner-configured code
   // with full user permissions already. Resolution now happens after it.
@@ -503,8 +504,8 @@ test('R12 - a pre_launch_command may put claude.cmd on PATH', () => {
   cleanup(late);
 });
 
-test('R12 - an inherited VIRTUAL_ENV is cleared on the -PreLaunch branch too', () => {
-  // F15-D2-C05. The clear used to live inside the auto-detect branch only, so a
+test('an inherited VIRTUAL_ENV is cleared on the -PreLaunch branch too', () => {
+  // The clear used to live inside the auto-detect branch only, so a
   // project with a non-Python pre_launch_command (`nvm use 20`, a .env loader)
   // still inherited somebody else's VIRTUAL_ENV from an agent started by hand
   // in an activated shell.
@@ -519,7 +520,7 @@ test('R12 - an inherited VIRTUAL_ENV is cleared on the -PreLaunch branch too', (
   cleanup(dir);
 });
 
-test('R12 - an INHERITED VIRTUAL_ENV does not follow a project that has no venv', () => {
+test('an INHERITED VIRTUAL_ENV does not follow a project that has no venv', () => {
   // The mutation that deletes this guard survived until this test existed.
   // Start-Process inherits this process's environment - the same argument the
   // CLAUDE_CONFIG_DIR block makes two sections up - so an agent started by
@@ -536,7 +537,7 @@ test('R12 - an INHERITED VIRTUAL_ENV does not follow a project that has no venv'
   cleanup(dir);
 });
 
-test('R12 - the venv REACHES the launched process, not just the launcher', () => {
+test('the venv REACHES the launched process, not just the launcher', () => {
   // THIS IS THE TEST THAT WAS MISSING, and its absence hid a real bug for a
   // whole review round. Everything else here proves a venv is DETECTED - that
   // `python.exe` exists and the right branch ran. None of it proved the
@@ -576,7 +577,7 @@ test('R12 - the venv REACHES the launched process, not just the launcher', () =>
   cleanup(dir);
 });
 
-test("R12 - a `;` in the project path is REFUSED, not silently half-activated", () => {
+test("a `;` in the project path is REFUSED, not silently half-activated", () => {
   // The `;` is the PATH separator and a legal filename character, and a folder
   // name can come from a clone. There is no escaping PowerShell's resolver
   // honours, so the choice is refuse or launch outside the venv while claiming
@@ -589,7 +590,7 @@ test("R12 - a `;` in the project path is REFUSED, not silently half-activated", 
 
   const r = runLauncher(weird, []);
   assert.equal(r.status, 1);
-  assert.equal(r.errExists, true, 'a refusal with no reason is the failure R12.1 exists to abolish');
+  assert.equal(r.errExists, true, 'a refusal with no reason is the failure the refused launch exists to abolish');
   assert.match(r.reason, /';'/, 'the reason has to name what is wrong with the folder');
   assert.equal(r.claudeStarted, false, 'nothing may start in a half-activated environment');
 
@@ -633,7 +634,7 @@ test("SECURITY - a project's own Activate.ps1 is NEVER executed", () => {
   // project folder, at full user permissions, the moment a tile is tapped.
   // Clone someone's repository, tap it on your phone, run their code.
   //
-  // It also broke this project's own rule, already in PRD R12.3: a per-project
+  // It also broke this project's own rule, already in the PRD: a per-project
   // command is deliberately NOT a file inside the project, "because a cloned
   // repository must never be able to run a command when its tile is tapped".
   // The venv path had been violating that from the beginning.
@@ -671,7 +672,7 @@ test("SECURITY - a project's own Activate.ps1 is NEVER executed", () => {
   cleanup(dir);
 });
 
-test('R12 - a venv WINS over environment.yml, and the launch gets past the environment step', () => {
+test('a venv WINS over environment.yml, and the launch gets past the environment step', () => {
   // SAME PRECONDITION AS THE CONDA TEST, and for the same reason. This proves
   // the venv branch won from the ABSENCE of a .err - but on a host with conda
   // at ProgramData the conda branch would run, fail to activate
@@ -784,7 +785,7 @@ test('detachment - a Start-Process grandchild outlives the agent that launched i
     assert.equal(
       alive(grandchildPid),
       true,
-      'grandchild must SURVIVE the agent being killed - this is the whole promise of T28',
+      'grandchild must SURVIVE the agent being killed - this is the whole promise of detachment',
     );
   } finally {
     try { parent.kill(); } catch { /* already dead */ }
@@ -822,10 +823,10 @@ test('recipe-integrity check has teeth - mutated copies fail the same assertions
 
   const requiredTokens = [
     'CLAUDE_CONFIG_DIR',
-    // NOT `.claude-max`. That entry lived here until T56 (2026-09-05) and had
+    // NOT `.claude-max`. That entry lived here until 2026-09-05 and had
     // become actively harmful: the recipe no longer hardcodes a personal
     // profile, so the token survived ONLY inside the comment explaining its own
-    // removal. That made this assertion (a) require the opposite of what T56
+    // removal. That made this assertion (a) require the opposite of what that change
     // established, and (b) a trap - rewording that comment turned the suite red
     // with "real recipe should contain .claude-max", sending the reader after a
     // regression that does not exist.
