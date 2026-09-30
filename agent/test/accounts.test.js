@@ -139,7 +139,7 @@ test('an alias folder outside the home folder is scanned for sessions too', () =
 
 test('readAliases: the CLAUDE_CONFIG_DIR line wins over a folder mentioned earlier in the function', () => {
   const home = tmp('cr-alias10-');
-  write(path.join(home, '.bashrc'), 'claudemax() {\n  python ~/.claude-hooks/pre.py\n  CLAUDE_CONFIG_DIR=~/.claude-max claude "$@"\n}\n');
+  write(path.join(home, '.bashrc'), 'claudemax() {\n  python ~/.claude-tools/pre.py\n  CLAUDE_CONFIG_DIR=~/.claude-max claude "$@"\n}\n');
   const a = readAliases(home);
   assert.equal(a.get(path.join(home, '.claude-max').toUpperCase()).name, 'claudemax');
   assert.equal(a.size, 1);
@@ -248,7 +248,7 @@ test('listAccounts: signed-in folders only, alias names first, folder names othe
   const home = tmp('cr-acct-');
   const max = profile(home, '.claude-max');
   profile(home, '.claude-work');
-  profile(home, '.claude-hooks', false);   // not a profile at all
+  profile(home, '.claude-tools', false);   // not a profile at all
   profile(home, '.claude', false);         // never signed in
   const accounts = listAccounts(noConfig(home), home, aliasMap([[max, 'claudemax']]));
   assert.deepEqual(accounts.map((a) => a.name), ['claudemax', 'claude-work']);
