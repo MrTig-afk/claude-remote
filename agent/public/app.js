@@ -55,6 +55,12 @@ const state = {
   // opened. A single section ignores this and is always open.
   openSections: [],
   projects: [], // from /api/projects
+  // Also from /api/projects: [{ name, dir, folder }], a project path
+  // -> the account it last started in, and the one claude_config_dir names.
+  // An older agent sends none of them, which reads as one account: no question.
+  accounts: [],
+  lastAccounts: {},
+  defaultAccount: null,
   sessions: null, // array, or null = unknown (fetch failed / 404)
   launching: new Set(), // project names with a POST in flight
   results: new Map(), // name -> { kind:'started'|'reused'|'error', session?, code? }
@@ -188,6 +194,10 @@ const ERROR_COPY = {
   // restarting the agent, because unlike internal_error there is nothing wrong
   // there to fix.
   project_is_container: 'That folder holds your projects rather than being one. Tap REFRESH, then pick a project inside it.',
+  // The account was removed or signed out between the list
+  // loading and the tap. The tap handler reloads, so the next question shows
+  // only what is there.
+  account_unknown: 'That account is no longer on the PC. Tap the project again to pick another.',
 };
 
 function errorCopy(code, status) {
@@ -307,6 +317,28 @@ function sessionFor(p) {
  * container short-circuits ahead of all of it, never becoming a tile.
  */
 function rowState(p) {
+  const rs = baseRowState(p);
+  const account = rs.zone === 'tile' ? tileAccount(p) : null;
+  if (!account) return rs;
+  return Object.assign({}, rs, { suffix: rs.suffix ? `${rs.suffix} - ${account}` : account });
+}
+
+// The account a tile's session runs in - named only when the PC has
+// two or more, since with one there is nothing to tell apart. A launch knows
+// it from the registry (or its 202, before the registry is polled); a desk
+// session from the profile folder it was found in.
+function tileAccount(p) {
+  const accounts = state.accounts || [];
+  if (accounts.length < 2) return null;
+  const s = sessionFor(p) || (state.results.get(p.name) || {}).session;
+  if (!s) return null;
+  if (s.account) return s.account;
+  const dir = String(s.config_dir || '').toLowerCase();
+  const found = dir ? accounts.find((a) => String(a.dir).toLowerCase() === dir) : null;
+  return found ? found.name : null;
+}
+
+function baseRowState(p) {
   // A container is a folder, not a project: it has no session state to
   // report, so it takes no dot and can never be a tile. First check in the
   // function deliberately - nothing below it (a launch in flight, a stale
@@ -536,7 +568,11 @@ function buildRow(p, rs) {
   // so a folder can never launch - leaving the attribute off is the whole of
   // that guarantee.
   if (rs.folder) btn.dataset.folder = p.name;
-  else btn.dataset.project = p.name;
+  else {
+    btn.dataset.project = p.name;
+    // The account question lights the one this path last started in.
+    if (p.path) btn.dataset.path = p.path;
+  }
   // The dot is decorative and the default status is not drawn, so the row's
   // state has to reach a screen reader some other way. This is that way, and
   // it says the same thing for every row whether or not the line is visible.
@@ -673,6 +709,8 @@ function buildGoneNotice(root) {
 // manually refreshed, long after the session was live. Cleared by every
 // other banner too, so this can never hide someone else's message.
 let launchBannerFor = null;
+// What the Code tab calls that launch (the agent's 202 says), for the hand-off.
+let launchRowName = null;
 
 function setBanner(tone, parts) {
   launchBannerFor = null;
@@ -724,8 +762,8 @@ function hideHandoffGo() {
  * launchBannerFor) and never for a session that was already running - opening
  * the Claude app is not news for a session you did not just start.
  */
-function showHandoff(project) {
-  const copy = handoffCopy(project);
+function showHandoff(project, account = null) {
+  const copy = handoffCopy(project, account, launchRowName);
   // setBanner clears launchBannerFor, which is what retires the launch
   // watcher: this banner is terminal for that launch and nothing should come
   // along and hide it a second later.
@@ -913,7 +951,7 @@ function clearSettledLaunchBanner() {
     // down) falls through and clears as before - sending someone to the
     // Claude app to look for a session that is not there is worse than
     // silence.
-    if (handoffReady(s)) { showHandoff(launchBannerFor); return; }
+    if (handoffReady(s)) { showHandoff(launchBannerFor, tileAccount(p)); return; }
     hideBanner();
     return;
   }
@@ -1646,6 +1684,7 @@ function render() {
   renderSettings(); // a background load() must refresh the row while Settings is on screen
   const rows = renderProjects();
   renderFooter(rows);
+  syncAcctMenu();
 }
 
 async function load() {
@@ -1671,6 +1710,9 @@ async function load() {
   state.offline = !p.ok && (p.code === 'network' || p.code === 'timeout') && navigator.onLine === false;
   if (p.ok) {
     state.projects = p.data.projects;
+    state.accounts = Array.isArray(p.data.accounts) ? p.data.accounts : [];
+    state.lastAccounts = p.data.last_accounts && typeof p.data.last_accounts === 'object' ? p.data.last_accounts : {};
+    state.defaultAccount = typeof p.data.default_account === 'string' ? p.data.default_account : null;
     state.reachable = true;
     state.waitTries = 0;
     // The PC answered, so whatever sent the serve_missing alert is over.
@@ -1770,18 +1812,28 @@ async function onProjectTap(e) {
   if (!row) return;
   const name = row.dataset.project;
   if (state.launching.has(name)) return;
+  // With two or more accounts, ask which one first.
+  if (state.accounts.length >= 2) { openAcctMenu(name, row.dataset.path || ''); return; }
+  await startLaunch(name);
+}
 
+async function startLaunch(name, account = null) {
+  if (state.launching.has(name)) return;
   state.launching.add(name);
   state.results.delete(name);
   render();
 
-  const res = await launchSession(name);
+  const res = await launchSession(name, account);
   state.launching.delete(name);
 
   if (res.ok && res.status === 202) {
     state.results.set(name, { kind: 'started', session: res.data });
-    setBanner('info', [{ b: name }, { text: ' - start requested.' }]);
+    // The account the AGENT answered with: an in-flight launch from another
+    // device answers with its own, which may not be the one picked here.
+    const started = typeof res.data.account === 'string' ? res.data.account : null;
+    setBanner('info', [{ b: name }, { text: ' - start requested' }, ...(started ? [{ text: ', in ' }, { b: started }] : []), { text: '.' }]);
     launchBannerFor = name;
+    launchRowName = typeof res.data.row_name === 'string' ? res.data.row_name : null;
   } else if (res.ok && res.status === 200) {
     state.results.set(name, { kind: 'reused', session: res.data });
     setBanner('info', [{ b: name }, { text: ' is already running.' }]);
@@ -1790,6 +1842,13 @@ async function onProjectTap(e) {
     state.results.set(name, { kind: 'started', session: res.data });
     setBanner('info', [{ b: name }, { text: " - the agent accepted the request but reported a status this app doesn't know." }]);
     launchBannerFor = name;
+    launchRowName = res.data && typeof res.data.row_name === 'string' ? res.data.row_name : null;
+  } else if (res.code === 'account_unknown') {
+    // The list is stale about accounts: reload it, then say why nothing
+    // started (after the reload, which clears the banner on success).
+    await load();
+    setErrorBanner(res.code, res.status);
+    return;
   } else {
     state.results.set(name, { kind: 'error', code: res.code });
     setErrorBanner(res.code, res.status);
@@ -2274,6 +2333,138 @@ async function onCreateProject() {
   if (currentNameTrimmed() !== name) return;
   errorEl.textContent = newProjectErrorCopy(res.code);
   errorEl.hidden = false;
+}
+
+// ============================================================================
+// Which account a session starts in.
+// ============================================================================
+
+// The + menu's shape, below: its own history entry so Back closes it,
+// everything behind it inert, and `acctThen` runs once that pop has landed -
+// the launch waits for it, so nothing the launch pushes (the once-only sheet) can
+// land under a traversal still in flight.
+let acctPushed = false;
+let acctThen = null;
+let acctFor = null;   // the project the open question would start
+
+function acctMenuOpen() {
+  return document.getElementById('picker').classList.contains('acct-open');
+}
+
+function setAcctMenu(open) {
+  document.getElementById('picker').classList.toggle('acct-open', open);
+  for (const el of document.querySelectorAll(PLUS_BEHIND)) el.inert = open;
+  document.getElementById('newproj').inert = open;
+}
+
+// A path's last account, matched case-blind (Windows paths). Null when the
+// project has never started, or started in an account no longer here.
+function lastAccountFor(projectPath) {
+  const key = String(projectPath).toLowerCase();
+  const hit = Object.entries(state.lastAccounts || {}).find(([k]) => k.toLowerCase() === key);
+  return hit && state.accounts.some((a) => a.name === hit[1]) ? hit[1] : null;
+}
+
+// Last used first and lit, then the rest by name. A project never started
+// lights the account claude_config_dir names, or nothing.
+function accountChoices(projectPath) {
+  const last = lastAccountFor(projectPath);
+  const lit = last ?? (state.accounts.some((a) => a.name === state.defaultAccount) ? state.defaultAccount : null);
+  return [...state.accounts]
+    .sort((a, b) => (b.name === lit) - (a.name === lit) || a.name.localeCompare(b.name))
+    .map((a) => Object.assign({}, a, { lit: a.name === lit, last: a.name === last }));
+}
+
+function openAcctMenu(name, projectPath) {
+  // Same swallow as openPlusMenu: a pop in flight or an open STOP confirm.
+  if (acctPushed || cancelOpenConfirm()) return;
+  acctFor = name;
+  document.getElementById('acctmenu-project').textContent = name;
+  const list = document.getElementById('acctmenu-items');
+  list.replaceChildren(...accountChoices(projectPath).map((a) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = a.lit ? 'plusmenu-item acct-item lit' : 'plusmenu-item acct-item';
+    b.setAttribute('role', 'menuitem');
+    b.dataset.account = a.name;
+    const n = document.createElement('span');
+    n.className = 'acct-name';
+    n.textContent = a.name;
+    const h = document.createElement('span');
+    h.className = 'acct-hint';
+    h.textContent = a.last ? 'last used' : a.folder;
+    b.append(n, h);
+    return b;
+  }));
+  setAcctMenu(true);
+  history.pushState({ acctMenu: true }, '');   // Android back = close it
+  acctPushed = true;
+  window.addEventListener('popstate', onAcctPop);
+  list.firstElementChild.focus();
+}
+
+function closeAcctMenu(then = null) {
+  if (!acctMenuOpen()) return;
+  setAcctMenu(false);
+  acctThen = then;
+  if (acctPushed) history.back();
+}
+
+function onAcctPop() {
+  if (history.state && history.state.acctMenu) return;
+  window.removeEventListener('popstate', onAcctPop);
+  acctPushed = false;
+  if (acctMenuOpen()) setAcctMenu(false);   // Back itself
+  const then = acctThen;
+  acctThen = null;
+  if (then) then();
+}
+
+// Back to the row the question was about, so a keyboard keeps its place.
+function focusProjectRow(name) {
+  const row = [...document.querySelectorAll('[data-project]')].find((b) => b.dataset.project === name);
+  if (row) row.focus();
+}
+
+// Every render, like syncPlusMenu: a question the list no longer supports -
+// fewer than two accounts now, or its project gone - closes rather than offer
+// a tap that can only fail.
+function syncAcctMenu() {
+  if (!acctMenuOpen()) return;
+  if (state.accounts.length < 2 || ![...document.querySelectorAll('[data-project]')].some((b) => b.dataset.project === acctFor)) closeAcctMenu();
+}
+
+// The re-lock: put it away without a traversal, as closePlusMenuHard does.
+function closeAcctMenuHard() {
+  if (acctMenuOpen()) setAcctMenu(false);
+  window.removeEventListener('popstate', onAcctPop);
+  acctPushed = false;
+  acctThen = null;
+}
+
+function onAcctMenuClick(e) {
+  const b = e.target.closest('[data-account]');
+  if (!b) return;
+  const name = acctFor;
+  const account = b.dataset.account;
+  closeAcctMenu(() => { startLaunch(name, account); });
+}
+
+function onAcctKey(e) {
+  if (!acctMenuOpen()) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    const name = acctFor;
+    closeAcctMenu(() => focusProjectRow(name));
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  const items = [...document.querySelectorAll('#acctmenu-items [data-account]')];
+  const i = items.indexOf(document.activeElement);
+  const step = e.key === 'ArrowDown' ? 1 : -1;
+  const next = i === -1 ? (step === 1 ? 0 : items.length - 1) : (i + step + items.length) % items.length;
+  items[next].focus();
 }
 
 // ============================================================================
@@ -4960,6 +5151,9 @@ function wireEvents() {
   document.getElementById('plusmenu').addEventListener('click', onPlusMenuClick);
   document.getElementById('plus-scrim').addEventListener('click', () => closePlusMenu());
   document.addEventListener('keydown', onPlusKey);
+  document.addEventListener('keydown', onAcctKey);
+  document.getElementById('acctmenu').addEventListener('click', onAcctMenuClick);
+  document.getElementById('acct-scrim').addEventListener('click', () => { const name = acctFor; closeAcctMenu(() => focusProjectRow(name)); });
   // GOT IT is the sheet's only control and its only exit.
   document.getElementById('sheet-go').addEventListener('click', closeSheet);
   document.getElementById('refresh').addEventListener('click', () => load());
@@ -5327,7 +5521,7 @@ async function boot() {
   // double-tap guard (`currentSub() === key`) made the Shared folders row a
   // DEAD TAP for the rest of the session. lockNow only escaped this by doing a
   // full location.reload().
-  onAuthLost(async () => { hideConn(); closeSheetHard(); closePlusMenuHard(); resetSettingsNav(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
+  onAuthLost(async () => { hideConn(); closeSheetHard(); closePlusMenuHard(); closeAcctMenuHard(); resetSettingsNav(); hideAccept(); hideFolders(); showScreen('gate'); await showGate(); await ensureAccepted(); await load(); });
   // showGate() puts the passcode screen on the page before it awaits
   // anything, but does not resolve until the owner has unlocked. Drop the
   // splash against the first of those, not the second, or it would sit on

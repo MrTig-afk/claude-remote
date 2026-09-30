@@ -693,6 +693,7 @@ export function listSessions(ctx) {
         pid: null,
         source: 'launched',
         session_id: null,
+        ...accountOf(entry),
       });
       continue;
     }
@@ -815,6 +816,7 @@ export function listSessions(ctx) {
       source: 'launched',
       session_id: null,
       ...(activity ? { activity } : {}),
+      ...accountOf(entry),
       // `env_error`, NOT `error`. This view is returned as the WHOLE 200 body
       // by POST /api/sessions on the reused-session path (server.js), and a
       // top-level `error` is this codebase's FAILURE ENVELOPE - api.js reads
@@ -903,12 +905,20 @@ export function findLiveSession(ctx, sessionName) {
  * returns the SessionView for it (status 'starting', pid null). Never
  * throws; a write failure is logged and the SessionView is still returned.
  */
-export function recordLaunch(ctx, { sessionName, project, projectPath }) {
+// The account a launch was started in, carried from the registry
+// entry to its view so the tile can name it. Omitted when absent, like
+// `activity` - a launch with no account picked is the one-account case.
+function accountOf(entry) {
+  return typeof entry.account === 'string' && entry.account !== '' ? { account: entry.account } : {};
+}
+
+export function recordLaunch(ctx, { sessionName, project, projectPath, account }) {
   const { registryPath = getRegistryFilePath(), now = Date.now } = ctx;
 
   const startedAt = new Date(now()).toISOString();
 
   let sessions = readEntries(registryPath);
+  const acct = accountOf({ account });
 
   // A retained `failed` entry for this session name is superseded by the new
   // launch, not accumulated beside it.
@@ -921,6 +931,7 @@ export function recordLaunch(ctx, { sessionName, project, projectPath }) {
     project,
     original_path: projectPath,
     started_at: startedAt,
+    ...acct,
   });
 
   writeRegistry(registryPath, sessions);
@@ -932,6 +943,7 @@ export function recordLaunch(ctx, { sessionName, project, projectPath }) {
     status: 'starting',
     started_at: startedAt,
     pid: null,
+    ...acct,
   };
 }
 

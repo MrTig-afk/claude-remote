@@ -185,6 +185,23 @@ export function resolveOpeningReport(configPath = getConfigFilePath()) {
   return readConfig(configPath).opening_report === true;
 }
 
+/** Every `~/.claude-*` entry that is not a file, sorted; [] when the home
+ *  folder cannot be read. `!isFile()`, NOT `isDirectory()`: readdir does not
+ *  follow links, so a profile relocated to another drive by a junction or
+ *  symlink - a normal move on a disk-tight machine - reports isSymbolicLink()
+ *  and would be dropped. Callers decide with a check that DOES follow links
+ *  (a `sessions` folder, a sign-in file), so relaxing this loses no exclusion. */
+function homeProfiles(homeDir) {
+  try {
+    return fs.readdirSync(homeDir, { withFileTypes: true })
+      .filter((e) => !e.isFile() && e.name.startsWith('.claude-'))
+      .map((e) => path.join(homeDir, e.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
 /** Claude Code profile session directories to scan. Only <pid>.json is ever
  *  opened from them, so listing a directory that does not exist costs nothing
  *  and every entry here is a candidate rather than a requirement.
@@ -221,25 +238,281 @@ export function getSessionDirPaths(configPath = getConfigFilePath(), homeDir = o
   // `sessions` directory, which is what keeps `.claude-*` siblings that are
   // not profiles out. A home directory that cannot be read costs the discovery only: the
   // configured dir and the default below still stand.
-  let discovered = [];
+  // Plus any profile a shell alias opens, wherever it lives: the account
+  // picker offers it, so its sessions must be found too. The alias folders come
+  // from the LAST reading, not a fresh one: this runs on every 5s poll, and the
+  // list load and every launch re-read the profiles.
+  const aliases = aliasCache.get(homeDir)?.out ?? readAliases(homeDir);
+  const always = new Set([configured, path.join(homeDir, '.claude')].filter(Boolean).map((d) => path.resolve(d).toUpperCase()));
+  return profileCandidates(configured, homeDir, aliases)
+    .filter((c) => always.has(c.key) || fs.existsSync(path.join(c.dir, 'sessions')))
+    .map((c) => path.join(c.dir, 'sessions'));
+}
+
+// A line that starts a shell command of your own: `function claudemax`,
+// `function global:claudemax`, `claudemax() {`, `alias claudemax=`.
+const ALIAS_DEF = /^\s*(?:function\s+(?:(?:global|script|local|private):)?([\w.-]+)|([\w.-]+)\s*\(\)|alias\s+([\w.-]+)\s*=)/i;
+// The program a command runs, if it is Claude Code itself: claude,
+// claude.exe/.cmd/.ps1, a full path to one of them, or npx's claude-code.
+const CLAUDE_PROGRAM = /^claude(?:-code)?(?:\.exe|\.cmd|\.ps1)?$/i;
+// Where a launcher names its profile folder: the value it hands to
+// CLAUDE_CONFIG_DIR, or else a path that IS a `.claude` folder ('.claude-max',
+// "$HOME/.claude-pro", ~/profiles/.claude, D:\p\.claude-work, /d/p/.claude-work)
+// - never a file under one (~/.claude/settings.json), and never Claude's own
+// state file beside it, which has a .json on the end.
+const CONFIG_DIR_SET = /CLAUDE_CONFIG_DIR\s*=\s*['"]?([^'"\s;]+)/gi;
+const CLAUDE_FOLDER = /(?:^|[\s'"=(])([^\s'"=;(){}]*\.claude(?:-[\w.-]*\w)?)(?=$|[\s'";)}])/g;
+// Bounds on what is read: a profile is a few KB, and the folder pattern is
+// quadratic in a line's length (measured: 8,000 chars = 15ms, so a pathological
+// line would stall the agent on every list load).
+const MAX_PROFILE_BYTES = 1024 * 1024;
+const MAX_LINE = 2000;
+
+function profileFiles(homeDir) {
+  const ps = [];
+  // OneDrive moves Documents on many PCs, and PowerShell follows it.
+  for (const docs of ['Documents', path.join('OneDrive', 'Documents')]) {
+    for (const host of ['WindowsPowerShell', 'PowerShell']) {
+      for (const f of ['profile.ps1', 'Microsoft.PowerShell_profile.ps1']) ps.push(path.join(homeDir, docs, host, f));
+    }
+  }
+  return [...ps, ...['.bashrc', '.bash_profile', '.zshrc', '.profile'].map((f) => path.join(homeDir, f))];
+}
+
+// A folder as written in a profile -> an absolute path, or null when it hangs
+// off a variable this reading cannot see (`$dir/.claude-x`, `Join-Path ...`)
+// or is a network path.
+function profilePath(written, homeDir) {
+  const home = /^(?:~|\$HOME|\$\{HOME\}|\$env:USERPROFILE|\$env:HOME|%USERPROFILE%)(?=[\\/]|$)/i.exec(written);
+  if (home) return path.join(homeDir, written.slice(home[0].length));
+  if (/^[A-Za-z]:[\\/]/.test(written)) return written;
+  const posix = /^\/([A-Za-z])(\/.*)?$/.exec(written);   // Git Bash spells D:\p as /d/p
+  if (posix) return path.resolve(`${posix[1]}:${posix[2] || '/'}`);
+  // A bare folder name: the owner's own helper joins it to the home folder.
+  if (/^\.claude(?:-[\w.-]*\w)?$/.test(written)) return path.join(homeDir, written);
+  return null;
+}
+
+// [{ name, commands }] - every function and alias in one profile, its body
+// split into commands. A function runs from its first line until its braces
+// balance, so a `}` that only closes an inner if/foreach does not end it, and
+// a helper function nested inside it stays part of it. An alias is its one
+// line. PowerShell <# #> help text is not code, wherever the block opens. An
+// over-long line still counts toward the braces, so a function never runs
+// past its own end - it just names nothing from that line.
+function definitions(text) {
+  const out = [];
+  let def = null;
+  let inBlock = false;
+  for (let line of text.split(/\r?\n/)) {
+    if (inBlock) {
+      const end = line.indexOf('#>');
+      if (end === -1) continue;
+      inBlock = false;
+      line = line.slice(end + 2);
+    }
+    const open = line.indexOf('<#');
+    if (open !== -1) {
+      const end = line.indexOf('#>', open + 2);
+      if (end === -1) inBlock = true;
+      line = line.slice(0, open) + (end === -1 ? '' : line.slice(end + 2));
+    }
+    if (line.trim().startsWith('#')) continue;
+    const long = line.length > MAX_LINE;
+    const m = long || def ? null : ALIAS_DEF.exec(line);
+    if (m) {
+      def = { name: m[1] || m[2] || m[3], lines: [], depth: 0, opened: false, alias: Boolean(m[3]) };
+      out.push(def);
+    }
+    if (!def) continue;
+    // The definition's own header is not a command: keep what follows it. An
+    // alias value loses a trailing comment, then its surrounding quotes.
+    let code = m ? line.slice(m.index + m[0].length) : line;
+    if (m && def.alias) code = code.replace(/\s+#.*$/, '').trim().replace(/^(['"])(.*)\1$/, '$2');
+    if (!long) def.lines.push(code);
+    def.depth += (line.match(/\{/g) || []).length - (line.match(/\}/g) || []).length;
+    if (line.includes('{')) def.opened = true;
+    if (def.alias || (def.opened && def.depth <= 0)) def = null;
+  }
+  return out.map((d) => ({
+    name: d.name,
+    commands: d.lines.join('\n').split(/\n|;|&&|\|\||\|/).map((c) => c.trim()).filter(Boolean),
+  }));
+}
+
+// Words that run the NEXT word: PowerShell's `&`, `exec`, `env`, `command`,
+// `Start-Process`, `cmd /c`, `npx`. Their own flags (`/c`, `-FilePath`) and any
+// VAR=value prefix are skipped too.
+const WRAPPERS = new Set(['&', 'exec', 'env', 'command', 'start-process', 'cmd', 'call', 'npx']);
+
+// The program a command runs, lower-cased and without its folder:
+// `& 'C:\Program Files\nodejs\claude.cmd'` is claude.cmd.
+function programOf(command) {
+  const words = command.replace(/^[\s{(]+/, '').match(/'[^']*'|"[^"]*"|\S+/g) || [];
+  let i = 0;
+  let afterWrapper = false;
+  for (; i < words.length; i += 1) {
+    const w = words[i].toLowerCase();
+    if (WRAPPERS.has(w)) { afterWrapper = true; continue; }
+    if (/^[A-Za-z_]\w*=/.test(words[i])) continue;
+    if (afterWrapper && /^[-/]/.test(w)) continue;
+    break;
+  }
+  const word = (words[i] || '').replace(/^(['"])(.*)\1$/, '$2');
+  return word.split(/[\\/]/).pop().toLowerCase();
+}
+
+// { <UPPERCASED folder>: { name, dir } } for a list of definitions, read in
+// order - the first alias wins per folder.
+function aliasesIn(defs, homeDir, out) {
+  // A LAUNCHER has a command that runs Claude Code, or runs another launcher
+  // (the owner's `claudemax` runs `Invoke-ClaudeProfile`, which runs
+  // `claude.cmd`) - across every profile file, case-blind as PowerShell is.
+  // `echo 'claude'` runs echo, so it is not one.
+  const launchers = new Set();
+  const runsClaude = (c) => CLAUDE_PROGRAM.test(programOf(c));
+  const runsLauncher = (c) => launchers.has(programOf(c));
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const d of defs) {
+      const key = d.name.toLowerCase();
+      if (!launchers.has(key) && d.commands.some((c) => runsClaude(c) || runsLauncher(c))) { launchers.add(key); grew = true; }
+    }
+  }
+  for (const d of defs) {
+    if (!launchers.has(d.name.toLowerCase())) continue;
+    // The folder it opens: the CLAUDE_CONFIG_DIR value it sets - and if that
+    // value is one this reading cannot see ($dir), nothing, never a guess.
+    // Only with no such value, a folder handed to ANOTHER launcher
+    // (`Invoke-ClaudeProfile -ConfigDir '.claude-max'`). A folder handed to
+    // claude itself (`--add-dir ~/.claude-pro`) is not its profile.
+    const set = d.commands.flatMap((c) => [...c.matchAll(CONFIG_DIR_SET)]).map((m) => m[1]);
+    let dir = null;
+    if (set.length > 0) {
+      dir = profilePath(set[0], homeDir);
+    } else {
+      for (const c of d.commands.filter(runsLauncher)) {
+        for (const m of c.matchAll(CLAUDE_FOLDER)) dir = dir || profilePath(m[1], homeDir);
+      }
+    }
+    if (!dir) continue;
+    const key = path.resolve(dir).toUpperCase();
+    if (!out.has(key)) out.set(key, { name: d.name, dir: path.resolve(dir) });
+  }
+}
+
+// Re-read only when a profile changed: this runs on every list load and every
+// launch. Keyed by home folder (tests use many).
+const aliasCache = new Map();
+
+/**
+ * { <UPPERCASED resolved folder>: { name, dir } } from the owner's shell
+ * profiles: the command they type to open each Claude profile.
+ * Only names and folder paths are taken; nothing else in those files is kept.
+ * First alias wins per folder.
+ * Known limit: a reading of definitions, not a shell parser - an alias whose
+ * program or folder sits in a variable it cannot see (`& $claude`, `$dir`) is
+ * simply not found, and that folder falls back to its own name. Never throws.
+ */
+export function readAliases(homeDir = os.homedir()) {
+  const files = profileFiles(homeDir).map((file) => {
+    try {
+      const st = fs.statSync(file);
+      return st.isFile() && st.size <= MAX_PROFILE_BYTES ? { file, sig: `${st.mtimeMs}:${st.size}` } : null;
+    } catch { return null; }
+  });
+  const sig = files.map((f) => (f ? f.sig : '-')).join('|');
+  const cached = aliasCache.get(homeDir);
+  if (cached && cached.sig === sig) return cached.out;
+  const defs = [];
+  for (const f of files) {
+    if (!f) continue;
+    try {
+      const buf = fs.readFileSync(f.file);
+      // PowerShell 5.1 writes UTF-16LE when a profile is saved with Out-File or
+      // the ISE; everything else here is UTF-8.
+      defs.push(...definitions(buf[0] === 0xFF && buf[1] === 0xFE ? buf.toString('utf16le', 2) : buf.toString('utf8').replace(/^\uFEFF/, '')));
+    } catch { /* unreadable: that file names nothing */ }
+  }
+  const out = new Map();
+  aliasesIn(defs, homeDir, out);
+  aliasCache.set(homeDir, { sig, out });
+  return out;
+}
+
+// Every folder that may be a Claude profile, once each, in order: the
+// configured one, `~/.claude`, every `~/.claude-*` entry, then any folder an
+// alias opens. Case-blind, as Windows paths are. The picker and the session
+// scan both start here, so they cannot disagree about which folders exist.
+function profileCandidates(configured, homeDir, aliases) {
+  const seen = new Set();
+  const out = [];
+  for (const dir of [...(configured ? [configured] : []), path.join(homeDir, '.claude'), ...homeProfiles(homeDir), ...[...aliases.values()].map((a) => a.dir)]) {
+    const key = path.resolve(dir).toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, dir: path.resolve(dir) });
+  }
+  return out;
+}
+
+/**
+ * The Claude accounts on this PC: profile folders
+ * that hold Claude's sign-in file. [{ name, dir }] - the configured
+ * one, then `~/.claude`, every `~/.claude-*` folder, and any folder an alias
+ * opens. FOUND, never typed.
+ *
+ * The sign-in file is only checked for EXISTING, never opened - it is a
+ * credential. It is what tells a real account from a leftover folder: a
+ * session started in a profile nobody signed in to stops on the PC asking to
+ * log in, which nobody at the phone can answer.
+ *
+ * NAMED AFTER THE ALIAS that opens it (`claudemax`); a folder no alias names
+ * reads as the folder without its dot, so plain `~/.claude` is `claude`.
+ * Alias names are given out first, then folder names, over EVERY candidate
+ * folder whether signed in or not - so a name never moves to another folder
+ * because one signed in or out. A name already taken gets its folder added
+ * (`claude (.claude-pro)`). `aliases` is a test seam. Never throws.
+ */
+export function listAccounts(configPath = getConfigFilePath(), homeDir = os.homedir(), aliases = readAliases(homeDir)) {
+  let configured = null;
   try {
-    discovered = fs.readdirSync(homeDir, { withFileTypes: true })
-      // `!isFile()`, NOT `isDirectory()`: readdir does not follow links, so a
-      // profile relocated to another drive by a junction or symlink - a normal
-      // move on a disk-tight machine - reports isSymbolicLink() and would be
-      // dropped, which is exactly the coverage gap this discovery exists to
-      // close. The `sessions` check below DOES follow links and is what
-      // actually decides, so relaxing this loses no exclusion.
-      .filter((e) => !e.isFile() && e.name.startsWith('.claude-'))
-      .map((e) => path.join(homeDir, e.name))
-      .filter((d) => fs.existsSync(path.join(d, 'sessions')));
-  } catch { /* unreadable home - configured + default still apply */ }
-  const dirs = [
-    ...(configured ? [configured] : []),
-    path.join(homeDir, '.claude'),
-    ...discovered,
-  ];
-  return [...new Set(dirs)].map((d) => path.join(d, 'sessions'));
+    configured = resolveClaudeConfigDir(configPath);
+  } catch { /* a corrupt config costs its own entry only */ }
+  const candidates = profileCandidates(configured, homeDir, aliases);
+  const taken = new Set();
+  const claim = (c, name) => {
+    for (const n of [name, `${name} (${path.basename(c.dir)})`]) {
+      if (n && !taken.has(n)) { taken.add(n); c.name = n; return; }
+    }
+  };
+  for (const c of candidates) if (aliases.has(c.key)) claim(c, aliases.get(c.key).name);
+  for (const c of candidates) if (!aliases.has(c.key)) claim(c, path.basename(c.dir).replace(/^\./, ''));
+  return candidates
+    .filter((c) => c.name && fs.existsSync(path.join(c.dir, '.credentials.json')))
+    .map((c) => ({ name: c.name, dir: c.dir }));
+}
+
+/** Absolute path of the last-account-per-project file, beside the config. */
+export function getLastAccountsFilePath() {
+  return path.join(path.dirname(getConfigFilePath()), 'last-accounts.json');
+}
+
+/** { <resolved project path>: <account name> }. Never throws: a missing or
+ *  corrupt file is an empty map - the cost is one project with nothing lit. */
+export function readLastAccounts(filePath = getLastAccountsFilePath()) {
+  try {
+    return readConfig(filePath);
+  } catch {
+    return {};
+  }
+}
+
+/** Remembers `account` as the one `projectPath` last started in. */
+export function recordLastAccount(projectPath, account, filePath = getLastAccountsFilePath()) {
+  const map = readLastAccounts(filePath);
+  map[path.resolve(projectPath)] = account;
+  return writeConfig(filePath, map);
 }
 
 /** Absolute path of the passcode hash file, beside the config. */

@@ -103,7 +103,7 @@ test('GET /api/projects against a missing base directory responds 200 with an em
     const res = await makeAuthedFetch(`http://127.0.0.1:${missingPort}`, token)('/api/projects');
     assert.equal(res.status, 200);
     const body = await res.json();
-    assert.deepEqual(body, { projects: [] });
+    assert.deepEqual(body, { projects: [], accounts: [], last_accounts: {}, default_account: null });
   } finally {
     missingBaseServer.close();
   }

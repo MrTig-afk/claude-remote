@@ -209,6 +209,14 @@
         <button class="plusmenu-item" id="plus-new" type="button" role="menuitem"><svg class="ico" width="16" height="16" aria-hidden="true"><use href="#i-plus"/></svg>New project</button>
       </div>
 
+      <!-- Which account a session starts in. Asked only when the PC
+           has two or more; the buttons are built by openAcctMenu. -->
+      <div class="plus-scrim" id="acct-scrim"></div>
+      <div class="acctmenu" id="acctmenu" role="menu" aria-labelledby="acctmenu-title">
+        <div class="acctmenu-title" id="acctmenu-title">Start <b id="acctmenu-project"></b> in</div>
+        <div class="acctmenu-items" id="acctmenu-items"></div>
+      </div>
+
       <div id="pane-bottom">
       <div class="spacer"></div>
       <div class="actions">

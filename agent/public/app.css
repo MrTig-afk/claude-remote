@@ -631,7 +631,8 @@ select {
 #picker :is(#backbar, #zone-list, #pane-top > *, #pane-bottom > *) {
   transition: filter 180ms ease-out, opacity 180ms ease-out;
 }
-#picker.plus-open :is(#backbar, #zone-list, #pane-top > *, #pane-bottom > *) {
+#picker.plus-open :is(#backbar, #zone-list, #pane-top > *, #pane-bottom > *),
+#picker.acct-open :is(#backbar, #zone-list, #pane-top > *, #pane-bottom > *, .newproj) {
   filter: blur(4px);
   opacity: 0.35;
 }
@@ -645,7 +646,8 @@ select {
   visibility: hidden;
   transition: visibility 0s 220ms;
 }
-#picker.plus-open .plus-scrim { visibility: visible; transition-delay: 0s; }
+#picker.plus-open #plus-scrim,
+#picker.acct-open #acct-scrim { visibility: visible; transition-delay: 0s; }
 
 /* Stacked just above the + box and right-aligned to it: the same `right` as
    .newproj (repeated, not shared - see .newproj), then 6px in, because the
@@ -692,6 +694,37 @@ select {
 #picker.plus-open .plusmenu-item { opacity: 1; transform: none; }
 #picker.plus-open .plusmenu-item:first-child { transition-delay: 0s; }
 #picker.plus-open .plusmenu-item + .plusmenu-item { transition-delay: 40ms; }
+
+/* Which account. The + menu's scrim, blur and buttons, but full
+   width along the bottom of the phone column, under a title line. */
+.acctmenu {
+  position: fixed;
+  left: max(13px, calc(50% - 215px + 13px));
+  right: max(13px, calc(50% - 215px + 13px));
+  bottom: calc(13px + env(safe-area-inset-bottom));
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  visibility: hidden;
+  transition: visibility 0s 220ms;
+}
+#picker.acct-open .acctmenu { visibility: visible; transition-delay: 0s; }
+.acctmenu-title {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 0 2px 2px;
+}
+.acctmenu-title b { color: var(--text); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.acctmenu-items { display: flex; flex-direction: column; gap: 8px; }
+.acct-item { justify-content: space-between; min-width: 0; }
+.acct-item .acct-name { overflow: hidden; text-overflow: ellipsis; }
+.acct-item .acct-hint { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.acct-item.lit { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent) 12%, var(--raised)); }
+.acct-item.lit .acct-hint { color: var(--accent); }
+#picker.acct-open .acct-item { opacity: 1; transform: none; }
 
 .spacer { flex-grow: 1; }
 .actions { padding: 8px 12px 0; }
@@ -1686,6 +1719,8 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
      430px column; at this width it belongs at the main column's right edge. */
   .newproj { right: max(13px, calc(50% - 520px + 13px)); }
   .plusmenu { right: max(13px, calc(50% - 520px + 13px)); }   /* Stays on the + */
+  /* The account question: over the list column, which is the sidebar here. */
+  .acctmenu { left: max(13px, calc(50% - 520px + 13px)); right: auto; width: 340px; }
 
   /* -------------------------------------------------------------------------
      The desk comes first. Until

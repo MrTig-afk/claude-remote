@@ -516,6 +516,8 @@ test('C3 - every items line and every top-level string pins to its reviewed lite
     'While you are choosing folders, folder names on your other drives.',
     // Owner-approved 2026-09-23.
     'Whether a folder holds a .git or CLAUDE.md, to suggest how to share it.',
+    // Owner-approved 2026-09-30 ("Add the line"): the account picker's alias reading.
+    'The names of your Claude Code aliases, read from your PowerShell and bash profiles, to name your accounts. Nothing else in those files is kept.',
   ]);
   assert.deepEqual(copy.SECTIONS[1].items, [
     'The contents of your files. It never opens them.',

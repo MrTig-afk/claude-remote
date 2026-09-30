@@ -82,10 +82,19 @@ export function handoffReady(session) {
  * a product change to the launch arguments, not a copy fix - raised with the
  * owner, not decided here.
  */
-export function handoffCopy(project) {
+//
+// `account` only when the PC has two or more: Remote Control puts
+// the row in the Code tab of the account the session runs in, so the banner
+// says which one to open - in the approved words, which name the row. `row` is
+// the Code-tab name the agent launched it under (its 202's row_name); without
+// it, the project's last part, which is what that name is unless two shared
+// projects share it.
+export function handoffCopy(project, account = null, row = null) {
   return {
     title: 'Ready in the Claude app.',
-    body: `Open Claude → Code, then pick the session for ${project}.`,
+    body: account
+      ? `Open Claude → Code, signed in as ${account}, and tap ${row || String(project).split('/').pop()}.`
+      : `Open Claude → Code, then pick the session for ${project}.`,
     button: 'OPEN THE CLAUDE APP',
   };
 }

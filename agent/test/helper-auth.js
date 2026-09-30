@@ -138,6 +138,11 @@ export function fixtureServer(ctx) {
   if (typeof ctx.killSpawner !== 'function') ctx.killSpawner = refuseKill;
   if (typeof ctx.pidImageName !== 'function') ctx.pidImageName = refusePidImageName;
   if (typeof ctx.driveExec !== 'function') ctx.driveExec = refuseDriveExec;
+  // The account picker's two real-world reads: without these the server lists the
+  // owner's real Claude accounts (home folder + shell profiles) and reads and
+  // writes the real last-accounts.json. No accounts = the one-account case.
+  if (!Array.isArray(ctx.accounts)) ctx.accounts = [];
+  if (typeof ctx.lastAccountsPath !== 'string') ctx.lastAccountsPath = path.join(path.dirname(ctx.registryPath), 'last-accounts.json');
   return createAgentServer(ctx);
 }
 
