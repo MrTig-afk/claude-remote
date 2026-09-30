@@ -353,7 +353,7 @@ test('H4 - GET /api/projects reflects a PUT /api/shared write on the SAME server
   const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
   try {
     const before = await authedFetch('/api/projects');
-    assert.deepEqual(await before.json(), { projects: [] });
+    assert.deepEqual((await before.json()).projects, []);
 
     const root = path.join(ctx.dir, 'shared-root');
     const child = path.join(root, 'child-project');

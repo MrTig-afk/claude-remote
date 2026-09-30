@@ -364,7 +364,7 @@ that question and never reach your Code tab. **So when a session starts in a
 folder you shared, the agent answers it for you**: it sets
 `hasTrustDialogAccepted` for that folder in Claude Code's own `.claude.json` -
 the same field the real dialog writes - in your home folder, or in the profile
-folder set by `claude_config_dir` below. It adds that one field and keeps every
+folder of the account the session starts in (see below). It adds that one field and keeps every
 other value in the file as it was (the file is written back whole, so its
 formatting is normalised), only ever for a shared folder you are launching, and
 never creates the file. If it cannot, `agent.log` says so and the session may
@@ -375,21 +375,40 @@ Trusting a folder is what lets Claude Code run that project's own
 why the rule at the top of this file is "only open projects you trust": sharing
 a folder with this app now counts as saying so.
 
-### More than one Claude Code profile
+### More than one Claude account
 
-Sessions started from the phone use Claude Code's default profile
-(`%USERPROFILE%\.claude`) and its login. If you run Claude Code with a second
-profile - an alias that sets `CLAUDE_CONFIG_DIR`, say - and your login lives
-there, a phone session would open **logged out** in the default one. Point the
-app at the right profile in the config file:
+If you run Claude Code with more than one account - one profile folder per
+login, each opened by its own alias - the app asks **which account** every time
+you start a session, with the one you used last for that project lit. The
+session then opens in that account, and its Code-tab row shows up in the Claude
+app signed in to that account.
+
+The accounts are found, not typed. The agent looks at `%USERPROFILE%\.claude`,
+every `%USERPROFILE%\.claude-*` folder, and any folder one of your shell aliases
+points at, and counts a folder only when you have signed in to Claude Code
+there. Each account is named after the alias you type to open it, read from
+your PowerShell profiles and `.bashrc` / `.bash_profile` / `.zshrc` /
+`.profile`:
+
+```powershell
+function claudework { $env:CLAUDE_CONFIG_DIR = "$HOME\.claude-work"; claude @args }
+```
+
+shows up as **claudework**. A folder no alias names shows as the folder, so
+plain `.claude` is **claude**. Only alias names and folder paths are read from
+those files. With one account there is no question at all.
+
+To choose the account a project lights before it has ever been started, set it
+in the config file:
 
 ```json
 { "claude_config_dir": "C:\\Users\\<you>\\.claude-max" }
 ```
 
 It must be an absolute path to a folder that exists; anything else is ignored
-with a warning in `agent.log`, so a typo never opens a session in a new, empty
-profile. It is read on every launch, so no restart is needed.
+with a warning in `agent.log`. A session started without a choice (one account,
+or an older app) opens there too. It is read on every launch, so no restart is
+needed.
 
 ## The opening report
 

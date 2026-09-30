@@ -4,6 +4,8 @@
 // booted and still answered, which is exactly why only a test caught it.
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // The single default_base_folder was replaced by the shared_folders set;
@@ -11,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 // outright - it had no production caller.
 import {
   resolveSharedFolders, isAcknowledged, acknowledge, readStatusFacts,
+  listAccounts, readLastAccounts, resolveClaudeConfigDir,
 } from './config.js';
 import { listProjects, createProject, rootsFrom } from './projects.js';
 import { listDrives } from './drives.js';
@@ -56,6 +59,35 @@ export function readAgentVersion(packagePath = AGENT_PACKAGE_PATH) {
 }
 
 export const AGENT_VERSION = readAgentVersion();
+
+/**
+ * What the phone needs to ask "which account". `accounts` is every
+ * account found ([{ name, folder }]); `last_accounts` maps a project path to
+ * the account it last started in; `default_account` is the one
+ * `claude_config_dir` names, lit for a project never started. The phone asks
+ * only when there are two or more accounts. Same ctx seams as launchSession.
+ */
+function tildeFolder(dir) {
+  const home = os.homedir();
+  const rel = path.relative(home, dir);
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? `~/${rel.split(path.sep).join('/')}` : dir;
+}
+
+function accountsPayload(ctx) {
+  const accounts = ctx.accounts ?? listAccounts(ctx.configPath);
+  let configured = null;
+  try {
+    configured = Object.hasOwn(ctx, 'claudeConfigDir') ? ctx.claudeConfigDir : resolveClaudeConfigDir(ctx.configPath);
+  } catch { /* a corrupt config lights nothing */ }
+  const def = configured ? accounts.find((a) => samePath(a.dir, configured)) : undefined;
+  return {
+    // `folder` is what the button shows (~ for the home folder); `dir` is
+    // what a desk session's config_dir is matched against.
+    accounts: accounts.map((a) => ({ name: a.name, dir: a.dir, folder: tildeFolder(a.dir) })),
+    last_accounts: readLastAccounts(ctx.lastAccountsPath),
+    default_account: def ? def.name : null,
+  };
+}
 
 const RELEASE_NOTES_PATH = fileURLToPath(new URL('../release-notes.json', import.meta.url));
 
@@ -302,7 +334,7 @@ export async function handleRequest(req, res, ctx) {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/projects') {
-      sendJson(res, 200, { projects: listProjects(rootsFrom(ctx)) });
+      sendJson(res, 200, { projects: listProjects(rootsFrom(ctx)), ...accountsPayload(ctx) });
       return;
     }
 
@@ -551,7 +583,7 @@ export async function handleRequest(req, res, ctx) {
         return;
       }
 
-      const result = launchSession(ctx, parsed.project);
+      const result = launchSession(ctx, parsed.project, parsed.account);
       if (!result.ok) {
         sendJson(res, result.status, { error: result.error });
         return;

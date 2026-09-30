@@ -141,8 +141,10 @@ export function getSessions() {
   return request('/api/sessions');
 }
 
-export function launchSession(projectName) {
-  return post('/api/sessions', { project: projectName });
+// `account` only when the phone asked which one; absent, the agent
+// starts it where it always has.
+export function launchSession(projectName, account) {
+  return post('/api/sessions', account == null ? { project: projectName } : { project: projectName, account });
 }
 
 // target is { project } for a launched session or a root-level desk session,

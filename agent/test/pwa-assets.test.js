@@ -1339,7 +1339,7 @@ test("rowState's running branch shows the session's busy/idle activity", () => {
 
 // --- the launch banner clears itself once the session settles --------------
 
-function makeClearSettled(hideBannerSpy, state, launchBannerFor, showHandoffSpy = () => {}) {
+function makeClearSettled(hideBannerSpy, state, launchBannerFor, showHandoffSpy = () => {}, tileAccount = () => null) {
   const js = read('app.js');
   const src = js.slice(
     js.indexOf('function clearSettledLaunchBanner('),
@@ -1353,10 +1353,10 @@ function makeClearSettled(hideBannerSpy, state, launchBannerFor, showHandoffSpy 
   // as "go and open it" is the whole decision this branch turns on, and a
   // stub here would let the two drift apart silently.
   const make = new Function(
-    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff',
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff', 'tileAccount',
     src + '; return clearSettledLaunchBanner;',
   );
-  return make(state, sessionFor, hideBannerSpy, launchBannerFor, handoffReady, showHandoffSpy);
+  return make(state, sessionFor, hideBannerSpy, launchBannerFor, handoffReady, showHandoffSpy, tileAccount);
 }
 
 function spy() {
@@ -1801,9 +1801,9 @@ test('a nested launch banner clears once the nested session is running', () => {
   const hide = spy();
   const handoff = spy();
   const clearSettledLaunchBanner = new Function(
-    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff',
+    'state', 'sessionFor', 'hideBanner', 'launchBannerFor', 'handoffReady', 'showHandoff', 'tileAccount',
     src + '; return clearSettledLaunchBanner;',
-  )(state, sessionFor, hide, 'Pull Requests/Vercel', handoffReady, handoff);
+  )(state, sessionFor, hide, 'Pull Requests/Vercel', handoffReady, handoff, () => null);
   clearSettledLaunchBanner();
   // CHANGED by the hand-off banner, same as the top-level case: a running session
   // hands off rather than blanking. The claim under test is unchanged and is

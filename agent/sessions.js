@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
@@ -7,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   getPidDirPath, getRegistryFilePath, resolveClaudeConfigDir,
-  resolvePreLaunchCommand, resolveOpeningReport,
+  resolvePreLaunchCommand, resolveOpeningReport, listAccounts, recordLastAccount,
 } from './config.js';
 import {
   findLiveSession, clearPidFile, clearPidFileOnly, recordLaunch, markSessionState, dropSession,
@@ -16,6 +17,7 @@ import {
 } from './registry.js';
 import { containerChildrenOf, rootsFrom, listProjects } from './projects.js';
 import { trustFolder } from './trust.js';
+import { samePath } from './shared.js';
 
 const LAUNCH_SCRIPT = fileURLToPath(new URL('./launch-session.ps1', import.meta.url));
 
@@ -620,7 +622,7 @@ function allProjectPaths(roots) {
   return out;
 }
 
-export function launchSession(ctx, project) {
+export function launchSession(ctx, project, account) {
   const { spawner = spawn } = ctx;
   const roots = rootsFrom(ctx);
   const r = resolveProjectPath(roots, project);
@@ -645,6 +647,20 @@ export function launchSession(ctx, project) {
   const existing = findLiveSession(ctx, sessionName);
   if (existing) {
     return { ok: true, reused: true, session: existing };
+  }
+
+  // The account the phone picked. A NAME, never a path - looked up in
+  // the agent's own list, and anything not on it is refused, the same way a
+  // project name is. After findLiveSession, so a running project is still
+  // reported `reused` whatever was picked; BEFORE everything else, so a
+  // refusal touches nothing - not a failed launch's pid/.err files, and not
+  // an in-flight launch, whose 202 must never answer an account it refuses.
+  let picked;
+  if (account !== undefined) {
+    picked = typeof account === 'string'
+      ? (ctx.accounts ?? listAccounts(ctx.configPath)).find((a) => a.name === account)
+      : undefined;
+    if (!picked) return { ok: false, status: 400, error: 'account_unknown' };
   }
 
   // A container is a folder OF projects, not a project. The PWA draws one as a
@@ -711,6 +727,18 @@ export function launchSession(ctx, project) {
     ? ctx.claudeConfigDir
     : resolveClaudeConfigDir(ctx.configPath);
 
+  // No account picked means what it always meant: the configured
+  // profile, or Claude's own default. The plain `~/.claude` account is that
+  // default, so it is launched with NO profile folder set - its state file
+  // lives in the home folder, not inside `~/.claude`.
+  // A PICKED ~/.claude is what plain `claude` opens, so it launches the same
+  // way: no profile folder set. A configured claude_config_dir is used exactly
+  // as set, even when it names ~/.claude - an owner who set it keeps that
+  // profile's state inside the folder, and it has always launched that way.
+  const launchDir = picked === undefined
+    ? claudeConfigDir
+    : (samePath(picked.dir, path.join(os.homedir(), '.claude')) ? null : picked.dir);
+
   // Same hasOwn seam as claudeConfigDir above, same reason. r.path is passed
   // so a per-project entry can win over the global one.
   const preLaunchCommand = Object.hasOwn(ctx, 'preLaunchCommand')
@@ -737,12 +765,13 @@ export function launchSession(ctx, project) {
   }
 
   const pidFilePath = path.join(pidDir, pidFileNameFor(sessionName));
+  const rowName = remoteControlName(r.path, allProjectPaths(roots));
 
   // Answer Claude Code's workspace-trust modal for this shared folder
   // before the session can meet it - see trust.js. Opt-in through ctx like
   // watchLaunches, so only the real server writes the profile's .claude.json
   // and no test can touch the developer's own.
-  if (ctx.trustFolders && !(ctx.trustFolder || trustFolder)(r.path, claudeConfigDir)) {
+  if (ctx.trustFolders && !(ctx.trustFolder || trustFolder)(r.path, launchDir)) {
     // The launch goes ahead - the worst case is the modal it always had - but
     // the stuck tile that follows needs a cause somewhere the owner can read.
     console.warn(`claude-remote agent: could not mark '${r.path}' trusted in Claude Code; the session may stop on its trust question on the PC`);
@@ -760,14 +789,14 @@ export function launchSession(ctx, project) {
     // launch-session.ps1 hands this RAW folder leaf, double-quoted, to
     // `claude.cmd --remote-control` - see the SECURITY note on slugSegment for
     // why the quoting, not the slug, is what makes that safe.
-    '-SessionName', remoteControlName(r.path, allProjectPaths(roots)),
+    '-SessionName', rowName,
     '-PidFile', pidFilePath,
     // Only when configured. An absent claude_config_dir must pass NO -ConfigDir
     // at all, so launch-session.ps1 leaves CLAUDE_CONFIG_DIR unset and Claude
     // Code uses its own default profile. Passing an empty string here
     // would defeat that - PowerShell would bind it and the `if ($ConfigDir)`
     // guard is what turns it back into "absent".
-    ...(claudeConfigDir ? ['-ConfigDir', claudeConfigDir] : []),
+    ...(launchDir ? ['-ConfigDir', launchDir] : []),
     // Only when configured, for the same reason as -ConfigDir above: an absent
     // key must pass NO -PreLaunch, so the launcher's `if ($PreLaunch)` falls to
     // the venv auto-detect that has always run. An empty string would bind and
@@ -812,7 +841,11 @@ export function launchSession(ctx, project) {
   child.on('exit', () => inFlightLaunches.delete(key));
   child.unref();
 
-  const view = recordLaunch(ctx, { sessionName, project: recordedProject, projectPath: r.path });
+  // `row_name` rides the 202 of a launch with an account only: what the Code tab calls this session,
+  // which the hand-off banner names - a bare leaf is wrong when two
+  // shared projects share one (`email-lint (Work)`).
+  const view = { ...recordLaunch(ctx, { sessionName, project: recordedProject, projectPath: r.path, account }), ...(account !== undefined ? { row_name: rowName } : {}) };
+  if (account !== undefined) recordLastAccount(r.path, account, ctx.lastAccountsPath);
 
   // After the handlers, and safe there: node emits neither event on this
   // tick, so nothing can be released before it is recorded. `at` is read

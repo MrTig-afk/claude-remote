@@ -33,6 +33,9 @@ export const SECTIONS = [
       // Added 2026-09-23, owner's choice: the picker checks that
       // these two names EXIST to pre-set a new share; it never opens either.
       'Whether a folder holds a .git or CLAUDE.md, to suggest how to share it.',
+      // Added 2026-09-30, owner's choice ("Add the line"): the account picker
+      // reads shell profiles for alias names; nothing else is taken from them.
+      'The names of your Claude Code aliases, read from your PowerShell and bash profiles, to name your accounts. Nothing else in those files is kept.',
     ],
   },
   {
