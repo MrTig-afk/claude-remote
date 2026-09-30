@@ -235,6 +235,38 @@ working. The start after that says which happened: "Claude Remote updated
 itself on this PC." or why it could not. Your passcode, settings and open
 sessions are kept.
 
+## Uninstall
+
+In PowerShell on the PC, in this order - the agent has to be stopped before its
+files can go, because a running agent holds them open:
+
+```powershell
+# 1. Stop it starting again, then stop it (Stop-ScheduledTask would leave it running).
+Unregister-ScheduledTask -TaskName 'Claude Remote Agent' -Confirm:$false
+Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8790 -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+
+# 2. Take it off your tailnet. Only this entry; anything else you serve stays.
+tailscale serve --https=8790 off
+
+# 3. Remove the plugin and its marketplace. This also deletes your passcode, settings and log.
+claude plugin uninstall claude-remote@claude-remote
+claude plugin marketplace remove claude-remote
+
+# 4. Remove the installed copy, and the data folder if anything is left in it.
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\claude-remote" -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\data\claude-remote-claude-remote" -ErrorAction SilentlyContinue
+```
+
+If you moved the port with `CLAUDE_REMOTE_AGENT_PORT`, use your number in steps
+1 and 2. If you use Claude Code with another profile (`CLAUDE_CONFIG_DIR`), run
+step 3 in that profile.
+
+One thing stays, on purpose: Claude Code still remembers that you trusted the
+folders you started sessions in, the same as if you had answered its question
+yourself. That is Claude Code's own setting and harmless to leave; it is only
+ever changed by Claude Code.
+
 ## What launching a session does to your environment
 
 Worth knowing, because it is invisible from the phone. When you tap a project,
