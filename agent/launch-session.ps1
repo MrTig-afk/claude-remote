@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# R12.1. THE ONE WAY THIS SCRIPT REFUSES TO LAUNCH. Write the reason where the
+# THE ONE WAY THIS SCRIPT REFUSES TO LAUNCH. Write the reason where the
 # agent can find it, then stop - no Start-Process, no pid file.
 #
 # The .err file is the ONLY place a failure can be seen. Write-Warning goes to
@@ -42,7 +42,7 @@ function Write-LaunchRefusal([string]$Reason) {
 # setting.
 if ($PidFile) { Remove-Item -LiteralPath "$PidFile.err" -ErrorAction SilentlyContinue }
 
-# T56. This used to join $HOME to one specific personal profile name, hardcoded.
+# This used to join $HOME to one specific personal profile name, hardcoded.
 # A stranger got every session launched against a profile directory that does
 # not exist on their machine.
 # ABSENT BY DEFAULT is the whole point: when no -ConfigDir is passed this leaves
@@ -65,7 +65,7 @@ if ($ConfigDir) {
 
 # WRAPPED, BUT READ THE LIMIT BEFORE TRUSTING IT. This catches a ProjectPath
 # that vanishes, which under $ErrorActionPreference = 'Stop' otherwise kills the
-# script with NO .err - the reasonless failure R12.1 exists to abolish.
+# script with NO .err - the reasonless failure the refused launch exists to abolish.
 #
 # IT IS ALMOST UNREACHABLE IN PRODUCTION, and an earlier version of this comment
 # claimed otherwise. sessions.js spawns this script with `cwd: r.path` - the
@@ -104,7 +104,7 @@ try {
 # -CommandType Application` does NOT search the current directory, so running
 # after Set-Location is harmless.
 #
-# WHAT THIS DOES NOT FIX, said plainly (F16-C04): Claude Code and every tool
+# WHAT THIS DOES NOT FIX, said plainly: Claude Code and every tool
 # and hook it runs INHERIT the modified PATH, so any command they call by bare
 # name - git, bash, python - resolves into the project's venv\Scripts first. A
 # repo shipping its own venv\Scripts\git.exe runs it the first time Claude
@@ -147,7 +147,7 @@ Remove-Item Env:VIRTUAL_ENV -ErrorAction SilentlyContinue
 # a relative path resolves against the project. Why executing it is acceptable
 # is in the PSAvoidUsingInvokeExpression justification at the top of this file.
 if ($PreLaunch) {
-    # THE LAUNCH STOPS HERE. PRD R12.1, owner's decision 2026-09-12.
+    # THE LAUNCH STOPS HERE. Owner's decision, 2026-09-12.
     #
     # THIS REVERSES WHAT THIS BLOCK USED TO DO, and the old behaviour is worth
     # stating because the comment defending it stood here for weeks: the catch
@@ -156,7 +156,7 @@ if ($PreLaunch) {
     # session". The cost of that argument was a session that is alive and
     # wrong at the same time - a CONDITION that persists, which had to be shown
     # on a surface that also carries transient news. FIVE user-visible designs
-    # were refuted trying to draw it (cycles 12 and 13), and Artifact sequence 7
+    # were refuted trying to draw it in two review cycles, and the approved design
     # deleted the state instead of drawing it a sixth time.
     #
     # So: write the reason, then EXIT. No Start-Process, no pid file. The agent
@@ -184,7 +184,7 @@ if ($PreLaunch) {
     # AFTER the owner's command, on purpose - see Resolve-ClaudeExe.
     $claudeExe = Resolve-ClaudeExe
 } else {
-    # R12. LOOK IN THE PROJECT. Nothing is configured and nothing is
+    # LOOK IN THE PROJECT. Nothing is configured and nothing is
     # remembered, so a folder made a minute ago behaves like one used for a
     # year. Two things are looked for, in this order, and the FIRST hit wins.
     #
@@ -199,11 +199,11 @@ if ($PreLaunch) {
     # `<project>\venv\Scripts\Activate.ps1` - which is ARBITRARY CODE FROM THE
     # PROJECT FOLDER, run at full user permissions the moment a tile is tapped.
     # Clone someone's repository, tap it on your phone, run their code. That
-    # predated R12 by a long way and was found by the security review of
+    # predated the environment rules by a long way and was found by the security review of
     # c27ecc4 on 2026-09-13.
     #
-    # It also contradicted this project's own rule, already written into PRD
-    # R12.3: the per-project command is deliberately NOT a file inside the
+    # It also contradicted this project's own rule, already written into the PRD:
+    # the per-project command is deliberately NOT a file inside the
     # project, "because a cloned repository must never be able to run a command
     # when its tile is tapped". The venv path was violating that rule the whole
     # time.
@@ -322,7 +322,7 @@ if ($PreLaunch) {
             Write-LaunchRefusal "environment.yml has no top-level 'name:' in its first 200 lines, so there is no conda environment to activate. Add one, or remove the file."
         }
 
-        # NEVER A PATH (F16-C01). conda activates a value holding / or \ as a
+        # NEVER A PATH. conda activates a value holding / or \ as a
         # prefix INSIDE this project and runs its etc\conda\activate.d\*.ps1 -
         # a cloned repo's own script, on one tap. conda's names cannot hold
         # those or `:`; a leading - or . also rules out `.`, `..` and options.
@@ -389,7 +389,7 @@ if ($PreLaunch) {
         # and nothing is raised at all.
         #
         # The wrapped version of this shipped for exactly one review round and
-        # would have silently reinstated the state Artifact sequence 7 deleted:
+        # would have silently reinstated the state the approved design deleted:
         # a cloned repo naming an environment that does not exist here would
         # have launched a healthy-looking session sitting in `base`.
         #

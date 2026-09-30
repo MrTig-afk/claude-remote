@@ -1,4 +1,4 @@
-// agent/phone.js and its routes (Lane 23 / R21.3): tailscale serve runs only
+// agent/phone.js and its routes: tailscale serve runs only
 // after the passcode is first set, only on the real server's opt-in, and the
 // desk learns the address from Tailscale. Every tailscale call here is a fake
 // handed in as ctx.tailscaleRun - no test runs the real binary.

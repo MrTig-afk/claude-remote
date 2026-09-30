@@ -1,4 +1,4 @@
-// T82/T85 - Lane 5, updates. The detection and the wording are pure
+// Updates. The detection and the wording are pure
 // (update-ui.js) and imported directly; the screen and the two dots are
 // sliced out of app.js and run under a small stub DOM.
 import assert from 'node:assert/strict';

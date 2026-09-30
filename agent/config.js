@@ -4,7 +4,7 @@ import path from 'node:path';
 
 /**
  * Absolute path of the claude-remote config file. It used to be shared with a
- * PowerShell reader (Get-ConfigFilePath); that path was deleted by T53 on
+ * PowerShell reader (Get-ConfigFilePath); that path was deleted on
  * 2026-09-05, so this is now the ONLY reader and the location is free to
  * change if there is ever a reason.
  */
@@ -26,7 +26,7 @@ export function getPidDirPath() {
  * The Claude Code profile directory launched sessions should use, or null to
  * leave it alone and let Claude Code pick its own default (`~/.claude`).
  *
- * T56: this used to be one specific personal profile directory, hardcoded into
+ * This used to be one specific personal profile directory, hardcoded into
  * launch-session.ps1. A stranger got every session launched against a profile
  * directory that does not exist on their machine. ABSENT BY DEFAULT is the
  * point - an unset config means "do not set CLAUDE_CONFIG_DIR at all", not
@@ -76,7 +76,7 @@ export function resolveClaudeConfigDir(configPath = getConfigFilePath()) {
  *
  * `pre_launch_commands` (keyed by project path) wins, then `pre_launch_command`
  * (one string) for everything else. The map exists because the global alone
- * silently disabled venv activation for every OTHER project once set (F6-003).
+ * silently disabled venv activation for every OTHER project once set.
  *
  * THIS IS ARBITRARY CODE EXECUTION BY DESIGN - launch-session.ps1 runs the
  * value through Invoke-Expression. Acceptable ONLY because setting it requires
@@ -142,7 +142,7 @@ export function resolvePreLaunchCommand(configPath = getConfigFilePath(), projec
   const config = readConfig(configPath);
 
   // PER-PROJECT WINS, and it is looked up before the global is even read.
-  // Owner decision 2026-09-09 (T120): keyed by project path in the central
+  // Owner decision 2026-09-09: keyed by project path in the central
   // config, NOT a file inside the project. A file that travels with a repo
   // would let a cloned project execute a command the moment its tile is
   // tapped - the direnv problem - and this setting reaches Invoke-Expression.
@@ -189,7 +189,7 @@ export function resolveOpeningReport(configPath = getConfigFilePath()) {
  *  opened from them, so listing a directory that does not exist costs nothing
  *  and every entry here is a candidate rather than a requirement.
  *  A configured profile is scanned first; the default `~/.claude` is always
- *  included (T56 - it was missing entirely, so a stranger's sessions were
+ *  included (it was missing entirely, so a stranger's sessions were
  *  launched into a profile nothing then looked in); and any other
  *  `~/.claude-*` profile that actually holds a `sessions` directory is
  *  DISCOVERED, never hardcoded - see the note in the body for why that
@@ -206,7 +206,7 @@ export function getSessionDirPaths(configPath = getConfigFilePath(), homeDir = o
     configured = resolveClaudeConfigDir(configPath);
   } catch { /* fall through to the default profiles below */ }
   // DISCOVERED, NOT HARDCODED, AND NOT DROPPED EITHER.
-  // Two named profiles (one owner's) were hardcoded here. T65 removed them as
+  // Two named profiles (one owner's) were hardcoded here. A cleanup removed them as
   // personal strings, and that removal was WRONG ON ITS OWN: desk-session
   // discovery (readSessionFiles -> discoverDeskSessions) is the only source of
   // the "desktop" tiles, so a desk session started under any non-default
@@ -264,10 +264,10 @@ export function getServeStatePath() {
 
 /**
  * Reads and parses the claude-remote config file with no schema opinions -
- * the shared read/parse T87, T91 and T94 all need, so a corrupt config is
+ * the shared read/parse three readers all need, so a corrupt config is
  * one real fault - INVALID JSON THROWS, naming the config path - rather than
  * three slightly different silent failures. Returns a plain object; callers that
- * need to merge a write into the existing file (T94) get every unrelated
+ * need to merge a write into the existing file get every unrelated
  * key back untouched.
  */
 export function readConfig(configPath = getConfigFilePath()) {
@@ -303,7 +303,7 @@ export function readConfig(configPath = getConfigFilePath()) {
  * Whole-file config write, tmp + rename. Returns true on success, false with
  * a warn on failure - same contract and same shape as registry.js's
  * writeRegistry. Never throws.
- * ponytail: read-modify-write with no lock. Single-user agent on loopback,
+ * Known limit: read-modify-write with no lock. Single-user agent on loopback,
  * so the window is theoretical. Upgrade path: an O_EXCL lockfile around
  * read+write.
  */
@@ -425,10 +425,10 @@ export function isAcknowledged(configPath = getConfigFilePath()) {
  * `acknowledged: false`, which re-shows the accept screen: fail-safe, not
  * fail-open.
  *
- * Rebuilt on isAcknowledged + resolveSharedFolders when M9 merged, which is
+ * Rebuilt on isAcknowledged + resolveSharedFolders when shared folders merged, which is
  * exactly what this function's first version said should happen once
  * resolveSharedFolders existed. It no longer parses the config itself, so
- * shared_count now honours every rule M9 settled - shared_folders wins over
+ * shared_count now honours every rule shared folders settled - shared_folders wins over
  * default_base_folder, a malformed entry is dropped, an empty array counts 0
  * - instead of a second, simpler count that would drift from the real one.
  */

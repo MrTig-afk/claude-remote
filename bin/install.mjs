@@ -33,7 +33,7 @@ export function linkLine(hookLine, port = DEFAULT_PORT) {
  * Where `claude plugin list --json` says the plugin is installed, or null.
  * The user-scope copy - the one `plugin install` / `plugin update` just made
  * current - first: the list also carries project-scope copies from other
- * projects, possibly older and listed earlier (NPX-C1-D2-01).
+ * projects, possibly older and listed earlier.
  */
 export function pluginRoot(listJson) {
   try {
@@ -48,7 +48,7 @@ export function pluginRoot(listJson) {
  * Options for every child. cwd System32, never the caller's: the line is
  * pasted into Claude Code, whose cwd is the open project, and cmd.exe looks in
  * the current folder before PATH - a cloned repo's claude.cmd would run in the
- * person's name (NPX-C1-S01). hooks/check-update.mjs does the same.
+ * person's name. hooks/check-update.mjs does the same.
  */
 export function spawnOptions(capture) {
   return {
@@ -70,7 +70,7 @@ function main() {
   if (process.platform !== 'win32') { console.log(NOT_WINDOWS); return 1; }
   if (claude('--version', true).status !== 0) { console.log(NO_CLAUDE); return 1; }
   // Each step may say "already": a second paste must still reach the newest
-  // version (NPX-C1-02), so the marketplace is refreshed and the plugin updated.
+  // version, so the marketplace is refreshed and the plugin updated.
   claude('plugin marketplace add MrTig-afk/claude-remote');
   claude('plugin marketplace update claude-remote');
   claude(`plugin install ${ID}`);

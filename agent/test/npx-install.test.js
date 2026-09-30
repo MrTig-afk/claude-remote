@@ -27,7 +27,7 @@ test('linkLine: the address after every outcome that leaves the app on this PC, 
   }
 });
 
-// RED WHEN (NPX-C1-S01) the children run in the caller's folder again: the
+// RED WHEN the children run in the caller's folder again: the
 // paste runs with Claude Code's cwd, the open project, and cmd.exe looks there
 // before PATH. `claude --version` only - harmless whichever claude answers.
 test('a claude.cmd planted in the current folder is never the one that runs', { skip: process.platform !== 'win32' }, () => {
@@ -64,7 +64,7 @@ test('pluginRoot: the install path of claude-remote@claude-remote, from any prof
   assert.equal(pluginRoot(LIST), 'C:\\Users\\u\\.claude\\plugins\\cache\\claude-remote\\claude-remote\\e2c027e');
 });
 
-// RED WHEN (NPX-C1-D2-01) the first match wins again: the list carries other
+// RED WHEN the first match wins again: the list carries other
 // projects' project-scope copies, and one listed first may be older.
 test('pluginRoot: the user-scope copy, even when an older project-scope copy is listed first', () => {
   const list = JSON.stringify([

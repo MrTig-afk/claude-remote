@@ -250,7 +250,7 @@ test('GET /api/status: default_base_folder only -> shared_count 1', async (t) =>
 test('GET /api/status: shared_folders with two entries -> shared_count 2', async (t) => {
   // Entries must be well-formed to count. This test used to pass ['a', 'b'] -
   // two bare strings - because the first shared_count was a naive
-  // `.length` on whatever was in the array. It now goes through M9's
+  // `.length` on whatever was in the array. It now goes through the shared folders'
   // resolveSharedFolders, so the fixture has to be a real config.
   const { origin, token } = await startStatusServer(t, {
     config: {

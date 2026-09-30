@@ -156,7 +156,7 @@ export function dismissEnded(sessionName) {
   return post('/api/sessions/dismiss', { session_name: sessionName });
 }
 
-// `root` only inside a folder of projects (R20); absent, the agent picks.
+// `root` only inside a folder of projects; absent, the agent picks.
 export function createProject(name, root) {
   return post('/api/projects', root == null ? { name } : { name, root });
 }
@@ -202,7 +202,7 @@ export function sendTestPush(endpoint) {
   return post('/api/push/test', { endpoint });
 }
 
-// Lane 23. The GET can wait on a serve the PC started at passcode time, and
+// The GET can wait on a serve the PC started at passcode time, and
 // the retry runs serve itself (the agent allows it 30s), hence the longer
 // waits. Same empty-body contract as acknowledge().
 export function getPhone() {

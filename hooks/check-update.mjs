@@ -1,4 +1,4 @@
-// SessionStart hook (Lane 23 / R21.1): the plugin installs and updates the
+// SessionStart hook: the plugin installs and updates the
 // agent by itself, in the background, with no window.
 //
 // A plugin cannot run anything while it is being installed, so the first
@@ -15,12 +15,12 @@
 // breaks one.
 //
 // A PC WHOSE LOGON TASK RUNS AN AGENT FROM ANYWHERE ELSE IS LEFT ALONE - no
-// install, no update, no line (SS-C1-C01). A git checkout started by the task
+// install, no update, no line. A git checkout started by the task
 // is a real set-up, and update-agent.ps1 would stop it and re-point the task.
 //
 // Once the install is in place and Tailscale sharing is on for the port, the
-// next start shows the phone code once, drawn in the terminal (Lane 23 step 8,
-// R21.7). `--print-qr <url>` prints the same drawing for /claude-remote:setup.
+// next start shows the phone code once, drawn in the terminal.
+// `--print-qr <url>` prints the same drawing for /claude-remote:setup.
 //
 // WHY THE JOB IS A SECOND NODE PROCESS, NOT POWERSHELL DIRECTLY. Measured on
 // Windows 11, 2026-09-27:
@@ -51,7 +51,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 
 import { qrMatrix } from '../agent/public/qr.js';
 
-// Lane 23, verbatim.
+// Verbatim.
 export const SETTING_UP = 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.';
 export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then restart Claude.';
 export const NOT_WINDOWS = 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.';
@@ -157,7 +157,7 @@ function writeState(file, state) {
   fs.renameSync(tmp, file);
 }
 
-// THE LOCK (SS-C1-C02/C03). It appears WITH its content - written to a temp
+// THE LOCK. It appears WITH its content - written to a temp
 // file first, then hard-linked into place, which fails EEXIST when a lock is
 // already there - so no reader ever sees an empty lock and takes it for dead.
 // It holds the taker's random token, and only that token's job removes it.
@@ -226,7 +226,7 @@ export function takeLock(lockFile, now) {
       if (raw !== null && lockFresh(raw, now)) return null;
       if (raw !== null) removeLockIfStill(lockFile, raw);   // a job that died without cleaning up
     }
-    // ponytail: three racers on one stale lock can still leave two jobs if a
+    // Known limit: three racers on one stale lock can still leave two jobs if a
     // restore loses to a third take; each job then keeps its own token safe.
     return null;
   } finally {
@@ -242,7 +242,7 @@ export function releaseLock(lockFile, token) {
   } catch { /* not ours to judge */ }
 }
 
-// --- The logon task (SS-C1-C01) ---------------------------------------------
+// --- The logon task ---------------------------------------------
 
 function xmlText(s) {
   return s.replace(/&(lt|gt|quot|apos|amp|#\d+|#x[0-9a-f]+);/gi, (m, e) => {
@@ -285,7 +285,7 @@ export function launcherStale(q, target) {
   return !cmd || !/\\conhost\.exe$/i.test(xmlText(cmd[1]).trim());
 }
 
-// --- The phone code in the terminal (Lane 23 step 8) -------------------------
+// --- The phone code in the terminal -------------------------
 
 /**
  * The QR for `text` in block characters, one string per line: a 2-module
@@ -373,7 +373,7 @@ export async function sessionStart(deps) {
   // same version is installed again, which re-registers the task with the
   // launcher Windows allows. The failed-same-version guard below stops a loop.
   // Both asked at once and the task's answer reused by phoneLine: in series,
-  // with phoneLine asking again, this reached the hook's 10s limit (SL-C1-01).
+  // with phoneLine asking again, this reached the hook's 10s limit.
   if (kind === 'update' && installedHash(target) === hash) {
     const [sac, q] = await Promise.all([deps.sacStatus ? deps.sacStatus() : null, deps.taskQuery()]);
     if (!(sacOn(sac) && launcherStale(q, target))) return deps.explain ? UP_TO_DATE : phoneLine(deps, state, files, target, q);
@@ -382,7 +382,7 @@ export async function sessionStart(deps) {
   // /claude-remote:setup, which clears this record.
   if (state.last && !state.last.ok && state.last.hash === hash) return quiet(outcomeLine(state.last));
   // The three questions at once: each has its own timeout, and asked one
-  // after another they came close to the hook's 10s limit (SS-C1-D2-C02).
+  // after another they came close to the hook's 10s limit.
   // Only a first install needs Tailscale; an update keeps whatever sharing is on.
   const [q, running, ts] = await Promise.all([
     deps.taskQuery(),
@@ -481,8 +481,8 @@ export async function runJob(job, deps) {
 const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
 
 /**
- * `tailscale <args>` -> stdout, or null on any failure. cwd is System32
- * (SS-C1-S01): tailscaleBinary() falls back to the bare name, and libuv looks
+ * `tailscale <args>` -> stdout, or null on any failure. cwd is System32:
+ * tailscaleBinary() falls back to the bare name, and libuv looks
  * a bare name up in the CHILD's cwd first - which, unset, is this hook's: the
  * project folder Claude was opened in, where anyone could plant a tailscale.exe.
  */

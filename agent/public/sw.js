@@ -87,7 +87,7 @@ async function staleWhileRevalidate(req, event) {
   // Promise.all sits in a waitUntil whose rejection is swallowed, so one failed
   // delete (quota, storage pressure, an eviction race) is enough. Naming the
   // cache is correct whether or not that ever happens.
-  // The .catch is T109: under the older Service Worker spec a NAMED lookup
+  // The .catch matters: under the older Service Worker spec a NAMED lookup
   // rejects with NotFoundError when that cache is gone, where the bare form
   // resolved undefined - so an evicted cache must fall through, not throw.
   const cached = await caches.match(req, { cacheName: CACHE }).catch(() => undefined);

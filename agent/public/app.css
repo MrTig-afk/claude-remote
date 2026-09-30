@@ -6,7 +6,7 @@
    this block is a var(); pwa-assets.test.js enforces that, so a raw hex
    anywhere else is a test failure rather than a thing someone notices later.
 
-   --warn is the ONE value not in design/tokens.md. Lane 7's "Reset the app"
+   --warn is the ONE value not in design/tokens.md. The "Reset the app"
    screen needs a caution colour and tokens.md has none; this is the
    artifact's own amber. It is caution, NOT danger - tokens.md reserves
    --danger for "this ends something", and clearing a cache is not that.
@@ -138,7 +138,7 @@ body {
   stroke-linejoin: round;
 }
 
-/* The gear, per Lane 6 of the userflow artifact. This shipped once as the
+/* The gear, per the approved Settings root. This shipped once as the
    word SETTINGS at var(--dim) - the same colour as .ver beside it - and the
    owner could not find it on his phone. var(--muted) is what the artifact paints
    header actions (--muted). Do not dim it back to match .ver: a control and
@@ -446,7 +446,7 @@ body {
 
 .msg { padding: 14px 8px; font-size: 11px; color: var(--muted); }
 
-/* T100 - the way out of an empty or broken project list. The empty-state
+/* The way out of an empty or broken project list. The empty-state
    zone must always say what to do, never render as an empty box. Same
    type/colour values as .msg, just with a title added above the body. */
 .empty {
@@ -547,7 +547,7 @@ select {
   font-size: 11px;
   color: var(--danger);
 }
-/* The panel's edge goes red with its error line, as Lane 11 steps 3 and 3b
+/* The panel's edge goes red with its error line, as the New project frames
    draw it. --danger-2 is the border the app already gives red controls. */
 .newproj-panel:has(.newproj-error:not([hidden])) { border-color: var(--danger-2); }
 .newproj-actions { display: flex; gap: 8px; margin-top: 12px; }
@@ -613,7 +613,7 @@ select {
 }
 
 /* ---------------------------------------------------------------------------
-   Lane 22 - the + opens a menu. Open state is the + button's aria-expanded
+   The + opens a menu. Open state is the + button's aria-expanded
    plus .plus-open on #picker, both set by setPlusMenu() and nothing else.
    Everything here is a TRANSITION, so taking the class off plays it in
    reverse; prefers-reduced-motion is the global rule in MOTION below, which
@@ -764,7 +764,7 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Lane 7 sub-screens ------------------------------------------------------
+/* Settings sub-screens ---------------------------------------------------
    The crumb: 'Settings' with a back chevron, naming the screen it returns
    to. A 44px tap floor with the padding pulled back so it costs the header
    no vertical space, the same trick .settings-open uses. */
@@ -840,7 +840,7 @@ select {
    var(--danger) for 'this ends something'. */
 .set-btn-solid { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 600; }
 
-/* Home grouped by folder (Lane 9, option C) ---------------------------------
+/* Home grouped by folder ---------------------------------------------------
    One collapsible header per shared folder, below the running zone and never
    inside it. The header is a row in its own right, so it keeps the app's 44px
    tap floor and the same left-icon anatomy as everything else. */
@@ -878,7 +878,7 @@ select {
    it rather than as another header. */
 .acc-body { padding-left: 8px; }
 
-/* Editing one shared folder (Lane 3, step 2) --------------------------------
+/* Editing one shared folder -----------------------------------------------
    Amber, not red: this warns about a consequence, it does not end anything.
    The artifact's own note - it "warns rather than blocks", because silently
    orphaning a live session is the bug it exists to prevent. */
@@ -888,7 +888,7 @@ select {
    folder has a session running in it right now. */
 .root-live { font-size: 10px; color: var(--accent); white-space: nowrap; }
 
-/* Updates (Lane 5) ----------------------------------------------------------
+/* Updates ----------------------------------------------------------
    The dot on the gear, and the same dot repeated on the row that holds the
    news, "so the trail never breaks". NO animation on either: the artifact
    lists that as a decision, not an omission - the quiet update route was
@@ -924,13 +924,13 @@ select {
 .note-mark.add { color: var(--accent); }
 .note-mark.chg { color: var(--warn); }
 
-/* Shared folders (Lane 3) ---------------------------------------------------
+/* Shared folders ---------------------------------------------------
    The rows are the app's ordinary .row.folder, so this screen inherits the
    row anatomy the whole app shares. Only the remove control and the two
    banners are new. */
 
-/* The X that removes a shared root (Lane 8, second half). Its own 44px
-   target beside the row, never inside it - Lane 8 is explicit that the
+/* The X that removes a shared root (on the Shared folders screen). Its own 44px
+   target beside the row, never inside it - the approved design is explicit that the
    remove X and the unticked-state X "never appear on the same row", so this
    one must not be mistakable for a checkbox. */
 .shared-remove {
@@ -985,7 +985,7 @@ select {
 .banner.set-note { display: flex; align-items: flex-start; gap: 9px; margin: 12px 0 0; color: var(--muted); }
 .banner.set-note .ico { color: var(--muted-2); margin-top: 2px; }
 
-/* Change passcode (Lane 7). The fields themselves are the gate's - .gate-field,
+/* Change passcode. The fields themselves are the gate's - .gate-field,
    .gate-fieldlabel and .pin - so the two passcode screens are the same screen
    twice, which is how the artifact draws them. Only the layout around them is
    new.
@@ -1030,7 +1030,7 @@ select {
 .banner.set-warn { display: flex; align-items: flex-start; gap: 9px; margin: 16px 0 0; color: var(--warn); }
 .banner.set-warn .ico { margin-top: 2px; }
 
-/* Lane 19 step 14 - the command the owner runs at the PC, drawn once already
+/* The command the owner runs at the PC, drawn once already
    in the approved Artifact under this same class name. Monospace by
    inheritance (body's own font-family), so the command reads as a command. */
 .cmd {
@@ -1044,7 +1044,7 @@ select {
   overflow-wrap: anywhere;
 }
 
-/* Notifications (Lane 19) - the status row's own bell dims when off, lights
+/* Notifications - the status row's own bell dims when off, lights
    in the accent when on. Same rule the rest of the app uses for a live vs
    idle state; nothing new here, just applied to this one row. */
 .notify-status .ico { color: var(--dim); }
@@ -1061,7 +1061,7 @@ select {
 .sec { font-size: 10px; letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; margin: 0 0 8px; }
 .sec.sp { margin-top: 22px; }
 
-/* Lane 19's name fields - the artifact's .field/.fld-lbl. With no rule they
+/* The notification name fields - the artifact's .field/.fld-lbl. With no rule they
    were the UA field: bright white on iOS, the placeholder shouting. Same box
    as the new-project name; its own rule because pwa-assets.test.js pins that
    selector. font-size after `font: inherit`, for the 16px iOS zoom floor. */
@@ -1101,7 +1101,7 @@ select {
 }
 #notify-devices-zone { margin-top: 12px; }
 
-/* Lane 20's reauth panel: a wrong-tries lockout dims the pin and the action
+/* The passcode reauth panel: a wrong-tries lockout dims the pin and the action
    the same way the gate itself goes quiet, so the state reads the same way
    twice in one app. */
 .set-btn:disabled,
@@ -1178,7 +1178,7 @@ select {
   min-height: 33px;   /* two lines reserved so the form never jumps */
 }
 /* Input errors red, the lockout amber (owner 2026-09-27, "Make errors red";
-   Artifact Lanes 12 and 20). lock.js setMsg sets the tone with the words. */
+   the approved gate and passcode panel). lock.js setMsg sets the tone with the words. */
 .gate-msg[data-tone="error"] { color: var(--danger); }
 .gate-msg[data-tone="warn"] { color: var(--warn); }
 
@@ -1215,7 +1215,7 @@ select {
 
 .accept-sections { display: flex; flex-direction: column; gap: 12px; }
 
-/* The four sections collapse behind a native <details> (T103). Native, not a
+/* The four sections collapse behind a native <details>. Native, not a
    div and a click handler: the summary is a button to a screen reader, it is
    keyboard-operable, and find-in-page expands it - none of which we would get
    for free otherwise.
@@ -1237,7 +1237,7 @@ select {
 .accept-more > .accept-sections { padding-bottom: 14px; }
 
 /* Same size as .allhdr's section label. The ACCENT, not .allhdr's --dim, since
-   Artifact sequence 15 (Lane 21, 2026-09-27): on the Dell the disabled grey
+   on the Dell (2026-09-27) the disabled grey
    made the one screen that must be read the hardest to read. Every size, and
    Settings > What this app can see too, which draws the same elements. */
 .copy-heading { font-size: 9px; font-weight: 700; letter-spacing: 0.09em; color: var(--accent); margin-bottom: 5px; }
@@ -1267,12 +1267,12 @@ select {
    it keeps the platform's own focus ring, keyboard behaviour and hit testing. */
 .accept-consent input { width: 18px; height: 18px; flex-shrink: 0; accent-color: var(--accent); margin: 0; }
 
-/* --muted, not --dim (Lane 21): it is an instruction, not disabled text. */
+/* --muted, not --dim: it is an instruction, not disabled text. */
 .accept-note { font-size: 10px; line-height: 1.5; color: var(--muted); }
 
 .accept-msg { font-size: 11px; line-height: 1.5; color: var(--text); }
 
-/* --- Folder picker (T97) --- */
+/* --- Folder picker --- */
 
 /* Same reason #picker/#gate/#accept carry one: without a display here the
    SECURITY rule at the top of this file has nothing to override. */
@@ -1294,7 +1294,7 @@ select {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-/* Lane 8: the tick and the X are drawn by the .chk span below, so the real
+/* The tick and the X are drawn by the .chk span below, so the real
    input is hidden VISUALLY ONLY - never display:none and never hidden, both
    of which take it out of the tab order and off the accessibility tree. It
    stays the thing that is focused, toggled, announced and associated with the
@@ -1395,7 +1395,7 @@ select {
 }
 .share-remove { width: 44px; height: 44px; padding: 0; flex-shrink: 0; }
 
-/* Lane 18: how a ticked folder is shared. The closed form reads as the row's
+/* How a ticked folder is shared. The closed form reads as the row's
    own sub-line (indented to the name, row-status size) but is a separate
    button, because the row's name is already the button that goes INTO it. */
 .share-kind {
@@ -1423,7 +1423,7 @@ select {
 .share-mode-opt input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--accent); }
 .empty-action { width: 100%; }
 
-/* Moved above the row loop (T100): a cap notice printed under 500 rows is
+/* Moved above the row loop: a cap notice printed under 500 rows is
    not a notice - the owner would have to scroll past all of them to read it.
    Padding flips top<->bottom so the spacing lands the same way now that it
    sits above its neighbour instead of below it. */
@@ -1441,12 +1441,12 @@ select {
   border-top: 1px solid var(--line);
 }
 .share-save { flex-grow: 1; }
-/* The Lane 20 panel opens INSIDE this row, in place of SKIP and SAVE. As a
+/* The passcode panel opens INSIDE this row, in place of SKIP and SAVE. As a
    flex item of a row it shrank to its content and sat at the left edge (seen
    on the Dell at desktop width); it takes the whole row instead. */
 .share-actions > #reauth { flex: 1 1 100%; }
 
-/* Lane 21 step 5. Only ever shown at >=900px - see the desktop block. */
+/* Only ever shown at >=900px - see the desktop block. */
 .pane-empty { display: none; }
 
 /* At 320px the toggle drops to a second line instead of crushing the name -
@@ -1528,11 +1528,11 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 }
 
 /* ---------------------------------------------------------------------------
-   Lane 10 - the hand-off to the Claude app (R1, R2).
+   The hand-off to the Claude app.
    Colours are tokens only; no hex below :root, which a test enforces.
 --------------------------------------------------------------------------- */
 
-/* R1. Sits directly under #banner and shares its horizontal margin so the two
+/* Sits directly under #banner and shares its horizontal margin so the two
    read as one block rather than two stacked cards. Accent-bordered because it
    is the one control on this screen that leaves the app - it is not competing
    with STOP, which is the only danger-coloured thing here.
@@ -1556,7 +1556,7 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   text-decoration: none;
 }
 
-/* R2. FIXED, not absolute. It was absolute inside #picker so the header
+/* FIXED, not absolute. It was absolute inside #picker so the header
    stayed visible, as the Artifact's frame draws it - but #picker is
    flex-grow inside a min-height:100dvh column, so with enough projects it is
    the full SCROLL height of the document. `inset: 0` then sized the sheet to
@@ -1621,13 +1621,13 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 }
 .sheet-note { margin-top: 10px; font-size: 9.5px; color: var(--dim); }
 
-/* R6. Below 900px the two layout wrappers do not exist as boxes: their
+/* Below 900px the two layout wrappers do not exist as boxes: their
    children are the picker's own flex items, in the same order, with the same
    margins. Everything about the phone layout is unchanged. */
 #pane-top, #pane-bottom { display: contents; }
 
 /* ---------------------------------------------------------------------------
-   R6 (Lane 16) - the desktop layout. Two panes at >=900px, and BELOW that
+   The desktop layout. Two panes at >=900px, and BELOW that
    nothing here applies: the phone layout is untouched, which is the whole
    point of a single breakpoint.
 
@@ -1685,10 +1685,10 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   /* The + button is fixed to the viewport and was positioned against the
      430px column; at this width it belongs at the main column's right edge. */
   .newproj { right: max(13px, calc(50% - 520px + 13px)); }
-  .plusmenu { right: max(13px, calc(50% - 520px + 13px)); }   /* Lane 22: stays on the + */
+  .plusmenu { right: max(13px, calc(50% - 520px + 13px)); }   /* Stays on the + */
 
   /* -------------------------------------------------------------------------
-     Lane 21 (Artifact sequence 15, 2026-09-27) - the desk comes first. Until
+     The desk comes first. Until
      the app is on a phone, the passcode, the warning and the picker all happen
      HERE, so at this width they are one readable centred column instead of a
      small phone-sized one. Same words, same elements; only size and place.
@@ -1762,7 +1762,7 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
   #picker:has(#pane-empty:not([hidden])) #projects .empty-title { font-size: 11px; color: var(--dim); }
 }
 
-/* The stop confirm's warning and its way out, per Artifact Lane 2. The app
+/* The stop confirm's warning and its way out, as approved. The app
    writes no handoff; this says so and points at the only thing that can. */
 .tile-confirm-warn {
   display: flex;
@@ -1798,10 +1798,10 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 }
 
 /* ---------------------------------------------------------------------------
-   Lane 23 (Artifact sequence 17, 2026-09-27) - "Open it on your phone", the
+   "Open it on your phone", the
    desk's last first-run screen, and the Phone address row in Settings >
    Agent status. The same centred column as the accept screen, and at >=900px
-   the same Lane 21 sizes. The QR code is dark modules on the light text
+   the same desk sizes. The QR code is dark modules on the light text
    token: a phone camera needs dark-on-light, and no new colour is introduced.
 --------------------------------------------------------------------------- */
 #phone { display: flex; flex-direction: column; flex-grow: 1; }
@@ -1861,7 +1861,7 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 .phone-row:not([hidden]) { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
 .phone-row .phone-qr { width: 160px; }
 
-/* Lane 23 step 3b (Artifact sequence 24): "No Tailscale on your phone?",
+/* "No Tailscale on your phone?",
    closed by default, a native <details> for the same reasons as
    .accept-more. Here the chevron is the affordance, as the Artifact draws it,
    so the UA marker goes. The Artifact's open border is not a token; --edge is

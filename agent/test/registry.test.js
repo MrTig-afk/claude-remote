@@ -473,9 +473,9 @@ test('listSessions - a BOM-prefixed pid file is parsed correctly', () => {
   assert.equal(views[0].pid, 1234);
 });
 
-// --- T121: the .err file beside the pid file ----------------------------------
+// --- The .err file beside the pid file ---------------------------------------
 // launch-session.ps1 writes <pidfile>.err, and ONLY when a pre_launch_command
-// threw. Before T121 nothing read it: the owner watched a row age into `failed`
+// threw. Before the failed-launch state nothing read it: the owner watched a row age into `failed`
 // with the reason sitting on disk two feet away and no way to see it from a
 // phone. These pin the read, the cases that must NOT read it, and the shaping.
 
@@ -510,7 +510,7 @@ test('listSessions - a failed entry with no .err file carries no `error` key at 
   assert.equal('env_error' in views[0], false, 'omitted, not set to null - the shell tests for presence');
 });
 
-// THE CASE THE FEATURE IS ACTUALLY FOR, and the one the first cut of T121 got
+// THE CASE THE FEATURE IS ACTUALLY FOR, and the one the first cut of the failed-launch state got
 // wrong by reading the .err only on the `failed` branch. launch-session.ps1's
 // catch has no throw: it writes the .err and CARRIES ON to Start-Process, so a
 // blown pre_launch_command normally produces a live session with a broken
@@ -529,7 +529,7 @@ test('listSessions - a RUNNING session still surfaces a failed pre_launch_comman
   assert.equal(views[0].env_error, 'pre_launch_command failed: boom');
 });
 
-// R12.1 REVERSED THIS ONE. It used to assert that an entry inside the grace
+// THE REFUSED LAUNCH REVERSED THIS ONE. It used to assert that an entry inside the grace
 // window with a .err stays `starting` - correct while the launcher wrote the
 // file and CARRIED ON to Start-Process, because the session really might still
 // be coming. The launcher now exits instead, so a .err beside a missing pid
@@ -807,7 +807,7 @@ test('clearPidFile - still removes the pid file when there is no .err', () => {
 });
 
 // --- containment of the pid-file path -----------------------------------------
-// pidFilePathFor is the one security-load-bearing line in T29 and was
+// pidFilePathFor is the one security-load-bearing line in the original session registry and was
 // untested. It IS reachable with a string that did not come from
 // deriveSessionName: listSessions drops entries by passing the registry
 // file's RAW session_name to clearPidFile, before the deriveSessionName
@@ -907,9 +907,9 @@ test('clearPidFile - a plain session name inside pidDir is still removed', () =>
   assert.equal(fs.existsSync(real), false, 'the guard must not break the normal case');
 });
 
-// --- R1-R15: ending / ended registry states -----------------------------------
+// --- Ending / ended registry states --------------------------------------------
 
-test('listSessions - a PRE-T101 `handoff` claim is still honoured (read-only back-compat)', () => {
+test('listSessions - a pre-2026-09-05 `handoff` claim is still honoured (read-only back-compat)', () => {
   // sessions.json outlives a restart and the agent restarts on every commit
   // touching agent/, so an upgrade landing between a STOP's claim and its
   // release would otherwise leave an entry no branch recognises: it would fall
@@ -929,7 +929,7 @@ test('listSessions - a PRE-T101 `handoff` claim is still honoured (read-only bac
   assert.equal(views[0].pid, null);
 });
 
-test('listSessions - a PRE-T101 claim still expires on ITS OWN timestamp', () => {
+test('listSessions - a pre-2026-09-05 claim still expires on ITS OWN timestamp', () => {
   // The staleness window must read the legacy field too. Reading only
   // ending_started_at gives NaN, and `NaN < CLAIM_STALE_MS` is false, so a
   // legacy claim would be dropped immediately rather than held for its window.
@@ -1435,7 +1435,7 @@ test('discoverDeskSessions - a LIVE desk session replaces a dead `ended` record,
 
 // A LIVE DESK SESSION MASKS A FAILED RECORD, REASON OR NOT.
 //
-// An exception for records carrying env_error was written here in cycle 14 and
+// An exception for records carrying env_error was written here once and
 // REVERTED the same cycle. It made the API return both views, which is all a
 // test at this level can see - but the PWA then drew neither correctly:
 // sessionFor() takes the first match by path, got the failed view, and the

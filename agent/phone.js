@@ -1,4 +1,4 @@
-// Lane 23 / R21.3 - the PC switches its own Tailscale sharing on, and tells
+// The PC switches its own Tailscale sharing on, and tells
 // the desk what address the phone should open.
 //
 // THE ORDER IS THE SAFETY RULE (skills/setup/SKILL.md, "THE ORDER IS

@@ -41,7 +41,7 @@ export function makeAuthCtx({ now } = {}) {
     configPath: path.join(dir, 'config.json'),
     pushPath: path.join(dir, 'push.json'),
     sessionDirs: testSessionDirs(dir),
-    // T94's PUT /api/shared writes through ctx.configPath. Omitting it here
+    // PUT /api/shared writes through ctx.configPath. Omitting it here
     // is the exact same bug class the comment below already warns about, one
     // key later: agent/config.js's real getConfigFilePath() would take over
     // and the suite would overwrite the owner's live config.json.
@@ -57,12 +57,12 @@ export function makeAuthCtx({ now } = {}) {
 // ~/.claude/plugins/data/claude-remote-claude-remote/sessions.json on every
 // run, silently, for two days. `undefined` is the dangerous value (it is what
 // triggers the config.js fallback), so a missing key throws like a wrong one.
-// configPath IS in this list. M11 briefly argued it should not be - on the
-// grounds that readStatusFacts only reads it - but M9 gave the agent routes
+// configPath IS in this list. It was once briefly argued it should not be - on the
+// grounds that readStatusFacts only reads it - but shared folders gave the agent routes
 // that WRITE the config (PUT /api/shared, POST /api/acknowledge), so a
 // fixture missing configPath would write the owner's real shared folders.
 // That is the same class of accident registryPath and pidDir are here to
-// prevent, and it is why the M11 reasoning no longer applies.
+// prevent, and it is why that reasoning no longer applies.
 const FIXTURE_PATH_KEYS = ['passcodePath', 'attemptsPath', 'registryPath', 'pidDir', 'configPath', 'pushPath'];
 
 // The fifth key that falls back to the real world, and the only one that is

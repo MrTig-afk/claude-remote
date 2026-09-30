@@ -116,7 +116,7 @@ tailscale serve reset                # NUKES ALL serve config incl. 443 and 8443
   `\\.\pipe\ProtectedPrefix\Administrators\Tailscale\tailscaled: Access is
   denied` on some installs. **If that error appears, re-run the same command
   verbatim in an elevated PowerShell — the flags do not change.**
-- Either way, nothing here hits the elevated-shell wall that blocks T04–T07.
+- Either way, nothing here hits the elevated-shell wall that blocked the old admin-only setup steps.
   There is no installer, no service change, no firewall change.
 
 ### One PWA-side caveat
@@ -158,7 +158,7 @@ Read-only inspection of the live firewall found:
 Tailscale-In   prof=Domain,Private  proto=Any  lport=Any  local=100.x.y.z               Allow
 Tailscale-In   prof=Domain,Private  proto=Any  lport=Any  local=fd7a:115c:a1e0::xxxx   Allow
 Tailscale-Process  prof=Any  proto=UDP  lport=Any  program=tailscaled.exe                   Allow
-Claude Remote SSH (Tailscale only)  prof=Any  proto=TCP  lport=22  iface=Tailscale          Allow   ← T05
+Claude Remote SSH (Tailscale only)  prof=Any  proto=TCP  lport=22  iface=Tailscale          Allow   ← the old SSH rule
 ```
 
 and the Tailscale interface's network category is **Private**, so those
@@ -177,12 +177,12 @@ Three reasons the planned firewall rule no longer earns its place:
    permitted by it. That is exactly why the two existing serve entries (443→4173,
    8443→8010) work with **no per-port rule of their own** — a sweep of every
    enabled inbound rule for ports 4173, 8010, 8443 and 8790 returned nothing.
-3. T05's rule was genuinely needed because **sshd binds `0.0.0.0`** and had to be
+3. The old SSH rule was genuinely needed because **sshd binds `0.0.0.0`** and had to be
    narrowed to the Tailscale interface. That reasoning does not transfer to a
    process bound to loopback.
 
 If the owner wants the rule kept anyway as belt-and-braces, the honest version
-mirrors T05's shape:
+mirrors that rule's shape:
 
 ```powershell
 # NOT recommended — redundant with Tailscale-In. Elevated shell required.

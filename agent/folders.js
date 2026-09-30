@@ -8,17 +8,17 @@ import { listDrives } from './drives.js';
  * DRIVE, not the already-shared set. On first run nothing is shared yet
  * (resolveSharedFolders returns []), so a route that browsed only the shared
  * set would return nothing at all and the owner could never pick a first
- * folder - the whole M9 feature would be unreachable. This is the thing a
+ * folder - the whole shared-folders feature would be unreachable. This is the thing a
  * later reader will most want to "tighten" without realising it breaks
- * first-run completely. The narrowing happens at the WRITE route (T94),
+ * first-run completely. The narrowing happens at the WRITE route,
  * which re-validates every ticked path server-side and independently.
  * Browsing is wide by design; sharing is narrow by enforcement.
  *
- * WHAT T94 MUST CALL: `resolveRealFolderPath`, never `validateFolderPath`.
+ * WHAT THE SHARING WRITE MUST CALL: `resolveRealFolderPath`, never `validateFolderPath`.
  * `validateFolderPath` is V1-V5 only, purely lexical, and is confinement on
  * paper - not on the filesystem. `resolveRealFolderPath` is V1-V7, the only
  * function in this module that actually asks the filesystem what a path
- * resolves to, and it is the boundary every route (this one and T94) must
+ * resolves to, and it is the boundary every route (this one and the sharing write) must
  * call.
  */
 
@@ -101,7 +101,7 @@ function checkShape(rawPath) {
 
 /**
  * Pure. No filesystem call. `drives` is listDrives()'s `drives` array (each
- * entry carries `letter` in T92's "C:" normal form and a `blocked` boolean).
+ * entry carries `letter` in the drive list's "C:" normal form and a `blocked` boolean).
  * Order is load-bearing - reject, never sanitize; do not reorder these
  * checks. **NOT a boundary on its own** - a caller that uses this alone is
  * confined on paper, not on the filesystem; see `resolveRealFolderPath`.
@@ -124,7 +124,7 @@ export function validateFolderPath(rawPath, drives) {
   // questions and neither can stand in for the other.
   const resolved = path.resolve(rawPath);
   // path.parse(resolved).root returns "C:\\" WITH the trailing separator;
-  // T92's normal form is "C:" WITHOUT it (normaliseLetter strips
+  // The drive list's normal form is "C:" WITHOUT it (normaliseLetter strips
   // /[\\/]+$/). Strip it before comparing - an unstripped comparison
   // silently never matches, which fails closed (everything 404s) and would
   // look like "the picker is broken", not like a security bug.
@@ -169,7 +169,7 @@ export function parentOf(resolved) {
  * respect NTFS ACLs there, so it would report readable: true for a folder
  * that then fails to open. opendirSync + immediate closeSync is cheaper than
  * a full readdir.
- * ponytail: up to 500 handle opens on a huge directory, one per row. Upgrade
+ * Known limit: up to 500 handle opens on a huge directory, one per row. Upgrade
  * path if it ever feels slow: compute `readable` for the first screenful
  * only and fill the rest lazily from the client.
  */
@@ -237,7 +237,7 @@ export function realPathVerdict(real, drives) {
   const root = path.parse(stripped).root;
   if (root.startsWith('\\\\')) return NOT_FOUND;
 
-  // 3 - T92's "C:" normal form, the same normalisation V5 does.
+  // 3 - the drive list's "C:" normal form, the same normalisation V5 does.
   const letter = root.replace(/[\\/]+$/, '').toUpperCase();
   if (!/^[A-Z]:$/.test(letter)) return NOT_FOUND; // no plain drive root at all
 
@@ -249,7 +249,7 @@ export function realPathVerdict(real, drives) {
 }
 
 /**
- * V1-V7. **THIS IS THE BOUNDARY. EVERY ROUTE CALLS THIS, INCLUDING T94.**
+ * V1-V7. **THIS IS THE BOUNDARY. EVERY ROUTE CALLS THIS, INCLUDING THE SHARING WRITE.**
  * -> { ok: true, resolved, real } | { ok: false, status, error }
  */
 export function resolveRealFolderPath(rawPath, drives) {
@@ -320,13 +320,13 @@ const byName = (a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' });
  * DESIGN CALL 1 - the drive list is memoised on `ctx`, not a module-level
  * variable (a module-level cache would be shared across every server a test
  * file starts), with a 60s TTL and successful results only.
- * ponytail: 60s of staleness. A drive attached mid-session appears within a
+ * Known limit: 60s of staleness. A drive attached mid-session appears within a
  * minute. A drive removed mid-session stays in the allowed set for up to a
  * minute, and a browse of it then fails at lstat with ENOENT -> 404, so the
  * stale entry grants nothing. The one real window is drive-letter reuse: if
  * a fixed drive is removed and a removable one takes its letter inside 60s,
  * folder NAMES on the removable drive can be listed. That discloses names
- * only - nothing is shared by browsing, and PUT /api/shared (T94) re-checks
+ * only - nothing is shared by browsing, and PUT /api/shared re-checks
  * the drive independently - so the ceiling is accepted. Upgrade path if it
  * ever matters: drop the TTL to 5s, or invalidate on a lstat ENOENT of a
  * cached root.
@@ -375,7 +375,7 @@ export async function listFolders(ctx, rawPath) {
     // every filesystem call below uses - passing `resolved` here instead
     // would re-resolve the junction at readdir time and hand back exactly the
     // escape V7 exists to stop.
-    // ponytail: NARROWED, not closed. realpath and the readdir below are
+    // Known limit: NARROWED, not closed. realpath and the readdir below are
     // separate syscalls, so a junction swapped between them is still resolved
     // late. Not exploitable by the client this route serves: winning that race
     // needs local write access inside a directory being browsed, and anyone
@@ -415,7 +415,7 @@ export async function listFolders(ctx, rawPath) {
     }
 
     // 6.3 - total is the real directory count BEFORE the 500 slice, so
-    // T100's banner can state a true number.
+    // the list-state banner can state a true number.
     const total = names.length;
     // 6.4 - sort BEFORE the slice, so "the first 500" is deterministic and
     // alphabetical instead of readdir order.
@@ -426,7 +426,7 @@ export async function listFolders(ctx, rawPath) {
 
     // 6.6 - readable, computed AFTER the slice: at most MAX_FOLDERS probes,
     // not `total`.
-    // `project` pre-sets how the picker shares a newly ticked folder (Lane 18):
+    // `project` pre-sets how the picker shares a newly ticked folder:
     // true when it holds a .git (a folder, or the file a worktree has) or a
     // CLAUDE.md. Existence only - nothing is opened or read.
     const folders = sliced.map((name) => {

@@ -107,7 +107,7 @@ function isPlainExcludeName(name) {
  * whatever the type, because a container-mode walk through a junction still
  * lists.
  *
- * ponytail: one lstat per root, at most 32, on a route hit at boot, on
+ * Known limit: one lstat per root, at most 32, on a route hit at boot, on
  * REFRESH and on visibilitychange - never on the 5s poll.
  */
 export function describeSharedRoots(roots) {
@@ -183,7 +183,7 @@ export function validateSharedEntry(entry, drives, systemDirs) {
 
   // 7 - not a system directory, or inside one. The `real` half is
   // load-bearing: a lexical-only check is defeated by an intermediate
-  // junction, which is the exact T93 hole.
+  // junction, which is the exact hole the folder listing once had.
   if (systemDirs.some((dir) => isInsideOrEqual(resolved, dir) || isInsideOrEqual(real, dir))) {
     return { ok: false, error: 'system_directory' };
   }
@@ -248,7 +248,7 @@ export async function putSharedFolders(ctx, body) {
     // 4.5 - overlap (B3), after every entry has validated, on the CANONICAL
     // paths. index is the LATER row - the one the picker asks the owner to
     // untick.
-    // ponytail: O(n^2) over at most 32 roots is 496 comparisons on a route
+    // Known limit: O(n^2) over at most 32 roots is 496 comparisons on a route
     // that runs a handful of times per install. Upgrade path if it ever
     // matters: sort the keys and compare neighbours.
     for (let j = 1; j < reals.length; j += 1) {

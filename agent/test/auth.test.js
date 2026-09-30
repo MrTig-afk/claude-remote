@@ -294,7 +294,7 @@ test('three wrong guesses in a row -> each 401 with retry_after_ms 0', () => {
 
 // --- 19 ---
 
-// T110. Tests 19-21 run on a FROZEN clock, like tests 22-23 below.
+// Tests 19-21 run on a FROZEN clock, like tests 22-23 below.
 //
 // They assert an attempt INSIDE a backoff window is refused, and on the real
 // clock that races wall time: `node --test` runs files in parallel on a host
@@ -323,7 +323,7 @@ test('the 4th wrong guess -> 401 with retry_after_ms 1000; the immediate 5th -> 
 // --- 20 ---
 
 test('KDF is not reached during backoff', () => {
-  const c = ctx({ now: () => FROZEN });   // T110, see the note above test 19
+  const c = ctx({ now: () => FROZEN });   // See the note above test 19
   setPasscode(c, '481902', '481902');
   for (let i = 0; i < 3; i++) attemptUnlock(c, '111222'); // 3 free failures, not locked yet
 
@@ -352,7 +352,7 @@ test('KDF is not reached during backoff', () => {
 // --- 21 ---
 
 test('hammering does not extend the lockout', () => {
-  const c = ctx({ now: () => FROZEN });   // T110, see the note above test 19
+  const c = ctx({ now: () => FROZEN });   // See the note above test 19
   setPasscode(c, '481902', '481902');
   for (let i = 0; i < 4; i++) attemptUnlock(c, '111222');
   const before = readAttempts(c);

@@ -1,4 +1,4 @@
-// T78/Lane 3 - the Shared folders screen, and Lane 8's remove X on it.
+// The Shared folders screen, and its remove X.
 // The row shapes and the confirmation copy are pure (folders-ui.js) and are
 // imported directly; the screen itself is sliced out of app.js and run under
 // a small stub DOM, the same idiom as settings.test.js.
@@ -73,7 +73,7 @@ test('L5 - a single-folder root says so and counts nothing', () => {
 
 test('L6 - a missing root says "not found" and nothing else', () => {
   // RED WHEN: a folder that is not there reports "0 projects", which reads as
-  // an empty folder rather than an absent one - the distinction Lane 4 is
+  // an empty folder rather than an absent one - the distinction the approved design is
   // entirely about.
   const rows = sharedFolderRows([{ ...container(WORKSPACE), missing: true }], []);
   assert.equal(rows[0].missing, true);
@@ -162,9 +162,9 @@ function loadScreen({ shared, projects, removeRoot } = {}) {
   const doc = fakeDocument();
   const state = { shared: shared ?? null, projects: projects ?? [] };
   const calls = { removed: [], renderSettings: 0, load: 0 };
-  // Lane 20: confirmStopSharing no longer writes directly - it opens the
+  // confirmStopSharing no longer writes directly - it opens the
   // reauth panel and waits. openReauth itself lives outside this slice (it is
-  // shared by every Lane 20 call site), so it is stubbed here: it captures
+  // shared by every passcode-panel call site), so it is stubbed here: it captures
   // `send`/`onDone` for the test's own submitReauth to drive, exactly what
   // typing a passcode and tapping the action button does in the real panel.
   let lastReauth = null;
@@ -200,7 +200,7 @@ const rowsOf = (doc) => doc.getElementById('shared-rows').children;
 
 test('L10 - the screen draws one row per shared root, each carrying its own remove X', () => {
   // RED WHEN: the remove control goes missing, which is the only thing this
-  // screen can DO to a root until Lane 3's "Editing one" is built.
+  // screen can DO to a root until "Editing one" is built.
   const s = loadScreen({ shared: [container(WORKSPACE), single(WORK)], projects: projectsIn(WORKSPACE, 3) });
   s.renderSharedScreen();
 
@@ -212,7 +212,7 @@ test('L10 - the screen draws one row per shared root, each carrying its own remo
 });
 
 test('L11 - no row carries a chevron, because the per-root edit screen is not built', () => {
-  // RED WHEN: the artifact's chevron is copied across before Lane 3's
+  // RED WHEN: the artifact's chevron is copied across before the folder editor's
   // "Editing one" exists - a control that answers a tap with nothing, which
   // is exactly what buildSettingsRow's enterable/inert split forbids.
   const s = loadScreen({ shared: [container(WORKSPACE)], projects: [] });
@@ -332,7 +332,7 @@ test('L19 - the screen carries the crumb, the add button and the artifact\'s not
   assert.match(screen, /CANCEL/);
 });
 
-// --- Lane 8, first half: the picker's tick ---------------------------------
+// --- The picker's tick -----------------------------------------------------
 
 test('L20 - the drawn tick sits over a REAL checkbox, hidden by opacity only', () => {
   // RED WHEN: the input is display:none'd, or replaced by a role="checkbox"
@@ -349,7 +349,7 @@ test('L20 - the drawn tick sits over a REAL checkbox, hidden by opacity only', (
   const build = js.slice(js.indexOf('function buildTickableRow('), js.indexOf('function renderShare('));
   assert.match(build, /input\.type = 'checkbox'/, 'the real control must still be an input');
   assert.ok(!/role: ?'checkbox'|role', 'checkbox'/.test(build), 'no hand-rolled checkbox role');
-  // The drawn box itself lives in buildChk, shared with Lane 3's per-folder
+  // The drawn box itself lives in buildChk, shared with the per-folder
   // editor so the two screens cannot drift into different-looking checkboxes.
   const chk = js.slice(js.indexOf('function buildChk('), js.indexOf('function buildTickableRow('));
   assert.match(chk, /chk\.setAttribute\('aria-hidden', 'true'\)/, 'the drawn box must not be announced twice');
@@ -381,7 +381,7 @@ test('L22 - the tick animation moves the GLYPH now, not the whole control', () =
 
 test('L23 - a row you are not allowed to tick shows neither glyph', () => {
   // RED WHEN: a covered row draws the X. "Deliberately off" and "not yours to
-  // set" are different states, and Lane 8 only gives the X the first meaning.
+  // set" are different states, and the approved design only gives the X the first meaning.
   const css = read('app.css');
   const disabled = css.match(/\.share-tick input:disabled \+ \.chk \{[^}]*\}/);
   assert.ok(disabled, 'app.css must carry a disabled .chk rule');
@@ -396,7 +396,7 @@ test('L24 - the focus ring moves to the drawn box, since the real one is invisib
   assert.match(css, /\.share-tick input:focus-visible \+ \.chk \{[^}]*outline:/);
 });
 
-// --- Lane 3, step 2: editing one shared folder -----------------------------
+// --- Editing one shared folder ---------------------------------------------
 
 const folder = (name) => ({ name, path: `${WORKSPACE}\\${name}`, readable: true });
 
@@ -494,7 +494,7 @@ test('L31 - the editor row draws a tick and a name, and no chevron', () => {
   assert.ok(!/dataset\.tick\b/.test(src), 'it must not answer to the picker\'s handler');
 });
 
-// --- Lane 9: home grouped by folder ---------------------------------------
+// --- Home grouped by folder -----------------------------------------------
 
 const proj = (name, root, rootName) => ({ name, root, rootName });
 
@@ -511,7 +511,7 @@ test('L32 - one section per shared folder, named after the folder, in config ord
 
 test('L33 - a lone section is always open, so a single-folder install looks as it always did', () => {
   // RED WHEN: the collapse rule is applied uniformly and the owner's whole
-  // list disappears behind one tap. That is the exact snag Lane 9 names.
+  // list disappears behind one tap. That is the exact snag the approved design names.
   const sections = projectSections([proj('a', WORKSPACE, 'Workspace')], [container(WORKSPACE)], [], () => false);
   assert.equal(sections.length, 1);
   assert.equal(sections[0].open, true, 'a single section ignores the open list entirely');

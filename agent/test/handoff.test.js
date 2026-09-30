@@ -1,4 +1,4 @@
-// Lane 10 (R1, R2) - the hand-off to the Claude app.
+// The hand-off to the Claude app.
 //
 // handoff-ui.js is a pure module with no DOM, so it imports straight into
 // node the same way update-ui.js and folders-ui.js do. The DOM wiring in
@@ -68,7 +68,7 @@ test('handoffReady is false for a status this app does not know', () => {
 // --- the copy -------------------------------------------------------------
 
 test('the banner names the Claude app and the Code tab', () => {
-  // Q2 chose naming it over staying generic: "your session is ready
+  // The owner chose naming it over staying generic: "your session is ready
   // elsewhere" is not an instruction to someone who does not know the flow.
   const copy = handoffCopy('claude-remote');
   assert.match(copy.body, /Claude/);
@@ -163,13 +163,13 @@ test('the hand-off button carries the external-link glyph the Artifact draws', (
   assert.match(anchor, /id="handoff-go-label"/, 'and a separate label span to write into');
 
   const app = read('app.js');
-  const fn = app.slice(app.indexOf('function showHandoff('), app.indexOf('// ---- Lane 10 / R2'));
+  const fn = app.slice(app.indexOf('function showHandoff('), app.indexOf('// ---- The once-only sheet'));
   assert.doesNotMatch(fn, /createElementNS/, 'no namespace URL may reach a shipped asset');
   assert.match(fn, /handoff-go-label/, 'showHandoff writes the label, never the anchor');
 });
 
 // ---------------------------------------------------------------------------
-// R4 (Lane 13) - the phone being offline is a DIFFERENT screen from the PC
+// The phone being offline is a DIFFERENT screen from the PC
 // not answering. The shipped app had one story for both.
 // ---------------------------------------------------------------------------
 
@@ -220,7 +220,7 @@ test('the offline state retries on the online event, not on a ladder of its own'
 });
 
 // ---------------------------------------------------------------------------
-// R5 (Lane 15) - installing. A row in About, never a prompt.
+// Installing. A row in About, never a prompt.
 // ---------------------------------------------------------------------------
 
 test('nothing in the app raises an install prompt on its own', () => {
@@ -254,7 +254,7 @@ test('the install row is only tappable when there is a dialog to raise', () => {
 });
 
 // ---------------------------------------------------------------------------
-// R6 (Lane 16) - the desktop layout. One breakpoint, and below it nothing
+// The desktop layout. One breakpoint, and below it nothing
 // about the phone changes.
 // ---------------------------------------------------------------------------
 
@@ -268,7 +268,7 @@ test('there is exactly one desktop breakpoint, at 900px', () => {
 });
 
 test('the phone layout is untouched below the breakpoint', () => {
-  // The wrappers R6 added are layout-only: outside the media query they are
+  // The wrappers the desktop layout added are layout-only: outside the media query they are
   // display:contents, so the picker's flex flow and DOM order are what they
   // always were.
   const css = read('app.css');
@@ -307,7 +307,7 @@ test('the offline empty state can actually be reached in the harness', () => {
   // The harness's own rule: a copy.js constant renderProjects references must
   // be in BOTH the parameter list and the call arguments, or the first test to
   // reach that branch dies with a ReferenceError instead of an assertion.
-  // R4's branch was the one that had been left out.
+  // The offline branch was the one that had been left out.
   const t = fs.readFileSync(path.resolve(PUBLIC, '../test/pwa-assets.test.js'), 'utf8');
   const harness = t.slice(t.indexOf('function makeRenderProjectsIntegration'), t.indexOf('function makeStubEl'));
   assert.match(harness, /'PHONE_OFFLINE',/, 'parameter list');
@@ -318,7 +318,7 @@ test('the offline empty state can actually be reached in the harness', () => {
 // Settings chrome. Owner-reported 2026-09-04: "there is no go back arrow when
 // you click settings, even the setting thingy is soo confusing that you need
 // to squint to see that you're in the settings page." Both were deviations
-// from Lane 6, which draws a title plus an X.
+// from the approved Settings root, which draws a title plus an X.
 // ---------------------------------------------------------------------------
 
 test('a screen title is a title, not the palette\'s disabled colour', () => {
@@ -428,8 +428,8 @@ test('the Running section is gone while the agent cannot be reached', () => {
   // It then reads "RUNNING 0 / nothing running / tap a project to start a
   // session" over the top of "Can't reach your PC" - two claims the app
   // cannot make (state.sessions is null, which the footer correctly calls
-  // UNKNOWN) and an invitation to tap something that cannot work. Artifact
-  // Lane 13 draws no Running section on either unreachable frame.
+  // UNKNOWN) and an invitation to tap something that cannot work.
+  // The approved design draws no Running section on either unreachable frame.
   const app = read('app.js');
   const fn = app.slice(app.indexOf('function renderProjects()'), app.indexOf('function renderFooter('));
   assert.match(fn, /document\.getElementById\('zone-run'\)\.hidden = state\.reachable !== true;/);

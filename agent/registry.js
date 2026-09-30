@@ -139,7 +139,7 @@ function readPidFile(pidDir, sessionName) {
  * positional noise (`At line:1 char:1`, `+ CategoryInfo ...`) that says nothing
  * to someone holding a phone. The first line is the message. The cap is on the
  * text a phone will eventually be asked to draw - no shell reads this field
- * yet, see T121's UI half, so it is a budget rather than a measured fit.
+ * yet, see the failed-launch UI, so it is a budget rather than a measured fit.
  *
  * NO EXPLICIT BOM STRIP. `Set-Content -Encoding utf8` on Windows PowerShell
  * 5.1 writes one and Node's decoder keeps it, but U+FEFF is WhiteSpace in
@@ -221,7 +221,7 @@ export function clearPidFile(ctx, sessionName) {
  * left (no registry entry, a reused pid, a pid whose image is not ours). None
  * has read why the launch went wrong, and a broken environment is a plausible
  * cause of a session exiting inside one 5s poll window - so deleting the .err
- * there destroys the only record of exactly the failure T121 exists to report.
+ * there destroys the only record of exactly the failure the failed-launch state exists to report.
  *
  * REASON 2, a DELIBERATE teardown of a DESK session: deriveSessionName and
  * deriveDeskSessionName return the same string for the same folder, so the .err
@@ -323,7 +323,7 @@ function readSessionFiles(ctx) {
       // `--remote-control` session (a plain desk-started one on the dev host,
       // pid 23724, the session driving this run) ALSO writes kind:'interactive' -
       // it carries an extra `bridgeSessionId` field this reader ignores -
-      // so it is correctly NOT excluded by this filter; Q14's launched-STOP
+      // so it is correctly NOT excluded by this filter; the launched-STOP
       // id resolution depends on that being true.
       if (data.kind !== 'interactive') continue;
       if (!Number.isInteger(data.pid) || data.pid <= 0) continue;
@@ -387,7 +387,7 @@ function readSessionFiles(ctx) {
  */
 // True when cwd is projectPath itself or anywhere below it - the gate for
 // "is this a project's own working tree at all", not an attribution rule.
-// Roots never overlap (T94's 409 overlapping_root at write time, projects.js's
+// Roots never overlap (the 409 overlapping_root at write time, projects.js's
 // usableRoots' D2 at read time), and within a root projects are flat
 // siblings - so a cwd sits inside at most one LISTED project. The .find()
 // below makes that deterministic even if it ever stopped holding.
@@ -408,7 +408,7 @@ function isInsideProject(projectPath, cwd) {
 // proxy missed a real divergence once. A ONE-LINE DELEGATE to sessionNameFor
 // (sessions.js) - THE ONE IMPLEMENTATION of the naming rule - so this
 // function and deriveSessionName cannot drift: a second copy of the rule is
-// exactly how one live session renders as two tiles, and since T72 that same
+// exactly how one live session renders as two tiles, and since the folder drill-in screen that same
 // string is the identity a nested session's STOP resolves on, so a
 // divergence would end the wrong session.
 export function deriveDeskSessionName(root, cwd) {
@@ -661,7 +661,7 @@ export function listSessions(ctx) {
     // exiting the loop via `continue`; entry.status === undefined falls
     // through to the original status-derivation block below unchanged.
     //
-    // 'handoff' is the pre-T101 spelling of this same claim, READ ONLY and
+    // 'handoff' is the pre-2026-09-05 spelling of this same claim, READ ONLY and
     // never written. sessions.json outlives a restart, and the agent restarts
     // on every commit that touches agent/, so an upgrade landing between a
     // STOP's claim and its release would otherwise leave an entry no branch
@@ -731,14 +731,14 @@ export function listSessions(ctx) {
 
     const pid = readPidFile(pidDir, sessionName);
     let status;
-    // READ FOR EVERY STATUS, STILL - but the reason CHANGED at R12.1.
+    // READ FOR EVERY STATUS, STILL - but the reason CHANGED when a broken environment began refusing the launch.
     //
     // It used to be read here because the launcher's catch had no exit: a
     // blown pre_launch_command wrote its .err and fell through to
     // Start-Process, so the normal outcome was a session sitting there
     // `running` with the wrong environment, which the `failed` branch would
-    // never see. That state no longer exists - the catch now exits (ps1
-    // R12.1), and Artifact sequence 7 removed the UI for it.
+    // never see. That state no longer exists - the catch in launch-session.ps1
+    // now exits, and the approved design removed the UI for it.
     //
     // It stays read here rather than inside the `failed` branch because the
     // branch does not exist yet at this point - the status is DECIDED below,
@@ -781,7 +781,7 @@ export function listSessions(ctx) {
       // TWO WAYS TO BE FAILED, AND THEY ARE NOT THE SAME CLAIM.
       //
       // A .err beside a MISSING pid file is a DEFINITE VERDICT and is reported
-      // AT ONCE, without waiting out STARTING_GRACE_MS. Under R12.1 the
+      // AT ONCE, without waiting out STARTING_GRACE_MS. Under the refused launch the
       // launcher writes that file and exits, so nothing was started and
       // nothing is coming; the answer is already on disk. Making the owner
       // wait two minutes to be told something the agent already knows is the
@@ -799,7 +799,7 @@ export function listSessions(ctx) {
     // cannot come off the pid - it is matched by cwd instead (see
     // newestRecordAt). Only `running` asks: `starting` has no session file
     // yet, and `ending`/`ended` return above this point.
-    // ponytail: one extra readSessionFiles pass per running launched entry
+    // Known limit: one extra readSessionFiles pass per running launched entry
     // (0-2 in practice, poll every 5s). Thread the records through
     // discoverDeskSessions too if that ever shows up in a profile.
     const activity = status === 'running' ? newestRecordAt(ctx, resolvedPath)?.activity : undefined;

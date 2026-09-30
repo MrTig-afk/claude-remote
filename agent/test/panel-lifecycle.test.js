@@ -1,4 +1,4 @@
-// Discovery 1 remediation (ledger M22-C2, cycle 2) - C1, C2, C3. Real app.js
+// Panel lifecycle regressions - C1, C2, C3 below. Real app.js
 // source, sliced and run under a DOM stub that (unlike the registry-keyed
 // stubs elsewhere in this suite) actually models CONNECTEDNESS: getElementById
 // walks a real tree from a root, and innerHTML='' really detaches whatever was
@@ -195,7 +195,7 @@ function loadPanelLifecycle() {
 
   const libStart = js.indexOf('function shareAuthLost(');
   const libEnd = js.indexOf('function renderNotify() {');
-  assert.ok(libStart !== -1 && libEnd > libStart, 'the Lane 20/19 panel block not found - has app.js moved?');
+  assert.ok(libStart !== -1 && libEnd > libStart, 'the passcode/notification panel block not found - has app.js moved?');
   const lib = js.slice(libStart, libEnd);
 
   // The real caller whose panel C1 is about - its anchor is the fix.
@@ -256,13 +256,13 @@ function gate() {
 }
 
 // ============================================================================
-// C1 / D2-C1 - the gone-root REMOVE panel. Round 1 closed it on EVERY
+// C1 - the gone-root REMOVE panel. Round 1 closed it on EVERY
 // renderProjects(), and render() runs every 5s while a session runs, so it
 // shut itself mid-typing. Now it is anchored outside #projects and nothing
 // closes it on render.
 // ============================================================================
 
-test('D2-C1: a REMOVE panel stays open, typed digits intact, through the 5s renderProjects()', () => {
+test('a REMOVE panel stays open, typed digits intact, through the 5s renderProjects()', () => {
   const dom = buildDom();
   const btn = appendGoneNotice(dom.projects, 'F:\\Projects\\Example');
   const lib = loadLib(dom.doc, { openFolder: null, shared: [], projects: [], sessions: [], reachable: true });
@@ -279,7 +279,7 @@ test('D2-C1: a REMOVE panel stays open, typed digits intact, through the 5s rend
   assert.equal(dom.reauthPin.value, '4819', 'the half-typed passcode survives');
 });
 
-test('D2-C1: a REMOVE panel already closed by its submit survives the next renderProjects() too', async () => {
+test('a REMOVE panel already closed by its submit survives the next renderProjects() too', async () => {
   const dom = buildDom();
   const btn = appendGoneNotice(dom.projects, 'F:\\Projects\\Example');
   const lib = loadLib(dom.doc, { openFolder: null, shared: [], projects: [], sessions: [], reachable: true });
@@ -396,7 +396,7 @@ test('C3: closeActiveReauth tears down whatever is open without needing to know 
 });
 
 // ============================================================================
-// Discovery 2 (cycle 2) - D2-C2, D2-S1, D2-C3, D2-C4.
+// Found on a second pass over the same panels.
 // ============================================================================
 
 function twoButtons(dom) {
@@ -407,7 +407,7 @@ function twoButtons(dom) {
   return [a, b];
 }
 
-test('D2-C2: a superseded session\'s late reply touches nothing - not the newer panel, not its own onDone', async () => {
+test('a superseded session\'s late reply touches nothing - not the newer panel, not its own onDone', async () => {
   const dom = buildDom();
   const [btnA, btnB] = twoButtons(dom);
   const lib = loadLib(dom.doc, { push: null });
@@ -433,7 +433,7 @@ test('D2-C2: a superseded session\'s late reply touches nothing - not the newer 
   assert.equal(dom.reauthPin.value, '12', 'B\'s typing is untouched');
 });
 
-test('D2-C2: a lockout wait that ends after a newer session opened does not reset that session', async () => {
+test('a lockout wait that ends after a newer session opened does not reset that session', async () => {
   const dom = buildDom();
   const [btnA, btnB] = twoButtons(dom);
   const wait = gate();
@@ -458,7 +458,7 @@ test('D2-C2: a lockout wait that ends after a newer session opened does not rese
   assert.equal(dom.reauthPin.value, '4819', 'A\'s wake-up must not clear B\'s field');
 });
 
-test('D2-S1: digits typed then abandoned (CANCEL, or leaving the screen) are cleared from the hidden field', () => {
+test('digits typed then abandoned (CANCEL, or leaving the screen) are cleared from the hidden field', () => {
   const dom = buildDom();
   const [btn] = twoButtons(dom);
   const lib = loadLib(dom.doc, { push: null });
@@ -477,7 +477,7 @@ test('D2-S1: digits typed then abandoned (CANCEL, or leaving the screen) are cle
   assert.equal(dom.reauthPin.value, '', 'navigation close');
 });
 
-test('D2-C3: a 401 on the picker\'s reauth SAVE writes nothing onto the picker onAuthLost tore down', async () => {
+test('a 401 on the picker\'s reauth SAVE writes nothing onto the picker onAuthLost tore down', async () => {
   const dom = buildDom();
   const [skip, save] = twoButtons(dom);
   let applied = 0;
@@ -495,7 +495,7 @@ test('D2-C3: a 401 on the picker\'s reauth SAVE writes nothing onto the picker o
   assert.equal(applied, 0, 'finishSave must not run on a 401 - no share.error to reappear after re-unlock');
 });
 
-test('D2-C4: a failed TURN OFF keeps its error on screen after refreshPush()', async () => {
+test('a failed TURN OFF keeps its error on screen after refreshPush()', async () => {
   const dom = buildDom();
   const msg = makeEl('div', 'notify-msg');
   dom.root.appendChild(msg);

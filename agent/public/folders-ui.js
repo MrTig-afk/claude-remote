@@ -1,5 +1,5 @@
-// Pure shell module for the folder picker (T97) and the shared-folder STATE
-// selection (T100). No DOM access anywhere -
+// Pure shell module for the folder picker and the shared-folder STATE
+// selection. No DOM access anywhere -
 // not at module scope, not inside a function - so `node --test` imports this
 // directly, the same way accept.test.js imports copy.js. app.js is the only
 // place any of this touches the page.
@@ -101,7 +101,7 @@ export function truncatedNote(total, shown) {
 }
 
 /**
- * Which thing owns the project list's list zone (T100). Pure, so the
+ * Which thing owns the project list's list zone. Pure, so the
  * precedence is unit-testable with no DOM and no server.
  *
  * `shared` is null/undefined when the agent has not told us the set (the
@@ -118,7 +118,7 @@ export function truncatedNote(total, shown) {
 export function listZoneState({
   reachable, openFolderEmpty, projectCount, shared, offline = false,
 }) {
-  // R4: the phone being offline outranks everything, including 'waiting'.
+  // The phone being offline outranks everything, including 'waiting'.
   // Both produce the same silence from the agent, but only one of them is
   // the PC's fault - and telling someone their PC has not answered when the
   // phone has no network sends them to the wrong machine. Checked first for
@@ -141,10 +141,10 @@ export function listZoneState({
 }
 
 /**
- * Lane 22: what the + offers. [] means no + at all - only while the shared set
+ * What the + offers. [] means no + at all - only while the shared set
  * is unknown, because Share folder then has nothing safe to open (the picker
  * refuses to enter blind) and New project cannot say where it would go.
- * Inside a folder of projects: New project only (sequence 18 - everything in
+ * Inside a folder of projects: New project only (owner - everything in
  * there is already shared). On the top-level list: Share folder, plus New
  * project when a root shared as a folder of projects is still on disk (a
  * `single` root has no children to make, a missing one can only fail).
@@ -160,7 +160,7 @@ function firstLiveContainer(shared) {
 }
 
 /**
- * Lane 22 step 6: where New project will make the folder. `open` is the
+ * Where New project will make the folder. `open` is the
  * drilled-in container entry or null. Inside one it is that folder; on the
  * top-level list it is the first folder of projects still on disk. Its path is
  * sent as `root` either way, so the line on screen and the folder the agent
@@ -216,7 +216,7 @@ export function withoutRoot(shared, path) {
  * keeps exactly one path parser.
  *
  * Accepted ceiling: the picker still shows no per-root exclusion list, so a
- * root with excludes round-trips them but cannot be edited until T98.
+ * root with excludes round-trips them but cannot be edited here (the "Editing one" screen does that).
  */
 export function sharedToTicks(shared) {
   return (shared || []).map((r) => ({
@@ -283,8 +283,8 @@ export function shareErrorMessage(code, status, index, ticks) {
  * write { shared_folders: [] } - wiping every shared folder with no error.
  * null and undefined mean the same thing here, exactly as in listZoneState.
  *
- * ponytail: this is the one settings row today. A second non-folder row in
- * T79-T85 is the trigger to split a settings-ui.js out of this module -
+ * Known limit: this is the one settings row today. A second non-folder row among
+ * the settings screens is the trigger to split a settings-ui.js out of this module -
  * folders-ui.js already owns "the shared-folder STATE selection", so this one
  * belongs here rather than starting a new file for a single function.
  */
@@ -297,7 +297,7 @@ export function sharedRowState(shared) {
 }
 
 /**
- * The Shared folders screen's rows (Lane 3), one per shared root, in the
+ * The Shared folders screen's rows, one per shared root, in the
  * order the config holds them. -> [{ path, name, state, missing }]
  *
  * The artifact's sub-line reads "F:\Dev\Projects · 3 of 14" - the count
@@ -310,7 +310,7 @@ export function sharedRowState(shared) {
  *
  * A missing root says so and nothing else. Reporting "0 projects" for a
  * folder that is not there would read as an empty folder rather than an
- * absent one, which is the distinction Lane 4 exists to draw.
+ * absent one, which is the distinction the approved design exists to draw.
  */
 export function sharedFolderRows(shared, projects) {
   const counts = new Map();
@@ -344,7 +344,7 @@ export function sharedFolderRows(shared, projects) {
 }
 
 /**
- * Lane 9, option C: the project list grouped into one section per shared
+ * The project list grouped into one section per shared
  * root, "expanded when there is only one so a single-folder install looks
  * exactly as it does today".
  *
@@ -411,7 +411,7 @@ export function projectSections(projects, shared, openNames, isRunning) {
 }
 
 /**
- * Lane 3's "Editing one": the children of ONE shared root, each ticked or
+ * "Editing one": the children of ONE shared root, each ticked or
  * not, with the ones holding a live session marked.
  *
  * The child list comes from GET /api/folders, never from /api/projects - an
@@ -460,7 +460,7 @@ export function withRootExcludes(shared, path, excludes, mode) {
   // whenever the set is refreshed between opening the editor and saving and no
   // longer holds this root. "Not found" and "done" must not look alike.
   if (!shared.some((r) => pathKey(r.path) === target)) return null;
-  // `mode` (Lane 18) changes the TARGET root's kind when given; absent keeps
+  // `mode` changes the TARGET root's kind when given; absent keeps
   // it. A one-project root has no children, so its excludes are written empty.
   return {
     shared_folders: shared.map((r) => {
@@ -480,7 +480,7 @@ export function withRootExcludes(shared, path, excludes, mode) {
 }
 
 /**
- * Lane 18 step 5: switching a folder of projects to ONE project stops listing
+ * Switching a folder of projects to ONE project stops listing
  * every project inside it. Warns, never blocks - a session keeps running.
  * `rows` are the editor's child rows; only listed (ticked) running ones count.
  */
@@ -505,7 +505,7 @@ export function orphanWarning(rows) {
 }
 
 /**
- * The words on the remove confirmation (Lane 8's X-as-remove), from the
+ * The words on the remove confirmation (the X as remove), from the
  * artifact: "Stop sharing Projects? Its 3 projects disappear from the app.
  * Nothing on disk is touched."
  *
@@ -523,7 +523,7 @@ export function stopSharingPrompt(row) {
   return `Stop sharing ${row.name}? ${effect} Nothing on disk is touched.`;
 }
 
-// Lane 20 - the inline passcode panel every share-changing action opens
+// The inline passcode panel every share-changing action opens
 // through. `kind` names which sentence to show; `verb` (the action's own
 // button label) is drawn by the caller, not decided here.
 export function reauthLine(kind, name) {

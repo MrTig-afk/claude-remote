@@ -1,4 +1,4 @@
-// T133 - push-ui.js (pure) and the app.js slices it feeds. Same idiom as
+// push-ui.js (pure) and the app.js slices it feeds. Same idiom as
 // settings.test.js: pure logic imported directly, app.js sliced out with
 // new Function and run under a small stub DOM.
 import assert from 'node:assert/strict';
@@ -37,7 +37,7 @@ test('cantTurnOnReason: checked in order, first match wins', () => {
   assert.equal(cantTurnOnReason({ standalone: true, hasPush: true, permission: 'granted' }), null);
 });
 
-// --- D15 reversed: the platform detector --------------------------------
+// --- The platform detector (added when an earlier decision was reversed) ---
 
 test('isIphoneOrIpad: iPhone/iPad UA true; a Macintosh UA is an iPad only with multitouch', () => {
   assert.equal(isIphoneOrIpad({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' }), true);
@@ -85,7 +85,7 @@ test('notifyRowState: unknown/unavailable/off/on, the settings root sub-line', (
   );
 });
 
-// --- otherDevicesLine (D13) ----------------------------------------------
+// --- otherDevicesLine -----------------------------------------------------
 
 test('otherDevicesLine(0/1/2)', () => {
   assert.equal(otherDevicesLine(0), 'no other devices yet');
@@ -186,12 +186,12 @@ test('b64uToBytes: round-trips a b64url public key, tolerating no padding', () =
   assert.deepEqual(Buffer.from(bytes), raw);
 });
 
-// --- every Lane 19 constant, pinned verbatim against the approved Artifact ---
-// (design/userflow.artifact.html, Lane 19 - .claude/userflow.md carries an
-// ASCII-apostrophe projection of the same words; D13 states the Artifact's
+// --- every notification constant, pinned verbatim against the approved design
+// (design/userflow.artifact.html - .claude/userflow.md carries an
+// ASCII-apostrophe projection of the same words; the approved design's
 // own U+2019 is authoritative, so these literals use it throughout.)
 
-test('every Lane 19 string constant matches the approved Artifact verbatim', () => {
+test('every notification string constant matches the approved Artifact verbatim', () => {
   assert.equal(OFF_NAME, 'Off on this device');
   assert.equal(NAME_FIELD_LABEL, 'Name this device · optional');
   assert.equal(NAME_PLACEHOLDER, 'e.g. My iPhone');
@@ -212,7 +212,7 @@ test('every Lane 19 string constant matches the approved Artifact verbatim', () 
     'Notifications only work when claude-remote is opened from your Home Screen. In Safari, tap Share, then Add to Home Screen, then open it from there.',
   );
   assert.equal(NO_PUSH_BANNER, 'This iPhone’s iOS can’t get notifications from web apps. It needs iOS 16.4 or later.');
-  // Sequence 14 (owner 2026-09-26, "Browser line"): off iPhone/iPad.
+  // Owner 2026-09-26, "Browser line": the wording off iPhone/iPad.
   assert.equal(NO_PUSH_SUB_BROWSER, 'not supported in this browser');
   assert.equal(NO_PUSH_BANNER_BROWSER, 'This browser can’t get notifications from web apps.');
   assert.equal(
@@ -253,7 +253,7 @@ test('every Lane 19 string constant matches the approved Artifact verbatim', () 
   );
 });
 
-test('no Lane 19 constant carries an ASCII apostrophe - D13 requires U+2019 throughout', () => {
+test('no notification constant carries an ASCII apostrophe - the approved copy uses U+2019 throughout', () => {
   // codeOnly strips every comment first - this is about shipped STRING
   // literals, and the doc comments above them are ordinary ASCII prose.
   const code = codeOnly(read('push-ui.js'));
@@ -306,7 +306,7 @@ test('onNotifyOn: the 401 branch runs the SAME unsubscribe cleanup as every othe
   );
 });
 
-// --- Lane 19 step 15: the gate variant's two entry points -------------------
+// --- The gate variant's two entry points ------------------------------------
 
 test('boot(): the #serve_missing fragment also reveals the gate notice, not only the list flag', () => {
   const js = readApp();
@@ -377,18 +377,18 @@ test('app.js picks the permission and test-result lines by DEVICE, not by push s
   assert.match(code, /onApple \? DENIED_BANNER : DENIED_BANNER_BROWSER/);
   assert.match(code, /onApple \? NO_PUSH_SUB : NO_PUSH_SUB_BROWSER/);
   assert.match(code, /onApple \? NO_PUSH_BANNER : NO_PUSH_BANNER_BROWSER/);
-  // Step 2 draws no name field and a quiet TURN ON (owner's iPhone pass, 2026-09-26).
+  // The unsupported-browser state draws no name field and a quiet TURN ON (owner's iPhone pass, 2026-09-26).
   assert.match(code, /els\.nameField\.hidden = true;\s*els\.onBtn\.classList\.remove\('set-btn-solid'\);\s*els\.onBtn\.disabled = true;/);
   assert.match(code, /testAcceptedCopy\(notifyTestResult\.service, isIphoneOrIpad\(navigator\)\)/);
 });
 
-// --- Discovery 1 remediation (C3) - leaving a screen closes what was open ---
+// --- Leaving a screen closes what was open --------------------------------
 // The behavioural two-opens-then-one-submit case lives in
 // panel-lifecycle.test.js; this is the other half of C3's requirement -
 // leaving the screen entirely (Back, the header mark, any navigation) must
 // close the same way.
 
-test('showScreen closes any open Lane 19/20 panel - leaving a screen must never leave one wired behind it (C3)', () => {
+test('showScreen closes any open notification or passcode panel - leaving a screen must never leave one wired behind it', () => {
   const js = readApp();
   const fn = js.slice(js.indexOf('function showScreen('), js.indexOf('const ERROR_COPY = {'));
   assert.match(fn, /closeActiveReauth\(\);/);
@@ -401,7 +401,7 @@ test('showScreen closes any open Lane 19/20 panel - leaving a screen must never 
   );
 });
 
-test('a device row name keeps the 44px tap floor, like .shared-open (M22-C3-C1)', () => {
+test('a device row name keeps the 44px tap floor, like .shared-open', () => {
   const rule = read('app.css').replace(/\r/g, '').match(/\n\.notify-device-name \{([^}]*)\}/);
   assert.ok(rule, 'expected a .notify-device-name rule in app.css');
   assert.match(rule[1], /min-height: 44px;/);

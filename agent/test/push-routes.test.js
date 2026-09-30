@@ -1,4 +1,4 @@
-// T130 - the five /api/push* routes: agent/server.js's HTTP plumbing over
+// The five /api/push* routes: agent/server.js's HTTP plumbing over
 // agent/push.js's state and crypto.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -50,7 +50,7 @@ test('GET /api/push lazily creates push.json and returns a 65-byte key with an e
   assert.deepEqual(body.devices, []);
 });
 
-test('M22-C4: re-subscribing without a name keeps the name set by rename', async (t) => {
+test('re-subscribing without a name keeps the name set by rename', async (t) => {
   const { authed } = await startServer(t);
   const keys = shapedKeys();
   const endpoint = 'https://web.push.apple.com/dev-keep';

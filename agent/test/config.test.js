@@ -137,7 +137,7 @@ test('readConfig returns {} for a top-level JSON array', () => {
   assert.deepEqual(readConfig(configPath), {});
 });
 
-// --- T56: the Claude profile is a config value, absent by default -----------
+// --- The Claude profile is a config value, absent by default ----------------
 // It used to be the owner's `.claude-max`, hardcoded into launch-session.ps1,
 // so every session a stranger launched pointed at a profile directory that does
 // not exist on their machine.
@@ -247,9 +247,9 @@ test('pre_launch_command ignores a non-string or blank value rather than running
   }
 });
 
-// --- T120: per-project beats global -----------------------------------------
+// --- Per-project beats global ----------------------------------------------
 // The global-only version silently disabled venv activation for every OTHER
-// project the moment it was set (F6-003), which is what this map exists to fix.
+// project the moment it was set, which is what this map exists to fix.
 
 test('pre_launch_commands: a per-project entry wins over the global one', () => {
   const configPath = writeConfig('prelaunch-perproject.json', JSON.stringify({

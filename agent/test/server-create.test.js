@@ -192,7 +192,7 @@ test('POST /api/sessions still behaves exactly as before (server edit was additi
 });
 
 // ------------------------------------------------------------------------
-// R20 / Lane 22 step 6 - the optional `root`. A lookup key against the
+// The optional `root`. A lookup key against the
 // folders of projects the agent already lists, never a path to build from.
 // ------------------------------------------------------------------------
 
@@ -230,21 +230,21 @@ function postRoot(body) {
   });
 }
 
-test('R20 - root absent: the first CONTAINER root, exactly as before', async () => {
+test('root absent: the first CONTAINER root, exactly as before', async () => {
   const res = await postRoot({ name: 'top-level' });
   assert.equal(res.status, 201);
   assert.ok(fs.existsSync(path.join(box, 'top-level')));
   assert.equal(fs.existsSync(path.join(one, 'top-level')), false, 'a single root is never created into');
 });
 
-test('R20 - root = a shared container root -> created there', async () => {
+test('root = a shared container root -> created there', async () => {
   const res = await postRoot({ name: 'at-root', root: box });
   assert.equal(res.status, 201);
   assert.deepEqual(await res.json(), { project: { name: 'at-root' } });
   assert.ok(fs.existsSync(path.join(box, 'at-root')));
 });
 
-test('R20 - root = the drilled-in folder, as GET /api/projects reports it -> created INSIDE it, one level', async () => {
+test('root = the drilled-in folder, as GET /api/projects reports it -> created INSIDE it, one level', async () => {
   const listed = (await (await rootFetch('/api/projects')).json()).projects.find((p) => p.name === 'Uni');
   assert.ok(listed && listed.container, 'fixture: Uni is listed as a folder of projects');
   const res = await postRoot({ name: 'big-data-a3', root: listed.path });
@@ -253,7 +253,7 @@ test('R20 - root = the drilled-in folder, as GET /api/projects reports it -> cre
   assert.equal(fs.existsSync(path.join(box, 'big-data-a3')), false);
 });
 
-test('R20 - root that is not a shared folder of projects -> 400 base_unavailable, nothing created', async () => {
+test('root that is not a shared folder of projects -> 400 base_unavailable, nothing created', async () => {
   const refused = [
     ['not shared at all', outside],
     ['shared as ONE project', one],
@@ -274,7 +274,7 @@ test('R20 - root that is not a shared folder of projects -> 400 base_unavailable
   }
 });
 
-test('R20 - root of the wrong type -> 400 invalid_request', async () => {
+test('root of the wrong type -> 400 invalid_request', async () => {
   for (const root of [42, null, [box], { path: box }, true]) {
     const res = await postRoot({ name: 'wrong-type', root });
     assert.equal(res.status, 400, JSON.stringify(root));
@@ -283,7 +283,7 @@ test('R20 - root of the wrong type -> 400 invalid_request', async () => {
   assert.equal(fs.existsSync(path.join(box, 'wrong-type')), false);
 });
 
-test('R20 - the name rules still apply inside a named root', async () => {
+test('the name rules still apply inside a named root', async () => {
   const res = await postRoot({ name: '..', root: uni });
   assert.equal(res.status, 400);
   assert.deepEqual(await res.json(), { error: 'name_has_traversal' });

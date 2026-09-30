@@ -1,4 +1,4 @@
-// agent/public/phone.js and its markup: Lane 23 steps 3-4, "Open it on your
+// agent/public/phone.js and its markup: "Open it on your
 // phone", and the Phone address row. A fake document and a fake fetch - the
 // real module, driven the way app.js drives it.
 
@@ -46,7 +46,7 @@ test('phoneView: ready only for serve on AND a well-formed tailnet address; fail
     { ok: true, data: { serve: 'on', url: 'https://x.ts.net:8790/"><script>' } },
     { ok: true, data: { serve: 'on', url: 'http://desktop.ts.net:8790' } },
   ]) assert.equal(phoneView(res), 'failed', JSON.stringify(res));
-  // RED WHEN (SS-C1-C06): a request that never got an answer shows "couldn't
+  // RED WHEN: a request that never got an answer shows "couldn't
   // switch on sharing" - a claim about Tailscale nobody asked it.
   for (const res of [
     { ok: false, status: 0, code: 'network' },
@@ -201,7 +201,7 @@ test('"No Tailscale on your phone?": each address also gets the App Store and Go
   for (const prefix of ['phone', 'agent-phone']) {
     assert.equal(els[`${prefix}-ios-qr`].innerHTML, qrSvg(...STORES.ios), prefix);
     assert.equal(els[`${prefix}-android-qr`].innerHTML, qrSvg(...STORES.android), prefix);
-    // A screen reader must not announce a store code as the address (TS-C1-01).
+    // A screen reader must not announce a store code as the address.
     assert.match(els[`${prefix}-ios-qr`].innerHTML, /aria-label="QR code of Tailscale on the App Store"/);
     assert.match(els[`${prefix}-android-qr`].innerHTML, /aria-label="QR code of Tailscale on Google Play"/);
     assert.match(els[`${prefix}-qr`].innerHTML, /aria-label="QR code of the address"/);
@@ -226,7 +226,7 @@ test('the words are the Artifact\'s, verbatim, in index.html', () => {
     '<span class="row-name">Phone address</span>',
   ]) assert.ok(HTML.includes(words), words);
   assert.equal((HTML.match(/>COPY<\/button>/g) || []).length, 2, 'COPY on the screen and on the row');
-  // Sequence 24: the same closed button on the screen and on the row.
+  // The same closed button on the screen and on the row.
   for (const words of [
     '<span>No Tailscale on your phone?</span>',
     '<b>iPhone or iPad</b>App Store</div>',
@@ -236,7 +236,7 @@ test('the words are the Artifact\'s, verbatim, in index.html', () => {
   assert.equal((HTML.match(/<details class="ts-more">/g) || []).length, 2, 'closed by default: no open attribute');
 });
 
-// Sequence 29: opened from Settings, the screen can be left by the browser's
+// Opened from Settings, the screen can be left by the browser's
 // back button. RED WHEN closePhoneScreen stops settling it - a later unlock
 // would then bring the screen back on its own (phoneScreenPending).
 test('closePhoneScreen settles an open screen as DONE would, and is a no-op otherwise', async () => {

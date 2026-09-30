@@ -42,7 +42,7 @@ function makeDocument({ visibilityState = 'visible' } = {}) {
     'gate-sub', 'gate-go', 'gate-msg', 'pin', 'field-confirm', 'pin-confirm',
     // The two eye toggles, found by the `<input id>-eye` convention.
     'pin-eye', 'pin-confirm-eye',
-    // Lane 19 step 15's notice and its four text nodes.
+    // The serve_missing notice and its four text nodes.
     'gate-serve-missing', 'gate-serve-missing-banner', 'gate-serve-missing-lead',
     'gate-serve-missing-cmd', 'gate-serve-missing-after'];
   const map = new Map(ids.map((id) => [id, makeEl()]));
@@ -319,7 +319,7 @@ test('the gate does not retry while the app is in the background', async (t) => 
     'the gate must listen for the way back, or it freezes for good');
 });
 
-// --- The eye toggle on the gate (Lane 1 and Lane 2 both draw one) ----------
+// --- The eye toggle on the gate (the approved gate draws one) ----------
 
 test('the eye reveals ONE field, and the other stays masked', async () => {
   // RED WHEN: one toggle starts driving both fields, or the icon swaps while
@@ -398,10 +398,10 @@ test('the eye is unwired on the way out, so a second showGate cannot stack a lis
   assert.equal(doc.el('pin-eye').listenerCount('click'), 0, 'the eye must be unwired with the rest');
 });
 
-// --- Lane 19 step 15: the serve_missing notice, under the waiting line -----
+// --- The serve_missing notice, under the waiting line ----------------------
 
 test('showServeMissingNotice reveals the notice with SERVE_MISSING copy and serveCommand(port) - one source, not two', async () => {
-  // RED WHEN: this drifts from step 14's own copy.js constants (a second,
+  // RED WHEN: this drifts from the serve_missing alert's own copy.js constants (a second,
   // hand-typed copy of the same words) or serveCommand stops being reused.
   stubFetch({ '/api/auth/status': okStatus({ configured: true, retry_after_ms: 0 }) });
   const doc = makeDocument();

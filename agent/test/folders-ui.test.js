@@ -123,7 +123,7 @@ test('P11 - applySaveResult on a successful SAVE resolves with no message and no
 });
 
 // ============================================================
-// S - T100's pure state selection: listZoneState / missingRoots /
+// S - the list-state pure selection: listZoneState / missingRoots /
 // withoutRoot / sharedToTicks / emptyDayOneTitle. No server, no DOM.
 // ============================================================
 
@@ -347,7 +347,7 @@ test('H3 - PUT /api/shared with no token -> 401 unauthorized', async () => {
   }
 });
 
-test('H4 (OQ1) - GET /api/projects reflects a PUT /api/shared write on the SAME server, with no restart', async () => {
+test('H4 - GET /api/projects reflects a PUT /api/shared write on the SAME server, with no restart', async () => {
   const { ctx, token, server } = makeShareServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const authedFetch = makeAuthedFetch(`http://127.0.0.1:${server.address().port}`, token);
@@ -419,7 +419,7 @@ test('editing excludes on a root that is NOT in a known set returns null', () =>
   assert.equal(withRootExcludes([], String.raw`F:\Dev`, ['x']), null);
 });
 
-test('Lane 18 - withRootExcludes switches ONLY the target root\'s mode, and a one-project root is written with no excludes', () => {
+test('withRootExcludes switches ONLY the target root\'s mode, and a one-project root is written with no excludes', () => {
   const shared = [
     { path: 'F:\Dev\Repos', mode: 'container', excludes: ['old'], new_folders: 'show' },
     { path: 'F:\Dev\WIL', mode: 'container', excludes: ['venv'], new_folders: 'hide' },
@@ -435,7 +435,7 @@ test('Lane 18 - withRootExcludes switches ONLY the target root\'s mode, and a on
   assert.equal(withRootExcludes(single.shared_folders, 'F:\Dev\WIL', []).shared_folders[1].mode, 'single');
 });
 
-test('Lane 18 - modeSwitchWarning names only LISTED projects with a live session, and never blocks', () => {
+test('modeSwitchWarning names only LISTED projects with a live session, and never blocks', () => {
   assert.equal(modeSwitchWarning([{ name: 'a', running: false, ticked: true }], 'Repos'), null);
   assert.equal(modeSwitchWarning([{ name: 'a', running: true, ticked: false }], 'Repos'), null);
   assert.equal(
@@ -448,26 +448,26 @@ test('Lane 18 - modeSwitchWarning names only LISTED projects with a live session
   );
 });
 
-// Lane 22 - what the + offers, and where New project goes.
-test('Lane 22 - plusMenuItems: Share folder on the top-level list; New project only where one can be made; inside a folder New project alone', () => {
+// What the + offers, and where New project goes.
+test('plusMenuItems: Share folder on the top-level list; New project only where one can be made; inside a folder New project alone', () => {
   const container = { path: 'F:\\Dev\\Projects', mode: 'container' };
   const gone = { path: 'E:\\Work', mode: 'container', missing: true };
   const single = { path: 'D:\\Uni\\CML', mode: 'single' };
   assert.deepEqual(plusMenuItems([container], false), ['share', 'new']);
-  assert.deepEqual(plusMenuItems([single], false), ['share'], 'step 5: only one-project folders shared');
+  assert.deepEqual(plusMenuItems([single], false), ['share'], 'only one-project folders shared');
   assert.deepEqual(plusMenuItems([], false), ['share'], 'nothing shared: Share folder is the way in');
   assert.deepEqual(plusMenuItems([single, container], false), ['share', 'new'], 'any container root is enough');
   // RED WHEN: `missing` is ignored again - New project on a folder of projects
-  // that is not on disk can only answer base_unavailable (PM-C1-01).
+  // that is not on disk can only answer base_unavailable.
   assert.deepEqual(plusMenuItems([gone], false), ['share'], 'the only folder of projects is gone: New project could only fail');
   assert.deepEqual(plusMenuItems([gone, container], false), ['share', 'new'], 'a live one after a gone one still counts');
-  // RED WHEN: Share folder comes back inside a folder (sequence 18).
-  assert.deepEqual(plusMenuItems([single], true), ['new'], 'step 6: inside a shared folder, New project only');
+  // RED WHEN: Share folder comes back inside a folder.
+  assert.deepEqual(plusMenuItems([single], true), ['new'], 'inside a shared folder, New project only');
   assert.deepEqual(plusMenuItems(null, false), [], 'unknown set: the picker would open blind');
   assert.deepEqual(plusMenuItems(undefined, true), []);
 });
 
-test('Lane 22 - newProjectTarget: the folder it names is the folder it sends, and never one that is gone', () => {
+test('newProjectTarget: the folder it names is the folder it sends, and never one that is gone', () => {
   const shared = [
     { path: 'D:\\Uni\\CML', mode: 'single' },
     { path: 'G:\\Old', mode: 'container', missing: true },

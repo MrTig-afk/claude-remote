@@ -158,15 +158,15 @@ are unsure whether a change counts as small, it does not.
    same goes for `environment.yml`: only its `name:` is read, and a name that
    is not a plain environment name is refused, because conda would activate a
    path as a folder inside the project and run its scripts. The
-   `SECURITY` and `R12` tests in `agent/test/detachment.test.js` pin this.
+   `SECURITY` tests in `agent/test/detachment.test.js` pin this.
 
 ## Conventions
 
 - Files under `agent/` are CRLF. Detect a file's line endings before editing;
   never assume.
-- Comments cite task ids like `T94`. They are history, kept because each
-  records why a line is the way it is. Do not delete them; do not invent new
-  ones.
+- Comments say WHY a line is the way it is, in plain words, often with the
+  date a decision was made. Keep that reasoning when you change the code; do
+  not replace it with task or ticket numbers - they mean nothing to a reader.
 - A test must exercise production code and name a value that would make it
   fail. Source-text assertions (`includes(...)` over a file) are the weakest
   form and have pinned bugs in place before; prefer running the function under

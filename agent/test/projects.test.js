@@ -237,7 +237,7 @@ test('a container candidate that cannot be read degrades to an ordinary project,
   }
 });
 
-// --- T95 acceptance tests -----------------------------------------------
+// --- Multi-root acceptance tests -----------------------------------------
 
 // AT-1 - REGRESSION GUARD. One root: the string sugar and its equivalent
 // one-container-root array must produce the SAME output, and that output
@@ -365,7 +365,7 @@ test('AT-6 - excludes hides a child case-insensitively without unlinking it', ()
 // AT-7 - new_folders never filters the listing: `listProjects` filters on
 // `excludes` alone. A child named in excludes is omitted under BOTH 'show'
 // and 'hide'; the full list is otherwise identical either way.
-test('AT-7 - new_folders does not filter the listing (OQ1 default A)', () => {
+test('AT-7 - new_folders does not filter the listing (the default)', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-remote-agent-at7-'));
   fs.mkdirSync(path.join(root, 'Kept'));
   fs.mkdirSync(path.join(root, 'Excluded'));
