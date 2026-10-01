@@ -706,10 +706,16 @@ select {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  visibility: hidden;
-  transition: visibility 0s 220ms;
+  /* Hidden by opacity, and kept out of reach by `inert` (setAcctMenu), never
+     by visibility: buttons built while it was visibility: hidden came up
+     blank when it was shown - iPhone Safari never painted their text. The +
+     menu's buttons, built once at load, drew through the same switch
+     (measured on the owner's iPhone, 2026-10-01). */
+  opacity: 0;
+  pointer-events: none;   /* and where inert is missing */
+  transition: opacity 0s 220ms;
 }
-#picker.acct-open .acctmenu { visibility: visible; transition-delay: 0s; }
+#picker.acct-open .acctmenu { opacity: 1; pointer-events: auto; transition-delay: 0s; }
 .acctmenu-title {
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -725,11 +731,6 @@ select {
 .acct-item.lit { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent) 12%, var(--raised)); }
 .acct-item.lit .acct-hint { color: var(--accent); }
 #picker.acct-open .acct-item { opacity: 1; transform: none; }
-/* None starts with the open itself: the first waits 40ms
-   (.plusmenu-item:first-child), every other 80ms. On iPhone Safari a button
-   that faded in the same instant the menu opened stayed blank, while the one
-   held back 40ms drew (owner's phone, iOS 18.7). */
-#picker.acct-open .acct-item + .acct-item { transition-delay: 80ms; }
 
 .spacer { flex-grow: 1; }
 .actions { padding: 8px 12px 0; }

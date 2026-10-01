@@ -2355,6 +2355,7 @@ function setAcctMenu(open) {
   document.getElementById('picker').classList.toggle('acct-open', open);
   for (const el of document.querySelectorAll(PLUS_BEHIND)) el.inert = open;
   document.getElementById('newproj').inert = open;
+  document.getElementById('acctmenu').inert = !open;   // only opacity hides it
 }
 
 // A path's last account, matched case-blind (Windows paths). Null when the
@@ -2397,9 +2398,7 @@ function openAcctMenu(name, projectPath) {
     return b;
   }));
   // Lay the new buttons out closed first, so opening fades them in like the +
-  // menu's. Shown in the same instant they were made, iPhone Safari laid out
-  // their names but never painted them (measured on the owner's phone,
-  // iOS 18.7): blank boxes.
+  // menu's rather than appearing at once.
   void list.offsetWidth;
   setAcctMenu(true);
   history.pushState({ acctMenu: true }, '');   // Android back = close it
