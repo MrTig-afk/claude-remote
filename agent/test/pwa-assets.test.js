@@ -758,6 +758,24 @@ test('the + is "Add" with aria-expanded, and its menu is Share folder over New p
   assert.match(css, /filter: blur\(4px\);/);
 });
 
+// The account menu's buttons are built on every open. Built inside a
+// visibility: hidden menu, iPhone Safari never painted their text once it was
+// shown (owner's iPhone, 2026-10-01), so the menu hides by opacity and is kept
+// out of reach by inert - from the markup until setAcctMenu opens it.
+test('the account menu hides by opacity and inert, never by visibility', () => {
+  const css = read('app.css').replace(/\/\*[\s\S]*?\*\//g, '');   // its comment names visibility
+  const rule = css.match(/\n\.acctmenu \{([^}]*)\}/);
+  assert.ok(rule);
+  assert.match(rule[1], /opacity: 0;/);
+  assert.doesNotMatch(css, /\.acctmenu \{[^}]*visibility/, 'visibility: hidden leaves its new buttons blank on iPhone');
+  assert.match(rule[1], /pointer-events: none;/, 'untappable even where inert is missing');
+  assert.match(css, /#picker\.acct-open \.acctmenu \{ opacity: 1; pointer-events: auto;/);
+  assert.match(read('index.html'), /<div class="acctmenu" id="acctmenu"[^>]* inert>/, 'unreachable before the first open');
+  const js = read('app.js');
+  const fn = js.slice(js.indexOf('function setAcctMenu('), js.indexOf('function lastAccountFor('));
+  assert.match(fn, /getElementById\('acctmenu'\)\.inert = !open;/, 'reachable only while open');
+});
+
 // Executed, not grepped: the literal is lifted out of rowState and evaluated,
 // so a status quietly put back fails here rather than passing on a string
 // match. It cannot prove what a browser paints - it proves the two halves
