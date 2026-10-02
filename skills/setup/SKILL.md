@@ -68,19 +68,30 @@ Then run the plugin's own setup, exactly what the one-line install runs:
 node "$src\hooks\check-update.mjs" --now
 ```
 
-It prints one line. Say it to the person as it is, then:
+If it printed "Claude Remote is setting itself up on this PC.", the install is
+running in the background. Wait for it in a SEPARATE command, with a 10-minute
+timeout (600000 ms) - usually under a minute, at most nine. A separate command
+means a timeout here can never kill the install:
 
-- **"...is setting itself up on this PC. Your browser will open..."**: the
-  browser opens on the passcode screen by itself. Tell them step 4's words (set
-  a passcode, read the screen, pick folders). The app switches Tailscale
-  sharing on once the passcode is set and shows the phone code right after.
-  STOP here.
+```powershell
+node "$src\hooks\check-update.mjs" --wait
+```
+
+Either way you now have one line. Say it to the person as it is, then:
+
+- **"...is set up on this PC. Open http://127.0.0.1:8790..."**: give them that
+  link with step 4's words (set a passcode, read the screen, pick folders).
+  Nothing opens by itself; open the link for them only if they ask. The app
+  switches Tailscale sharing on once the passcode is set and shows the phone
+  code right after. STOP here.
 - **"...already installed and up to date..."**: the agent is copied, which is
   not yet set up. Run step 3's three checks (copy, passcode, sharing). No
   passcode: it was abandoned at the passcode screen, so give step 4's words
   (open http://127.0.0.1:8790 and set it; the app switches sharing on itself).
   All three hold: give step 5's hand-over, the address, the Home Screen steps
   and the phone code.
+- **"...still setting itself up..."**: the install is slow. Say the line;
+  running `/claude-remote:setup` again in a few minutes gives the link. STOP.
 - **"...updating itself..."** or **"...already setting itself up..."**: a
   hidden job is running right now. STOP: running the steps below by hand would
   race it (step 3 does not take its lock). Say the line; the next Claude start

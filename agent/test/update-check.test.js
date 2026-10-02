@@ -20,7 +20,8 @@ import {
   SETTING_UP, NEEDS_TAILSCALE, NOT_WINDOWS, NEEDS_NODE, UPDATED, setupFailed, updateFailed,
   takeLock, releaseLock, removeLockIfStill, LONGEST_JOB_MS, INSTALL_TIMEOUT_MS, taskVerdict, realTaskQuery,
   realStartJob, realTailscale, qrBlocks, TASK_NAME, NOT_SET_UP,
-  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING, sacOn, launcherStale, TAILSCALE_DOWNLOAD,
+  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING, sacOn, launcherStale, setUp, jobLine, JOB_WAIT_MS,
+  waitLine, STILL_SETTING_UP,
 } from '../../hooks/check-update.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../hooks/check-update.mjs', import.meta.url));
@@ -56,55 +57,18 @@ function taskXml(serverPath) {
 }
 const NO_TASK = { ok: false, missing: true };
 
-// RED WHEN: the page stops opening on an ask (owner at the Dell test,
-// 2026-10-02: a new PC got a sentence, not a page), or opens at a Claude start.
-test('Tailscale not ready: the download page opens on every ask, never at a Claude start', async () => {
-  const w = world();
-  const opened = [];
-  const deps = { ...w.deps, tailscaleStatus: async () => JSON.stringify({ BackendState: 'NeedsLogin' }), openBrowser: (u) => opened.push(u) };
-  assert.equal(await sessionStart(deps), NOT_SET_UP);
-  assert.deepEqual(opened, [], 'a Claude start opens nothing');
-  assert.equal(await sessionStart({ ...deps, explain: true }), NEEDS_TAILSCALE);
-  assert.equal(await sessionStart({ ...deps, explain: true }), NEEDS_TAILSCALE);
-  assert.deepEqual(opened, [TAILSCALE_DOWNLOAD, TAILSCALE_DOWNLOAD], 'every ask opens it');
-  assert.equal(TAILSCALE_DOWNLOAD, 'https://tailscale.com/download');
-});
-
 // RED WHEN: a Claude start sets the PC up by itself again (owner at the Dell
 // test, 2026-10-02: "it is RELENTLESS"). Sequence 35: it only says so.
 test('nothing installed, at a Claude start: the not-set-up message, and nothing else happens', async () => {
   const w = world();
-  const opened = [];
   for (let i = 0; i < 2; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    assert.equal(await sessionStart({ ...w.deps, openBrowser: (u) => opened.push(u) }), NOT_SET_UP, 'at every start');
+    assert.equal(await sessionStart(w.deps), NOT_SET_UP, 'at every start');
   }
   assert.deepEqual(w.jobs, [], 'no install');
-  assert.deepEqual(opened, [], 'no browser');
   assert.deepEqual(w.tailscaleCalls, [], 'Tailscale is not even asked');
   assert.equal(fs.existsSync(w.files.lock), false, 'no lock');
   assert.equal(await sessionStart({ ...w.deps, explain: true }), SETTING_UP, 'the ask sets it up');
-});
-
-// RED WHEN: a failed open or save swallows the line (code-review, discovery 2).
-test('Tailscale not ready: a browser that will not open still leaves the line', async () => {
-  const w = world();
-  const line = await sessionStart({
-    ...w.deps, explain: true,
-    tailscaleStatus: async () => null,
-    openBrowser: async () => { throw new Error('spawn EPERM'); },
-  });
-  assert.equal(line, NEEDS_TAILSCALE);
-});
-
-test('Tailscale ready, or another check failing: no page', async () => {
-  for (const change of [{}, { nodeVersion: 'v24.1.9' }]) {
-    const w = world();
-    const opened = [];
-    // eslint-disable-next-line no-await-in-loop
-    await sessionStart({ ...w.deps, ...change, explain: true, openBrowser: (u) => opened.push(u) });
-    assert.deepEqual(opened, []);
-  }
 });
 
 /** A throwaway world: plugin root, LOCALAPPDATA, data dir, a PATH holding claude.cmd. */
@@ -338,7 +302,8 @@ test('each outcome is printed exactly once, at the next start', async () => {
 });
 
 test('the lines are the Artifact\'s, word for word', () => {
-  assert.equal(SETTING_UP, 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.');
+  assert.equal(setUp(8790), 'Claude Remote is set up on this PC. Open http://127.0.0.1:8790 in your browser to set a passcode.');
+  assert.equal(setUp(), setUp(8790), 'the default port');
   assert.equal(NEEDS_TAILSCALE, 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then run /claude-remote:setup.');
   assert.equal(NOT_WINDOWS, 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.');
   assert.equal(NEEDS_NODE, 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then run /claude-remote:setup.');
@@ -375,42 +340,33 @@ function jobWorld(kind) {
   const w = world(kind === 'update' ? { installed: 'server v0' } : {});
   const lockToken = takeLock(w.files.lock, Date.now());
   const job = { kind, pluginRoot: w.deps.pluginRoot, target: path.join(w.deps.localAppData, 'claude-remote'), dataDir: w.deps.dataDir, hash: 'H', lockToken };
-  const calls = { install: [], opened: [], asked: 0 };
-  const deps = (result, answers = [true]) => ({
+  const calls = { install: [] };
+  const deps = (result) => ({
     runInstall: async (args) => { calls.install.push(args); if (result instanceof Error) throw result; return result; },
-    agentAnswers: async () => { calls.asked += 1; return answers.shift() ?? true; },
-    openBrowser: (url) => calls.opened.push(url),
-    port: 8790,
-    waitMs: 0,
   });
   return { w, job, calls, deps };
 }
 
-test('the job runs update-agent.ps1 exactly as setup does, then opens the browser once on a FIRST install', async () => {
+// RED WHEN the job opens a browser again (sequence 37, owner 2026-10-02:
+// "don't open anything automatically, it's very scary for the user").
+test('the job runs update-agent.ps1 exactly as setup does, records the outcome, and opens nothing', async () => {
   const { w, job, calls, deps } = jobWorld('install');
-  await runJob(job, deps({ code: 0, stdout: 'agent running', stderr: '' }, [false, false, true]));
+  await runJob(job, deps({ code: 0, stdout: 'agent running', stderr: '' }));
   assert.deepEqual(calls.install, [['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(job.pluginRoot, 'agent', 'autostart', 'update-agent.ps1'), '-Source', job.pluginRoot, '-Target', job.target]]);
-  assert.equal(calls.asked, 3, 'waited for the agent to answer');
-  assert.deepEqual(calls.opened, ['http://127.0.0.1:8790']);
+  assert.deepEqual(Object.keys(deps({})), ['runInstall'], 'no browser, nothing to wait on');
   const { last } = readState(w);
   assert.equal(last.ok, true);
   assert.equal(last.kind, 'install');
   assert.equal(last.reported, false);
+  assert.equal(last.token, job.lockToken, 'the outcome names its job');
   assert.ok(!fs.existsSync(w.files.lock), 'the lock is given back');
-});
-
-test('an update never opens the browser', async () => {
-  const { job, calls, deps } = jobWorld('update');
-  await runJob(job, deps({ code: 0, stdout: '', stderr: '' }));
-  assert.deepEqual(calls.opened, []);
-  assert.equal(calls.asked, 0);
 });
 
 test('a failed install records its reason, opens nothing, and gives the lock back', async () => {
   const { w, job, calls, deps } = jobWorld('install');
   await runJob(job, deps({ code: 1, stdout: '', stderr: 'copying the new version failed (robocopy 16) - nothing was stopped\r\nAt x\r\n' }));
-  assert.deepEqual(calls.opened, []);
+  assert.equal(calls.install.length, 1);
   const { last } = readState(w);
   assert.equal(last.ok, false);
   assert.equal(last.reason, 'copying the new version failed (robocopy 16) - nothing was stopped');
@@ -513,7 +469,7 @@ test('two starts racing for a STALE lock: exactly one takes it over', async () =
 });
 
 test('the stale window outlasts the longest job, and is derived from it', () => {
-  assert.ok(LONGEST_JOB_MS > INSTALL_TIMEOUT_MS, 'the browser wait counts too');
+  assert.ok(LONGEST_JOB_MS >= INSTALL_TIMEOUT_MS);
   assert.ok(LOCK_STALE_MS > LONGEST_JOB_MS, `${LOCK_STALE_MS} <= ${LONGEST_JOB_MS}`);
   assert.equal(INSTALL_TIMEOUT_MS, 10 * 60 * 1000);
 });
@@ -559,6 +515,74 @@ test('removing a stale lock never removes a newer one that replaced it', () => {
   assert.deepEqual(fs.readdirSync(path.dirname(lockFile)), ['auto-setup.lock']);
   removeLockIfStill(lockFile, fs.readFileSync(lockFile, 'utf8'));
   assert.ok(!fs.existsSync(lockFile), 'the one judged: removed');
+});
+
+// --- --now waits for its job (sequence 37) ----------------------
+
+// RED WHEN --now prints before the job is done again ("in a minute", owner
+// 2026-10-02: "let it monitor and then do it"), or says set up after a failure.
+test('jobLine: waits while its lock is held, then the link - or the failure', async () => {
+  const w = world();
+  const token = takeLock(w.files.lock, Date.now());
+  let ticks = 0;
+  const sleep = async () => {
+    ticks += 1;
+    if (ticks === 3) {
+      writeState(w, { last: { kind: 'install', ok: true, hash: 'h', reported: false, token } });
+      releaseLock(w.files.lock, token);
+    }
+  };
+  assert.equal(await jobLine(w.files, token, 8791, { sleep }), setUp(8791));
+  assert.equal(ticks, 3, 'it waited for the lock to come back');
+  assert.equal(readState(w).last.reported, true, 'said here, so not again at the next start');
+
+  const f = world();
+  const t2 = takeLock(f.files.lock, Date.now());
+  writeState(f, { last: { kind: 'install', ok: false, reason: 'boom', hash: 'h', reported: false, token: t2 } });
+  releaseLock(f.files.lock, t2);
+  assert.equal(await jobLine(f.files, t2, 8790, { sleep: async () => {} }), setupFailed('boom'));
+});
+
+// RED WHEN jobLine trusts an outcome its job did not write (code-review
+// 2026-10-02): an older success left in the file would read as "set up".
+test('jobLine: an outcome from another job is not this one\'s', async () => {
+  const w = world();
+  const token = takeLock(w.files.lock, Date.now());
+  writeState(w, { last: { kind: 'update', ok: true, hash: 'h', reported: true, token: 'an older job' } });
+  releaseLock(w.files.lock, token);
+  assert.equal(await jobLine(w.files, token, 8790, { sleep: async () => {} }), setupFailed('it stopped without saying how it went'));
+  assert.ok(JOB_WAIT_MS < 10 * 60 * 1000, 'under the 10-minute limit of a Claude command');
+});
+
+test('jobLine: gives up at the deadline, and stops waiting if another job took the lock', async () => {
+  const w = world();
+  const token = takeLock(w.files.lock, Date.now());
+  assert.equal(await jobLine(w.files, token, 8790, { sleep: async () => {}, deadline: Date.now() - 1 }), STILL_SETTING_UP);
+  releaseLock(w.files.lock, token);
+  takeLock(w.files.lock, Date.now());   // someone else's job now
+  writeState(w, { last: { kind: 'install', ok: true, hash: 'h', reported: false, token } });
+  assert.equal(await jobLine(w.files, token, 8790, { sleep: async () => { throw new Error('should not wait'); } }), setUp(8790));
+});
+
+// RED WHEN the wait runs in the process that started the job again (code-
+// review 2026-10-02): a timeout or Ctrl+C on it killed the install halfway.
+// --wait is its own process; it finds the job by the lock, or by the outcome
+// when the job already finished.
+test('waitLine: follows the running job by its lock, or reads a finished one', async () => {
+  const w = world();
+  const token = takeLock(w.files.lock, Date.now());
+  const sleep = async () => {
+    writeState(w, { last: { kind: 'install', ok: true, hash: 'h', reported: false, token } });
+    releaseLock(w.files.lock, token);
+  };
+  assert.equal(await waitLine(8790, w.files, { sleep }), setUp(8790));
+
+  const done = world();
+  writeState(done, { last: { kind: 'install', ok: false, reason: 'boom', hash: 'h', reported: false, token: 'finished-job' } });
+  assert.equal(await waitLine(8790, done.files, { sleep: async () => { throw new Error('nothing to wait for'); } }), setupFailed('boom'));
+
+  assert.equal(await waitLine(8790, world().files), setupFailed('it stopped without saying how it went'), 'no job at all');
+  assert.equal(STILL_SETTING_UP, 'Claude Remote is still setting itself up on this PC. Run /claude-remote:setup in a few minutes for the link.');
 });
 
 // --- an update does not need Tailscale ---------------------------

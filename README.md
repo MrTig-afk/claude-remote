@@ -134,9 +134,9 @@ to the **same** Tailscale account on both:
    (Android), and sign in with the same account.
 
 If Tailscale is missing or signed out on the PC, the install adds the plugin
-to Claude Code but sets nothing up on the PC: it says so and opens
-tailscale.com/download in your browser. Sign in, then paste the same line
-again (or run `/claude-remote:setup`).
+to Claude Code but sets nothing up on the PC: it says so, naming
+tailscale.com/download. Install it, sign in, then run `/claude-remote:setup`
+(or paste the same line again).
 
 ### Then install
 
@@ -147,9 +147,10 @@ Enter:
 ! npx.cmd -y github:MrTig-afk/claude-remote
 ```
 
-It adds the plugin to Claude Code, finds where Claude Code put it, and starts
-the setup straight away: your browser opens on the passcode screen. Nothing to
-restart.
+It adds the plugin to Claude Code, finds where Claude Code put it, and sets it
+up straight away. It waits until setup is done (usually under a minute), then
+gives you the link to set a passcode. Nothing opens by itself and there is
+nothing to restart.
 
 The `!` runs the line as your own command, so Claude's permission modes have
 no say in it. The same line works in a Command Prompt or PowerShell window too,
@@ -162,8 +163,8 @@ on a PC that has never allowed scripts).
 Install Claude Remote by following github.com/MrTig-afk/claude-remote/blob/main/AGENTS.md
 ```
 
-Claude tells you what it will install, runs the steps, and your browser opens
-on the passcode screen, with nothing to restart. In auto mode (Claude Code's
+Claude tells you what it will install, runs the steps, and gives you the link
+to set a passcode, with nothing to restart. In auto mode (Claude Code's
 default since 2.1.283) Claude may refuse to install a plugin by itself; it then
 hands you the line above.
 
@@ -184,11 +185,12 @@ What setup adds:
 
 What happens next, and **the order matters**:
 
-1. You see "Claude Remote is setting itself up on this PC." It first
-   checks Tailscale is running and signed in, and that Node and Claude Code are
-   installed; if one is missing it says which and sets nothing up (for
-   Tailscale it also opens the download page).
-2. Your browser opens on `http://127.0.0.1:8790` by itself. **At the desk**, set
+1. It first checks Tailscale is running and signed in, and that Node and
+   Claude Code are installed; if one is missing it says which and sets nothing
+   up. Otherwise it sets itself up and, when it is done, says "Claude Remote is
+   set up on this PC. Open http://127.0.0.1:8790 in your browser to set a
+   passcode."
+2. Open `http://127.0.0.1:8790` (or ask Claude to open it). **At the desk**, set
    a six-digit passcode, read the screen about what the app can see, then
    choose which folders it may see. Nothing is shared until you pick it. Each
    folder is shared either as **one project** (a session starts in that

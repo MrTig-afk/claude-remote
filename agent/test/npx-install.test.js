@@ -11,18 +11,21 @@ import { test } from 'node:test';
 
 import { pluginRoot, spawnOptions, linkLine, ID } from '../../bin/install.mjs';
 import {
-  SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE, NEEDS_TAILSCALE, NEEDS_NODE, NOT_WINDOWS, setupFailed,
+  ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE, NEEDS_TAILSCALE, NEEDS_NODE, NOT_WINDOWS, setupFailed, setUp,
+  STILL_SETTING_UP, SETTING_UP,
 } from '../../hooks/check-update.mjs';
 
 // RED WHEN the paste stops ending with the address (owner 2026-09-28: on an
 // update nothing opened and Claude had no link to give), or prints it after a
 // setup that stopped, where there is nothing to open.
 test('linkLine: the address after every outcome that leaves the app on this PC, never after one that stopped', () => {
-  for (const ok of [SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE]) {
+  for (const ok of [ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE]) {
     assert.equal(linkLine(ok), 'Open http://127.0.0.1:8790 in your browser.', ok);
   }
   assert.equal(linkLine(UPDATING, 8791), 'Open http://127.0.0.1:8791 in your browser.');
-  for (const stopped of [NEEDS_TAILSCALE, NEEDS_NODE, NOT_WINDOWS, setupFailed('x'), '']) {
+  // setUp carries the link itself (sequence 37), so it is not said twice.
+  // ...nor while it is still setting up, when the link does not answer yet.
+  for (const stopped of [setUp(8790), STILL_SETTING_UP, SETTING_UP, NEEDS_TAILSCALE, NEEDS_NODE, NOT_WINDOWS, setupFailed('x'), '']) {
     assert.equal(linkLine(stopped), null, stopped);
   }
 });
