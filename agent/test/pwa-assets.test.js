@@ -309,6 +309,9 @@ const TOKEN_SET = new Set([
   // Text drawn ON an accent fill. Not a background and not a text colour in
   // its own right - it exists only so the solid button has legible ink.
   '08170c',
+  // A QR code's light modules: pure white, never the tinted text token
+  // (owner 2026-10-02, it read as coloured). Used for nothing else.
+  'ffffff',
 ]);
 
 function assertOnlyTokenColours(source, label) {

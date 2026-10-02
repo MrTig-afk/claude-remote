@@ -29,6 +29,7 @@
   --warn: #e3b341;       /* caution, not danger - see the note below */
   --danger: #ff7b72;     /* this ends something */
   --danger-2: #e5534b;   /* danger, pressed / darker */
+  --qr-light: #ffffff;   /* a QR code's light modules and quiet zone; nothing else */
 }
 
 /* claude-remote PWA - shipped source of truth for the palette
@@ -1842,8 +1843,9 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
    "Open it on your phone", the
    desk's last first-run screen, and the Phone address row in Settings >
    Agent status. The same centred column as the accept screen, and at >=900px
-   the same desk sizes. The QR code is dark modules on the light text
-   token: a phone camera needs dark-on-light, and no new colour is introduced.
+   the same desk sizes. The QR code is dark modules on pure white
+   (--qr-light): a phone camera needs dark-on-light, and the tinted text token
+   read as coloured on a real screen (owner 2026-10-02).
 --------------------------------------------------------------------------- */
 #phone { display: flex; flex-direction: column; flex-grow: 1; }
 .phone {
@@ -1864,7 +1866,7 @@ main.nav-back   { animation: screen-back 180ms ease-out; }
 #phone-failed .cmd { margin: 0; color: var(--accent); }
 .phone-qr { width: 196px; margin: 4px auto 0; }
 .qr-svg { display: block; width: 100%; height: auto; border-radius: 6px; }
-.qr-bg { fill: var(--text); }
+.qr-bg { fill: var(--qr-light); }
 .qr-fg { fill: var(--bg); }
 .phone-url {
   display: flex;
