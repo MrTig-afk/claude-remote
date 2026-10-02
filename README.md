@@ -261,8 +261,10 @@ tailscale serve --https=8790 off
 claude plugin uninstall claude-remote@claude-remote
 claude plugin marketplace remove claude-remote
 
-# 4. Remove the installed copy, and the data folder if anything is left in it.
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\claude-remote" -ErrorAction SilentlyContinue
+# 4. Remove the installed copy (and the previous one an update keeps beside it),
+#    and the data folder if anything is left in it.
+"", ".prev", ".new", ".failed" | ForEach-Object {
+    Remove-Item -Recurse -Force "$env:LOCALAPPDATA\claude-remote$_" -ErrorAction SilentlyContinue }
 Remove-Item -Recurse -Force "$env:USERPROFILE\.claude\plugins\data\claude-remote-claude-remote" -ErrorAction SilentlyContinue
 ```
 
