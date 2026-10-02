@@ -14,8 +14,8 @@ whole install. Claude Remote is a Claude Code plugin. A plugin from outside
 Anthropic's plugin directory can only be added with the two `claude plugin`
 commands below, which are Claude Code's own and change nothing else. The third
 command starts the plugin's setup. A Claude Code start never sets it up by
-itself; it only says it is not set up yet. The setup opens nothing but the
-person's browser.
+itself; it only says it is not set up yet. The setup opens nothing by itself:
+it waits until it is done, then gives the link to set a passcode.
 
 **Check Tailscale first.** Run `tailscale status` in PowerShell. If the
 command is not found, or it says Tailscale is stopped or logged out, stop here
@@ -52,13 +52,15 @@ down the pipe as one object, and the lookup finds nothing without them. The
 `\hooks\check-update.mjs` sits at the drive root.
 
 **Report what the last command printed, word for word.** It is always one line:
-setup has started and the browser will open on the passcode screen; or it is
+it is setting itself up (then run the same command with `--wait` instead of
+`--now`, as a separate command with a 10-minute timeout, 600000 ms; it prints
+the line with the link to set a passcode, usually within a minute); or it is
 already running, already up to date, updating, or left alone because the PC
 runs its agent another way; or why it could not set itself up (for example,
-Tailscale is not running). If setup started, tell the person the rest happens
-in the browser: set a six-digit passcode, read the screen about what the app
-can see, choose folders, and the last screen shows a code to scan with their
-phone.
+Tailscale is not running). If it is set up, give the person the link; open it
+for them only if they ask you to. The rest happens there: set a six-digit
+passcode, read the screen about what the app can see, choose folders, and the
+last screen shows a code to scan with their phone.
 
 If the third command fails to run at all, tell the person to run
 `/claude-remote:setup` in Claude Code: it runs the same setup. Say that, and

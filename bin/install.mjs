@@ -3,8 +3,8 @@
 // (owner 2026-09-27: "it should be seamless"). Adds or refreshes the
 // marketplace, installs or updates the plugin, asks Claude Code where the
 // plugin landed - so any profile (CLAUDE_CONFIG_DIR) works - and starts the
-// plugin's own setup at once (hooks/check-update.mjs --now), which opens the
-// browser on the passcode screen. No restart. Every line it prints is Claude
+// plugin's own setup at once (hooks/check-update.mjs --now, then --wait for
+// the passcode link); nothing opens by itself. No restart. Every line it prints is Claude
 // Code's or the hook's, except the two failures below.
 
 import { spawnSync } from 'node:child_process';
@@ -22,10 +22,11 @@ export const NOT_INSTALLED = 'Claude Remote did not install - Claude Code said w
  * The line that ends a paste once the app is on this PC (owner 2026-09-28,
  * "Only print the link"): on an update nothing opens, and Claude, asked
  * afterwards, had no address to give. Not after a setup that stopped (no
- * Tailscale, old Node...), where there is nothing to open yet.
+ * Tailscale, old Node...), where there is nothing to open yet, and not after
+ * setUp(), which carries the link itself (sequence 37).
  */
 export function linkLine(hookLine, port = DEFAULT_PORT) {
-  const installed = [SETTING_UP, ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE].includes(hookLine);
+  const installed = [ALREADY_RUNNING, UP_TO_DATE, UPDATING, RUNS_ELSEWHERE].includes(hookLine);
   return installed ? `Open http://127.0.0.1:${port} in your browser.` : null;
 }
 
@@ -79,9 +80,15 @@ function main() {
   if (!root) { console.log(NOT_INSTALLED); return 1; }
   const hook = path.join(root, 'hooks', 'check-update.mjs');
   const run = spawnSync(process.execPath, [hook, '--now'], { ...spawnOptions(true), shell: false });
-  const said = (run.stdout || '').trim();
+  let said = (run.stdout || '').trim();
   if (said) console.log(said);
   if (run.stderr) process.stderr.write(run.stderr);
+  // --now has exited, so the job it started is nobody's child; waiting in a
+  // second process means a Ctrl+C here cannot kill the install.
+  if (said === SETTING_UP) {
+    said = (spawnSync(process.execPath, [hook, '--wait'], { ...spawnOptions(true), shell: false }).stdout || '').trim();
+    if (said) console.log(said);
+  }
   const link = linkLine(said, Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT);
   if (link) console.log(link);
   return run.status ?? 1;

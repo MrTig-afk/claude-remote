@@ -6,8 +6,11 @@
 // %LOCALAPPDATA%\claude-remote, a Claude start installs nothing and opens
 // nothing: it says NOT_SET_UP, at every start until set up. The ask is --now
 // (the one-line install, and /claude-remote:setup's first step): it checks the
-// machine can run it and starts update-agent.ps1 as a DETACHED, WINDOWLESS
-// job, then returns at once.
+// machine can run it, starts update-agent.ps1 as a DETACHED, WINDOWLESS job
+// and exits at once, so the job never outlives its parent's kill (a timeout or
+// Ctrl+C). --wait, a separate process, then waits for that job to give its
+// lock back and says setUp() - the link - or why it failed. NOTHING OPENS BY ITSELF (sequence 37, owner 2026-10-02: "it's
+// very scary for the user"): no browser for Tailscale, none for the passcode.
 //
 // An agent already here that differs from the plugin's, compared by content
 // (no version number needed), is updated at a Claude start, the same hidden
@@ -54,10 +57,13 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { qrMatrix } from '../agent/public/qr.js';
 
 // Verbatim.
-export const SETTING_UP = 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.';
+// --now's answer when it started an install; --wait then says how it ended.
+export const SETTING_UP = 'Claude Remote is setting itself up on this PC.';
+export const STILL_SETTING_UP = 'Claude Remote is still setting itself up on this PC. Run /claude-remote:setup in a few minutes for the link.';
+export function setUp(port = DEFAULT_PORT) {
+  return `Claude Remote is set up on this PC. Open http://127.0.0.1:${port} in your browser to set a passcode.`;
+}
 export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then run /claude-remote:setup.';
-// Opened alongside NEEDS_TAILSCALE: a new PC gets the page, not only a sentence.
-export const TAILSCALE_DOWNLOAD = 'https://tailscale.com/download';
 export const NOT_WINDOWS = 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.';
 export const NEEDS_NODE = 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then run /claude-remote:setup.';
 // Sequence 36: pointers, at every Claude start until the PC is set up.
@@ -82,14 +88,17 @@ export function updateFailed(reason) {
   return `Claude Remote couldn't update itself: ${reason}. Run /claude-remote:setup to try again and see the details.`;
 }
 
-// The longest a job can run: update-agent.ps1 is killed at INSTALL_TIMEOUT_MS,
-// then a first install asks the agent up to ANSWER_TRIES times. A lock younger
-// than that may belong to a live job, so the stale window is longer still.
+// The longest a job can run: update-agent.ps1 is killed at INSTALL_TIMEOUT_MS.
+// A lock younger than that may belong to a live job, so the stale window is
+// longer still.
 export const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
-const ANSWER_TRIES = 60;
-const ANSWER_WAIT_MS = 500;
 const ANSWER_TIMEOUT_MS = 2000;
-export const LONGEST_JOB_MS = INSTALL_TIMEOUT_MS + ANSWER_TRIES * (ANSWER_WAIT_MS + ANSWER_TIMEOUT_MS);
+const JOB_POLL_MS = 1000;
+// How long --wait waits for the job: under the 10-minute cap on a Claude
+// command, so the line is not cut off. Past it, --wait says STILL_SETTING_UP;
+// the next Claude start then says NOT_SET_UP until a passcode is set.
+export const JOB_WAIT_MS = 9 * 60 * 1000;
+export const LONGEST_JOB_MS = INSTALL_TIMEOUT_MS;
 export const LOCK_STALE_MS = LONGEST_JOB_MS + 5 * 60 * 1000;   // + node's start and the state write, generously
 export const DEFAULT_PORT = 8790;
 export const TASK_NAME = 'Claude Remote Agent';   // register-task.ps1's default -TaskName
@@ -324,7 +333,7 @@ export function qrBlocks(text) {
   return lines;
 }
 
-/** The line for a finished job, or null (a first install that worked says it by opening the browser). */
+/** The line for a finished job, or null (a first install that worked: --now already gave the link). */
 export function outcomeLine(last) {
   if (last.ok) return last.kind === 'update' ? UPDATED : null;
   return last.kind === 'update' ? updateFailed(last.reason) : setupFailed(last.reason);
@@ -337,8 +346,7 @@ export function outcomeLine(last) {
  * deps: platform, pluginRoot, localAppData, dataDir, pathValue, nodeVersion,
  * now, tailscaleStatus() -> Promise<stdout|null>, taskQuery() -> Promise<q>
  * (see taskVerdict), startJob(job), and optionally agentRunning() ->
- * Promise<boolean>, passcodeSet() -> Promise<boolean|null>, sacStatus() and
- * openBrowser(url).
+ * Promise<boolean>, passcodeSet() -> Promise<boolean|null> and sacStatus().
  */
 export async function sessionStart(deps) {
   const { pluginRoot, localAppData, dataDir } = deps;
@@ -357,7 +365,7 @@ export async function sessionStart(deps) {
   if (!localAppData) return quiet(setupFailed('this PC has no LOCALAPPDATA folder'));
 
   // The last job's outcome, once. Then stop for this start: one line per start.
-  // A first install that worked has no line (the browser said it).
+  // A first install that worked has no line (--now already gave the link).
   if (state.last && !state.last.reported) {
     state = { ...state, last: { ...state.last, reported: true } };
     writeState(files.state, state);
@@ -375,8 +383,8 @@ export async function sessionStart(deps) {
   // same version is installed again, which re-registers the task with the
   // launcher Windows allows. The failed-same-version guard below stops a loop.
   // Both asked at once: in series they came close to the hook's 10s limit.
-  // A copy with no passcode yet is not set up either: the browser was closed
-  // at the passcode screen. Unknown (agent not answering) stays silent.
+  // A copy with no passcode yet is not set up either: the passcode page was
+  // never filled in. Unknown (agent not answering) stays silent.
   if (kind === 'update' && installedHash(target) === hash) {
     const [sac, q, set] = await Promise.all([
       deps.sacStatus ? deps.sacStatus() : null,
@@ -408,14 +416,7 @@ export async function sessionStart(deps) {
   if (verdict === 'none' && running) return quiet(RUNS_ELSEWHERE);
   if (atStart) return NOT_SET_UP;
 
-  if (kind === 'install' && !tailscaleReady(ts)) {
-    // Every ask opens the page (PRD R21.1a, R21.0); a Claude start never gets here.
-    // Never at the cost of the line: a failed open still says it.
-    try {
-      if (deps.openBrowser) await deps.openBrowser(TAILSCALE_DOWNLOAD);
-    } catch { /* the line below still tells them */ }
-    return NEEDS_TAILSCALE;
-  }
+  if (kind === 'install' && !tailscaleReady(ts)) return NEEDS_TAILSCALE;
   if (!nodeVersionOk(deps.nodeVersion)) return NEEDS_NODE;
   if (!onPath('claude.cmd', deps.pathValue)) {
     // Recorded like a failed install, so it is said once per plugin version,
@@ -437,42 +438,63 @@ function sleep(ms) {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
-/**
- * Runs the install, records the outcome, opens the browser on a first
- * install, and always gives the lock back.
- *
- * deps: runInstall(args) -> Promise<{ code, stdout, stderr }>, agentAnswers()
- * -> Promise<boolean>, openBrowser(url), port, waitMs.
- */
 /** Records how a job ended, for the next start to say once. */
 function recordOutcome(job, ok, reason) {
   const file = stateFiles(job.dataDir).state;
-  const last = { kind: job.kind, ok, hash: job.hash, reported: false, at: new Date().toISOString() };
+  // token: which job wrote it, so --now's jobLine reads only its own.
+  const last = { kind: job.kind, ok, hash: job.hash, reported: false, at: new Date().toISOString(), token: job.lockToken };
   if (!ok) last.reason = reason;
   writeState(file, { ...readState(file), last });
 }
 
+/** Runs the install, records the outcome, and always gives the lock back. deps: runInstall(args). */
 export async function runJob(job, deps) {
   const files = stateFiles(job.dataDir);
   try {
     const script = path.join(job.pluginRoot, 'agent', 'autostart', 'update-agent.ps1');
     const r = await deps.runInstall(['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', script, '-Source', job.pluginRoot, '-Target', job.target]);
+    // A 0 exit means update-agent.ps1 saw the new agent answer.
     const ok = r.code === 0;
     recordOutcome(job, ok, ok ? undefined : firstReason(r.stderr, r.stdout, r.code));
-    if (ok && job.kind === 'install') {
-      // update-agent.ps1 already checked /api/auth/status once; this waits
-      // out a slow first answer rather than opening a browser on nothing.
-      for (let i = 0; i < ANSWER_TRIES; i += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        if (await deps.agentAnswers()) { deps.openBrowser(`http://127.0.0.1:${deps.port}`); break; }
-        // eslint-disable-next-line no-await-in-loop
-        await sleep(deps.waitMs ?? ANSWER_WAIT_MS);
-      }
-    }
   } finally {
     releaseLock(files.lock, job.lockToken);
   }
+}
+
+/**
+ * --wait: waits while the job holds `lockToken`
+ * (the job gives it back when done), then says how it went, once - so the next
+ * start does not say it again. Unreadable-right-now counts as still held.
+ * opts: sleep(ms), deadline (epoch ms) - for tests.
+ */
+export async function jobLine(files, lockToken, port, { sleep: wait = sleep, deadline = Date.now() + JOB_WAIT_MS } = {}) {
+  for (;;) {
+    const raw = readLock(files.lock);
+    let ours = raw === undefined;
+    try { ours = ours || JSON.parse(raw).token === lockToken; } catch { /* gone, or another job's */ }
+    if (!ours) break;
+    if (Date.now() > deadline) return STILL_SETTING_UP;
+    // eslint-disable-next-line no-await-in-loop
+    await wait(JOB_POLL_MS);
+  }
+  const state = readState(files.state);
+  const { last } = state;
+  if (!last || last.token !== lockToken) return setupFailed('it stopped without saying how it went');
+  writeState(files.state, { ...state, last: { ...last, reported: true } });
+  return last.ok ? setUp(port) : outcomeLine(last);
+}
+
+/**
+ * --wait: the job running now (its lock's token), or else the last one to
+ * finish (its outcome's token) - jobLine's answer for it.
+ */
+export function waitLine(port, files, opts) {
+  let token = null;
+  try { token = JSON.parse(readLock(files.lock)).token; } catch { /* no job running */ }
+  token ||= readState(files.state).last?.token;
+  if (!token) return Promise.resolve(setupFailed('it stopped without saying how it went'));
+  return jobLine(files, token, port, opts);
 }
 
 // --- The real world ----------------------------------------------------------
@@ -552,23 +574,6 @@ function realRunInstall(args) {
   });
 }
 
-/** Exported only so the window measurement can run this exact spawn. */
-export function realOpenBrowser(url) {
-  // cmd's own console is created hidden; `start` hands the URL to the
-  // default browser the same way a double-click would. /s strips exactly the
-  // outer pair of quotes, so the inner ones survive. Measured 2026-09-27 with
-  // a harmless target in place of the URL: no window from cmd, and a program
-  // started this way outlived the job that started it (a browser that was
-  // not already running must not close when the job exits).
-  // Resolves once cmd has handed the URL over, so a caller about to exit (the
-  // hook at a session start or --now) does not exit before `start` ran.
-  return new Promise((resolve) => {
-    spawn(path.join(SYSTEM32, 'cmd.exe'), ['/d', '/s', '/c', `"start "" "${url}""`], {
-      windowsHide: true, stdio: 'ignore', windowsVerbatimArguments: true,
-    }).on('error', resolve).on('exit', resolve);
-  });
-}
-
 /** Is a passcode set on the agent: true/false, or null when it does not answer. */
 async function realPasscodeSet(port) {
   try {
@@ -601,9 +606,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   if (process.argv[2] === '--job') {
     try {
       await runJob(JSON.parse(process.argv[3]), {
-        runInstall: realRunInstall, agentAnswers: () => realAgentAnswers(port), openBrowser: realOpenBrowser, port,
+        runInstall: realRunInstall,
       });
     } catch { /* nobody to tell; the lock is gone and the next start sees no outcome */ }
+  } else if (process.argv[2] === '--wait') {
+    // After --now said SETTING_UP: its own process, so killing it never kills the job.
+    try {
+      process.stdout.write(`${await waitLine(port, stateFiles(DATA_DIR))}\n`);
+    } catch { /* silent: see the header */ }
   } else if (process.argv[2] === '--print-qr') {
     // /claude-remote:setup's hand-over: the same drawing, without the colour
     // codes, so the model can put it in its reply as a code block.
@@ -628,7 +638,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
         startJob: (job) => realStartJob(job),
         agentRunning: () => realAgentAnswers(port),
         passcodeSet: () => realPasscodeSet(port),
-        openBrowser: realOpenBrowser,
         explain: now,
       });
       if (now) process.stdout.write(`${line}\n`);
