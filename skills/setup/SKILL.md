@@ -9,21 +9,48 @@ Get a Node agent running on this Windows PC, serving a small PWA that starts
 Claude Code sessions. The phone reaches it over Tailscale; the session it starts
 appears in the Claude app's Code tab.
 
-**Setup now runs by itself.** On the first Claude Code start after the plugin is
-installed, the plugin's SessionStart hook (`hooks/check-update.mjs`) runs step
-3's `update-agent.ps1` in the background with no window, opens the browser on
-the passcode screen, and the agent switches `tailscale serve` on itself once
-the passcode is set (step 5). A plugin update is installed the same way. **This
-skill is the manual repair path**: for when that could not run (the session
-said "couldn't set itself up" or "couldn't update itself"), or the owner asks.
-Every step below stays valid on a machine that is already set up - step 3
-keeps the previous version if the new one fails, and `tailscale serve` is
-idempotent.
+**A Claude start never sets this PC up by itself** (since sequence 35,
+2026-10-02). While it is not set up, each Claude start prints a short message
+that points here. **This skill is the normal way to set it up**, and the repair
+path. An update of a copy that is already set up still installs itself, hidden,
+at a Claude start.
 
-When step 3 succeeds, clear the automatic setup's record of a failure, so the
-next Claude start does not repeat an old failure line. Remove ONLY that record:
-the same file remembers that the phone code was already shown, and deleting the
-whole file would show it again after step 5 has just printed it.
+## Start here: the same command as the one-line install
+
+Find the plugin's folder (`claude plugin details` does NOT print a path -
+measured; `list --json` does):
+
+```powershell
+$src = $env:CLAUDE_PLUGIN_ROOT   # the copy Claude Code actually loaded, when set
+if (-not $src) {
+    $paths = @((claude.cmd plugin list --json | ConvertFrom-Json) |
+               Where-Object id -eq 'claude-remote@claude-remote' |
+               ForEach-Object installPath | Select-Object -Unique)
+    if ($paths.Count -gt 1) {
+        throw "claude-remote is installed at $($paths.Count) scopes - uninstall all but one, then re-run setup"
+    }
+    $src = $paths | Select-Object -First 1
+}
+if (-not $src -or -not (Test-Path "$src\agent\server.js")) {
+    throw 'claude-remote plugin folder not found - is the plugin installed?'
+}
+```
+
+The throw is load-bearing: with an empty `$src`, `"$src\agent"` is `\agent` at
+the root of the current drive, and the install below would copy whatever is
+there and register ITS script to run at every logon.
+
+The brackets around `claude.cmd plugin list --json | ConvertFrom-Json` are
+load-bearing too. Windows PowerShell 5.1's `ConvertFrom-Json` sends a JSON array
+down the pipe as ONE object, so without them `Where-Object` never matches and
+setup stops with "plugin folder not found" on a stock Windows PC (found on the
+Dell install test, 2026-09-27; `agent/test/setup-skill.test.js` runs it).
+`CLAUDE_PLUGIN_ROOT` is not set in your shell, so this is the path a real
+install takes.
+
+Clear an old failure record, so this run tries again instead of repeating the
+old failure line. Remove ONLY that record; the rest of the file is the hook's
+own state.
 
 ```powershell
 $f = "$env:USERPROFILE\.claude\plugins\data\claude-remote-claude-remote\auto-setup.json"
@@ -34,6 +61,39 @@ if (Test-Path $f) {
     $s | ConvertTo-Json | Set-Content $f -Encoding ascii
 }
 ```
+
+Then run the plugin's own setup, exactly what the one-line install runs:
+
+```powershell
+node "$src\hooks\check-update.mjs" --now
+```
+
+It prints one line. Say it to the person as it is, then:
+
+- **"...is setting itself up on this PC. Your browser will open..."**: the
+  browser opens on the passcode screen by itself. Tell them step 4's words (set
+  a passcode, read the screen, pick folders). The app switches Tailscale
+  sharing on once the passcode is set and shows the phone code right after.
+  STOP here.
+- **"...already installed and up to date..."**: the agent is copied, which is
+  not yet set up. Run step 3's three checks (copy, passcode, sharing). No
+  passcode: it was abandoned at the passcode screen, so give step 4's words
+  (open http://127.0.0.1:8790 and set it; the app switches sharing on itself).
+  All three hold: give step 5's hand-over, the address, the Home Screen steps
+  and the phone code.
+- **"...updating itself..."** or **"...already setting itself up..."**: a
+  hidden job is running right now. STOP: running the steps below by hand would
+  race it (step 3 does not take its lock). Say the line; the next Claude start
+  reports how it went.
+- **"...runs its agent another way..."**: this PC is set up another way (a
+  logon task or an agent from a checkout). STOP and leave it alone: the steps
+  below would stop that agent and re-point its task.
+- **Anything else** (needs Tailscale or Node, couldn't set itself up, not
+  Windows): do steps 0 to 5 below by hand, which show the details.
+
+Every step below stays valid on a machine that is already set up - step 3
+keeps the previous version if the new one fails, and `tailscale serve` is
+idempotent.
 
 ## THE ORDER IS LOAD-BEARING. Do not reorder it.
 
@@ -118,7 +178,8 @@ silently stop starting. Setup copies the agent to a folder that never moves,
 
 **This step is also the update.** A plugin update changes nothing on its own;
 the copy keeps running until this step runs again. The plugin's SessionStart
-hook compares the two and installs the new version by itself when they differ.
+hook compares the two at a Claude start and installs the new version by itself
+when they differ (an update only; a first setup is never started by itself).
 Decide which run this is BEFORE copying anything. It is an update only when
 all three already hold:
 
@@ -133,36 +194,7 @@ Then do this step, confirm step 4's URL answers, and stop - the passcode and
 the tailnet exposure are already in place. If any one fails, it is a first run
 (or one abandoned at step 4): do every step. Step 3 is safe to repeat.
 
-Find the plugin's folder (`claude plugin details` does NOT print a path -
-measured; `list --json` does):
-
-```powershell
-$src = $env:CLAUDE_PLUGIN_ROOT   # the copy Claude Code actually loaded, when set
-if (-not $src) {
-    $paths = @((claude.cmd plugin list --json | ConvertFrom-Json) |
-               Where-Object id -eq 'claude-remote@claude-remote' |
-               ForEach-Object installPath | Select-Object -Unique)
-    if ($paths.Count -gt 1) {
-        throw "claude-remote is installed at $($paths.Count) scopes - uninstall all but one, then re-run setup"
-    }
-    $src = $paths | Select-Object -First 1
-}
-if (-not $src -or -not (Test-Path "$src\agent\server.js")) {
-    throw 'claude-remote plugin folder not found - is the plugin installed?'
-}
-```
-
-The throw is load-bearing: with an empty `$src`, `"$src\agent"` is `\agent` at
-the root of the current drive, and the install below would copy whatever is
-there and register ITS script to run at every logon.
-
-The brackets around `claude.cmd plugin list --json | ConvertFrom-Json` are
-load-bearing too. Windows PowerShell 5.1's `ConvertFrom-Json` sends a JSON array
-down the pipe as ONE object, so without them `Where-Object` never matches and
-setup stops with "plugin folder not found" on a stock Windows PC (found on the
-Dell install test, 2026-09-27; `agent/test/setup-skill.test.js` runs it).
-`CLAUDE_PLUGIN_ROOT` is not set in your shell, so this is the path a real
-install takes.
+Use `$src` from **Start here** at the top: the plugin's folder.
 
 Then install it. One script does the whole update - run the copy that ships
 with the NEW version, from the plugin folder:
@@ -276,9 +308,8 @@ Enter your passcode, tap a project, and the session shows up in the Claude
 app's Code tab.
 ```
 
-With it, give the phone code - the same drawing a Claude start shows once
-sharing is on. The plugin's hook prints it (`$src` is step 3's
-plugin folder; find it again the same way in a new shell):
+With it, give the phone code. The plugin's hook prints it (`$src` is the
+plugin folder from **Start here**; find it again the same way in a new shell):
 
 ```powershell
 node "$src\hooks\check-update.mjs" --print-qr https://<machine>.<tailnet>.ts.net:8790

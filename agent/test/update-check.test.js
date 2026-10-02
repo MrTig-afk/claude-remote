@@ -1,5 +1,5 @@
-// hooks/check-update.mjs: the SessionStart hook that installs and updates the
-// agent by itself. Real temp folders; every outside
+// hooks/check-update.mjs: the SessionStart hook that updates the agent by
+// itself, and sets it up only when asked (--now). Real temp folders; every outside
 // effect - tailscale, the background job, PowerShell, the browser - is a fake
 // handed in, so no test installs anything or opens anything.
 //
@@ -19,7 +19,7 @@ import {
   installedHash, sessionStart, runJob, firstReason, nodeVersionOk, tailscaleReady, stateFiles, LOCK_STALE_MS,
   SETTING_UP, NEEDS_TAILSCALE, NOT_WINDOWS, NEEDS_NODE, UPDATED, setupFailed, updateFailed,
   takeLock, releaseLock, removeLockIfStill, LONGEST_JOB_MS, INSTALL_TIMEOUT_MS, taskVerdict, realTaskQuery,
-  realStartJob, realTailscale, phoneAddress, phoneReady, terminalQr, qrBlocks, TASK_NAME,
+  realStartJob, realTailscale, qrBlocks, TASK_NAME, NOT_SET_UP,
   ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING, sacOn, launcherStale, TAILSCALE_DOWNLOAD,
 } from '../../hooks/check-update.mjs';
 
@@ -56,19 +56,34 @@ function taskXml(serverPath) {
 }
 const NO_TASK = { ok: false, missing: true };
 
-// RED WHEN: the page stops opening (owner at the Dell test, 2026-10-02: a new
-// PC got a sentence, not a page), or opens at every start in every project.
-test('Tailscale not ready: the download page opens - every time on --now, once at a session start', async () => {
+// RED WHEN: the page stops opening on an ask (owner at the Dell test,
+// 2026-10-02: a new PC got a sentence, not a page), or opens at a Claude start.
+test('Tailscale not ready: the download page opens on every ask, never at a Claude start', async () => {
   const w = world();
   const opened = [];
   const deps = { ...w.deps, tailscaleStatus: async () => JSON.stringify({ BackendState: 'NeedsLogin' }), openBrowser: (u) => opened.push(u) };
-  assert.equal(await sessionStart(deps), NEEDS_TAILSCALE);
-  assert.equal(await sessionStart(deps), NEEDS_TAILSCALE);
-  assert.deepEqual(opened, [TAILSCALE_DOWNLOAD], 'a session start opens it once');
+  assert.equal(await sessionStart(deps), NOT_SET_UP);
+  assert.deepEqual(opened, [], 'a Claude start opens nothing');
   assert.equal(await sessionStart({ ...deps, explain: true }), NEEDS_TAILSCALE);
   assert.equal(await sessionStart({ ...deps, explain: true }), NEEDS_TAILSCALE);
-  assert.equal(opened.length, 3, 'the one-line install opens it every time');
+  assert.deepEqual(opened, [TAILSCALE_DOWNLOAD, TAILSCALE_DOWNLOAD], 'every ask opens it');
   assert.equal(TAILSCALE_DOWNLOAD, 'https://tailscale.com/download');
+});
+
+// RED WHEN: a Claude start sets the PC up by itself again (owner at the Dell
+// test, 2026-10-02: "it is RELENTLESS"). Sequence 35: it only says so.
+test('nothing installed, at a Claude start: the not-set-up message, and nothing else happens', async () => {
+  const w = world();
+  const opened = [];
+  for (let i = 0; i < 2; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    assert.equal(await sessionStart({ ...w.deps, openBrowser: (u) => opened.push(u) }), NOT_SET_UP, 'at every start');
+  }
+  assert.deepEqual(w.jobs, [], 'no install');
+  assert.deepEqual(opened, [], 'no browser');
+  assert.deepEqual(w.tailscaleCalls, [], 'Tailscale is not even asked');
+  assert.equal(fs.existsSync(w.files.lock), false, 'no lock');
+  assert.equal(await sessionStart({ ...w.deps, explain: true }), SETTING_UP, 'the ask sets it up');
 });
 
 // RED WHEN: a failed open or save swallows the line (code-review, discovery 2).
@@ -111,7 +126,6 @@ function world({ installed = null, plugin = 'server v1' } = {}) {
     tailscaleStatus: async () => { tailscaleCalls.push(1); return RUNNING; },
     // An installed copy's task runs it; with no copy there is no task yet.
     taskQuery: async () => (installed === null ? NO_TASK : { ok: true, stdout: taskXml(ours) }),
-    phoneAddress: async () => null,
     startJob: (job) => jobs.push(job),
   };
   return { dir, deps, jobs, tailscaleCalls, ours, files: stateFiles(deps.dataDir) };
@@ -128,9 +142,9 @@ test('installedHash: same files match even without the tests; an agent file or t
   assert.notEqual(installedHash(a), installedHash(b));
 });
 
-test('nothing installed: starts the install in the background, says the setup line, holds the lock', async () => {
+test('nothing installed, asked: starts the install in the background, says the setup line, holds the lock', async () => {
   const w = world();
-  assert.equal(await sessionStart(w.deps), SETTING_UP);
+  assert.equal(await sessionStart({ ...w.deps, explain: true }), SETTING_UP);
   assert.equal(w.jobs.length, 1);
   const { lockToken, ...job } = w.jobs[0];
   assert.deepEqual(job, {
@@ -201,7 +215,7 @@ test('no copy here but an agent already answers: left alone, no job, no line', a
   assert.equal(await sessionStart({ ...w.deps, agentRunning: async () => true }), null);
   assert.deepEqual(w.jobs, []);
   assert.equal(fs.existsSync(w.files.lock), false, 'and no lock taken');
-  assert.equal(await sessionStart({ ...w.deps, agentRunning: async () => false }), SETTING_UP, 'nothing answering: the install goes ahead');
+  assert.equal(await sessionStart({ ...w.deps, agentRunning: async () => false }), NOT_SET_UP, 'nothing answering: not set up');
 });
 
 test('installed and the same: silent, no job, and Tailscale is not even asked', async () => {
@@ -219,11 +233,11 @@ test('installed but older than the plugin: an update job, and no line until it h
 
 test('a second Claude during the install says nothing and starts nothing; a stale lock does not block', async () => {
   const w = world();
-  assert.equal(await sessionStart(w.deps), SETTING_UP);
+  assert.equal(await sessionStart({ ...w.deps, explain: true }), SETTING_UP);
   assert.equal(await sessionStart({ ...w.deps, now: w.deps.now + LOCK_STALE_MS - 1 }), null);
   assert.equal(w.jobs.length, 1);
   assert.equal(w.tailscaleCalls.length, 1, 'the second start checks nothing, so it can print nothing either');
-  assert.equal(await sessionStart({ ...w.deps, now: w.deps.now + LOCK_STALE_MS }), SETTING_UP);
+  assert.equal(await sessionStart({ ...w.deps, explain: true, now: w.deps.now + LOCK_STALE_MS }), SETTING_UP);
   assert.equal(w.jobs.length, 2);
 });
 
@@ -231,10 +245,10 @@ test('an unreadable lock is a dead job\'s, not a live one', async () => {
   const w = world();
   fs.mkdirSync(w.deps.dataDir, { recursive: true });
   fs.writeFileSync(w.files.lock, 'half-writ');
-  assert.equal(await sessionStart(w.deps), SETTING_UP);
+  assert.equal(await sessionStart({ ...w.deps, explain: true }), SETTING_UP);
 });
 
-test('prerequisites: Tailscale, then Node, then claude.cmd - one line, nothing installed, no lock left', async () => {
+test('prerequisites, on an ask: Tailscale, then Node, then claude.cmd - one line, nothing installed, no lock left', async () => {
   for (const [change, line] of [
     [{ tailscaleStatus: async () => JSON.stringify({ BackendState: 'NeedsLogin' }) }, NEEDS_TAILSCALE],
     [{ tailscaleStatus: async () => null }, NEEDS_TAILSCALE],
@@ -243,7 +257,7 @@ test('prerequisites: Tailscale, then Node, then claude.cmd - one line, nothing i
   ]) {
     const w = world();
     // eslint-disable-next-line no-await-in-loop
-    assert.equal(await sessionStart({ ...w.deps, ...change }), line);
+    assert.equal(await sessionStart({ ...w.deps, ...change, explain: true }), line);
     assert.deepEqual(w.jobs, []);
     assert.ok(!fs.existsSync(w.files.lock));
   }
@@ -270,23 +284,20 @@ test('the task, agent and Tailscale questions are asked at the same time', async
   const slow = (v) => () => new Promise((r) => { setTimeout(() => r(v), 150); });
   const t0 = Date.now();
   const line = await sessionStart({
-    ...w.deps, taskQuery: slow(NO_TASK), agentRunning: slow(false),
+    ...w.deps, explain: true, taskQuery: slow(NO_TASK), agentRunning: slow(false),
     tailscaleStatus: slow(JSON.stringify({ BackendState: 'Running' })),
   });
   assert.equal(line, SETTING_UP);
   assert.ok(Date.now() - t0 < 400, `three 150ms questions took ${Date.now() - t0}ms - asked one by one`);
 });
 
-// RED WHEN: the claude.cmd line is returned without being recorded
-// - it then repeats at every start in every project.
-test('claude.cmd missing: said once for this plugin version, then silent; a newer plugin tries again', async () => {
+test('claude.cmd missing: every ask says so; a Claude start says only that it is not set up', async () => {
   const w = world();
-  const deps = { ...w.deps, pathValue: '' };
+  const deps = { ...w.deps, pathValue: '', explain: true };
   assert.equal(await sessionStart(deps), setupFailed('claude.cmd is not on PATH'));
-  assert.equal(await sessionStart(deps), null, 'not again at the next start');
+  assert.equal(await sessionStart(deps), setupFailed('claude.cmd is not on PATH'), 'and again on the next ask');
+  assert.equal(await sessionStart({ ...deps, explain: false }), NOT_SET_UP);
   assert.deepEqual(w.jobs, []);
-  fs.writeFileSync(path.join(w.deps.pluginRoot, 'release-notes.json'), '[{"v":9}]');
-  assert.equal(await sessionStart(deps), setupFailed('claude.cmd is not on PATH'), 'a newer plugin says it once more');
 });
 
 test('not Windows: the line once, then silent forever; nothing else is looked at', async () => {
@@ -301,10 +312,11 @@ test('a failed install is not retried by itself - but a newer plugin gets its ow
   const w = world();
   const hash = installedHash(w.deps.pluginRoot);
   writeState(w, { last: { kind: 'install', ok: false, reason: 'x', hash, reported: true } });
-  assert.equal(await sessionStart(w.deps), null);
+  assert.equal(await sessionStart({ ...w.deps, explain: true }), setupFailed('x'));
+  assert.equal(await sessionStart(w.deps), NOT_SET_UP, 'a Claude start: just not set up');
   assert.deepEqual(w.jobs, []);
   writeState(w, { last: { kind: 'install', ok: false, reason: 'x', hash: 'an older plugin', reported: true } });
-  assert.equal(await sessionStart(w.deps), SETTING_UP);
+  assert.equal(await sessionStart({ ...w.deps, explain: true }), SETTING_UP);
 });
 
 test('each outcome is printed exactly once, at the next start', async () => {
@@ -327,11 +339,19 @@ test('each outcome is printed exactly once, at the next start', async () => {
 
 test('the lines are the Artifact\'s, word for word', () => {
   assert.equal(SETTING_UP, 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.');
-  assert.equal(NEEDS_TAILSCALE, 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then restart Claude.');
+  assert.equal(NEEDS_TAILSCALE, 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then run /claude-remote:setup.');
   assert.equal(NOT_WINDOWS, 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.');
-  assert.equal(NEEDS_NODE, 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then restart Claude.');
+  assert.equal(NEEDS_NODE, 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then run /claude-remote:setup.');
   assert.equal(setupFailed('R'), "Claude Remote couldn't set itself up: R. Run /claude-remote:setup to try again and see the details.");
   assert.equal(UPDATED, 'Claude Remote updated itself on this PC. The app on your phone picks it up the next time it opens.');
+  assert.equal(NOT_SET_UP, [
+    'Claude Remote is installed but not set up yet.',
+    '• Set it up: run /claude-remote:setup (a passcode, then a QR code for your phone)',
+    '• Your phone needs the Tailscale app, signed in to the same account',
+    '• Add it to your phone like an app:',
+    '  - iPhone / iPad: open the link in Safari → Share → Add to Home Screen',
+    '  - Android: open the link in Chrome → ⋮ → Add to Home screen',
+  ].join('\n'));
   assert.equal(updateFailed('R'), "Claude Remote couldn't update itself: R. Run /claude-remote:setup to try again and see the details.");
 });
 
@@ -562,7 +582,7 @@ test('an update neither asks Tailscale nor says NEEDS_TAILSCALE', async () => {
 // and nothing ever says the install did not happen.
 test('a job that cannot be spawned: lock given back, failure recorded, said at the next start', async () => {
   const w = world();
-  assert.equal(await sessionStart({ ...w.deps, startJob: (job) => realStartJob(job, () => {
+  assert.equal(await sessionStart({ ...w.deps, explain: true, startJob: (job) => realStartJob(job, () => {
     const child = new EventEmitter();
     child.unref = () => {};
     process.nextTick(() => child.emit('error', Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' })));
@@ -579,7 +599,7 @@ test('a job that cannot be spawned: lock given back, failure recorded, said at t
 
 test('a spawn that throws outright is handled the same way', async () => {
   const w = world();
-  await sessionStart({ ...w.deps, startJob: (job) => realStartJob(job, () => { throw Object.assign(new Error('bad'), { code: 'EINVAL' }); }) });
+  await sessionStart({ ...w.deps, explain: true, startJob: (job) => realStartJob(job, () => { throw Object.assign(new Error('bad'), { code: 'EINVAL' }); }) });
   assert.ok(!fs.existsSync(w.files.lock));
   assert.equal(readState(w).last.reason, 'the background install could not start (EINVAL)');
 });
@@ -599,12 +619,9 @@ test('tailscale runs with its cwd in System32, no window, fixed args', async () 
   assert.equal(await realTailscale(['status'], (f, a, o, cb) => cb(new Error('x'))), null);
 });
 
-// --- the phone code in the terminal ------------------
+// --- the phone code ---------------------------------------------
 
-const SERVE_ON = JSON.stringify({ TCP: { 8790: { HTTPS: true } }, Web: { 'desktop-abc1234.tail1a2b3c.ts.net:8790': { Handlers: { '/': { Proxy: 'http://127.0.0.1:8790' } } } } });
-const STATUS = JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'desktop-abc1234.tail1a2b3c.ts.net.' } });
-
-test('terminalQr: quiet zone, finder patterns, light modules drawn, every line bright white', () => {
+test('qrBlocks: quiet zone, finder patterns, light modules drawn', () => {
   const lines = qrBlocks('https://claude.ai');   // 17 bytes: version 2, 25 modules + 2x2 quiet = 29
   assert.equal(lines.length, 15);
   assert.ok(lines.every((l) => [...l].length === 29));
@@ -613,65 +630,31 @@ test('terminalQr: quiet zone, finder patterns, light modules drawn, every line b
   // Rows 2-3: the top of both upper finder patterns - a dark row over a ring.
   assert.ok(lines[1].startsWith('██ ▄▄▄▄▄ █'), lines[1]);
   assert.ok(lines[1].endsWith('█ ▄▄▄▄▄ ██'), lines[1]);
-  const wrapped = terminalQr('https://claude.ai').split('\n');
-  assert.equal(wrapped.length, lines.length);
-  wrapped.forEach((l, i) => assert.equal(l, `\x1b[97m${lines[i]}\x1b[0m`));
 });
 
-test('phoneReady: the approved line, the address written out, then the code', () => {
-  const [first, ...qr] = phoneReady(URL_OK).split('\n');
-  assert.equal(first, `Claude Remote is ready. Scan this with your phone's camera to open it, or go to ${URL_OK}`);
-  assert.equal(qr.join('\n'), terminalQr(URL_OK));
-});
-
-test('phoneAddress: the address only when serve shares THIS port and the name is known', async () => {
-  const run = (serve, status) => async (args) => (args[0] === 'serve' ? serve : status);
-  assert.equal(await phoneAddress(8790, run(SERVE_ON, STATUS)), URL_OK);
-  assert.equal(await phoneAddress(8791, run(SERVE_ON, STATUS)), null, 'another port');
-  assert.equal(await phoneAddress(8790, run('null', STATUS)), null, 'serve off');
-  assert.equal(await phoneAddress(8790, run(null, STATUS)), null, 'tailscale not answering');
-  assert.equal(await phoneAddress(8790, run(SERVE_ON, null)), null, 'name unknown');
-});
-
-test('the phone code is shown once, only for this plugin\'s install, and records that it was', async () => {
+// RED WHEN: a copy here counts as set up before a passcode is (code-review,
+// 2026-10-02): someone who closed the browser at the passcode screen was never
+// told again, and /claude-remote:setup called the PC set up.
+test('copied but no passcode yet: a Claude start still says it is not set up', async () => {
   const w = world({ installed: 'server v1' });
-  let asked = 0;
-  const deps = { ...w.deps, phoneAddress: async () => { asked += 1; return URL_OK; } };
-  assert.equal(await sessionStart(deps), phoneReady(URL_OK));
-  assert.equal(readState(w).phoneShown, true);
-  assert.equal(readState(w).phoneUrl, URL_OK);
-  assert.equal(await sessionStart(deps), null, 'never again');
-  assert.equal(asked, 1, 'and Tailscale is not asked again');
+  assert.equal(await sessionStart({ ...w.deps, passcodeSet: async () => false }), NOT_SET_UP);
+  assert.equal(await sessionStart({ ...w.deps, passcodeSet: async () => true }), null, 'set: silent');
+  assert.equal(await sessionStart({ ...w.deps, passcodeSet: async () => null }), null, 'agent not answering: unknown, silent');
   assert.deepEqual(w.jobs, []);
 });
 
-test('no phone code while sharing is off, for an agent run from elsewhere, or with no copy here', async () => {
+// RED WHEN: a Claude start prints the phone code again. Cut at sequence 35:
+// the browser shows it after the passcode, /claude-remote:setup when asked.
+test('no phone code at a Claude start, ever', async () => {
   const w = world({ installed: 'server v1' });
-  assert.equal(await sessionStart(w.deps), null, 'sharing not on yet');
-  assert.equal(fs.existsSync(w.files.state), false, 'nothing recorded, so it is asked again next start');
-  const elsewhere = { ok: true, stdout: taskXml('F:\\checkout\\agent\\server.js') };
-  let asked = 0;
-  const phone = async () => { asked += 1; return URL_OK; };
-  assert.equal(await sessionStart({ ...w.deps, taskQuery: async () => elsewhere, phoneAddress: phone }), null);
-  assert.equal(await sessionStart({ ...w.deps, taskQuery: async () => NO_TASK, phoneAddress: phone }), null);
-  assert.equal(asked, 0, 'Tailscale is not even asked for an install this plugin did not make');
-  const bare = world();
-  assert.equal(await sessionStart({ ...bare.deps, agentRunning: async () => true, phoneAddress: phone }), null, 'no copy: no code');
-  assert.equal(asked, 0);
-});
-
-test('one line per start: an outcome line first, the phone code at the next start', async () => {
-  const w = world({ installed: 'server v1' });
-  writeState(w, { last: { kind: 'update', ok: true, hash: 'h', reported: false } });
-  const deps = { ...w.deps, phoneAddress: async () => URL_OK };
-  assert.equal(await sessionStart(deps), UPDATED);
-  assert.equal(await sessionStart(deps), phoneReady(URL_OK));
-  assert.equal(readState(w).last.reported, true, 'the outcome stays reported');
-  // A first install that worked has no line of its own, so its next start shows the code.
-  const w2 = world({ installed: 'server v1' });
-  writeState(w2, { last: { kind: 'install', ok: true, hash: 'h', reported: false } });
-  assert.equal(await sessionStart({ ...w2.deps, phoneAddress: async () => URL_OK }), phoneReady(URL_OK));
-  assert.equal(readState(w2).last.reported, true);
+  for (const last of [undefined, { kind: 'update', ok: true, hash: 'h', reported: false }]) {
+    if (last) writeState(w, { last });
+    // eslint-disable-next-line no-await-in-loop
+    const line = await sessionStart(w.deps);
+    assert.ok(line === null || line === UPDATED, String(line));
+    // eslint-disable-next-line no-await-in-loop
+    assert.equal(await sessionStart(w.deps), null);
+  }
 });
 
 test('run as the hook with --print-qr: the same drawing, plain, for setup\'s hand-over', () => {
@@ -710,7 +693,7 @@ test('install docs: README names AGENTS.md; AGENTS.md reasons first, then the th
 // RED WHEN: --now maps a silent branch to one catch-all sentence again
 // - it denied an update that was starting and hid a failed setup.
 // Every branch a session start keeps quiet, --now names.
-test('--now names every outcome, and never takes the phone code', async () => {
+test('--now names every outcome', async () => {
   const ex = (w, more = {}) => sessionStart({ ...w.deps, explain: true, ...more });
   const fresh = world();
   assert.equal(await ex(fresh), SETTING_UP, 'install started');
@@ -720,10 +703,7 @@ test('--now names every outcome, and never takes the phone code', async () => {
   assert.equal(await ex(older), UPDATING, 'an update really started');
   assert.equal(older.jobs.length, 1);
 
-  const same = world({ installed: 'server v1' });
-  let asked = 0;
-  assert.equal(await ex(same, { phoneAddress: async () => { asked += 1; return URL_OK; } }), UP_TO_DATE);
-  assert.equal(asked, 0, 'the phone code is never asked for, so it is not used up');
+  assert.equal(await ex(world({ installed: 'server v1' })), UP_TO_DATE);
 
   const foreign = world();
   const elsewhere = { ok: true, stdout: taskXml('F:\\checkout\\agent\\server.js') };
@@ -733,7 +713,7 @@ test('--now names every outcome, and never takes the phone code', async () => {
   const failed = world();
   writeState(failed, { last: { kind: 'install', ok: false, hash: installedHash(failed.deps.pluginRoot), reported: true, reason: 'boom' } });
   assert.equal(await ex(failed), setupFailed('boom'), 'a failed setup that will not retry says so');
-  assert.equal(await sessionStart(failed.deps), null, 'while a session start stays quiet about it');
+  assert.equal(await sessionStart(failed.deps), NOT_SET_UP, 'while a Claude start only says it is not set up');
 
   const nonWin = world();
   assert.equal(await ex(nonWin, { platform: 'linux' }), NOT_WINDOWS);
@@ -791,8 +771,7 @@ test('a failed re-registration is not retried at every start', async () => {
 });
 
 // RED WHEN Smart App Control and the task are asked one after the
-// other again, or phoneLine asks for the task a second time: each has a 2s
-// timeout, and in series with the phone address this reached the hook's 10s.
+// other again, or the task is asked twice: each has a 2s timeout.
 test('up to date: Smart App Control and the task are asked together, and the task only once', async () => {
   const w = world({ installed: 'server v1' });
   let taskCalls = 0;
@@ -802,9 +781,7 @@ test('up to date: Smart App Control and the task are asked together, and the tas
     ...w.deps,
     sacStatus: async () => { await new Promise((r) => { setImmediate(r); }); sacAnswered = true; return REG('0x2'); },
     taskQuery: async () => { taskCalls += 1; if (!sacAnswered) taskAskedBeforeSacAnswered = true; return { ok: true, stdout: taskXml(w.ours) }; },
-    phoneAddress: async () => URL_OK,
   });
-  assert.equal(taskAskedBeforeSacAnswered, true, 'asked in series');
-  assert.equal(taskCalls, 1, 'phoneLine asked for the task again');
-  assert.equal(readState(w).phoneShown, true, 'positive control: the phone line still ran on the shared answer');
+  assert.equal(taskAskedBeforeSacAnswered, true, 'asked together');
+  assert.equal(taskCalls, 1, 'the task was asked twice');
 });
