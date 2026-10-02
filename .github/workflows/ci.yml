@@ -25,7 +25,7 @@ jobs:
   ci:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -41,7 +41,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Pinned rulesets, never --config auto: auto re-resolves the registry on
       # every run, so a required check could go red with no code change.
       - run: semgrep scan --config p/javascript --config p/secrets --error
