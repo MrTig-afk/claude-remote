@@ -135,8 +135,8 @@ to the **same** Tailscale account on both:
 
 If Tailscale is missing or signed out on the PC, the install adds the plugin
 to Claude Code but sets nothing up on the PC: it says so and opens
-tailscale.com/download in your browser. Sign in, restart Claude, and the setup
-carries on by itself.
+tailscale.com/download in your browser. Sign in, then paste the same line
+again (or run `/claude-remote:setup`).
 
 ### Then install
 
@@ -167,9 +167,12 @@ on the passcode screen, with nothing to restart. In auto mode (Claude Code's
 default since 2.1.283) Claude may refuse to install a plugin by itself; it then
 hands you the line above.
 
-**Installing the plugin is agreeing to what it installs.** Either way, it
-sets itself up in the background, with no window, and adds three things to
-this PC:
+**Setting it up is agreeing to what it installs.** Either way above, or
+`/claude-remote:setup` later, it sets itself up in the background, with no
+window, and adds three things to this PC. Installing the plugin alone sets
+nothing up: until you set it up, each Claude Code start only says so.
+
+What setup adds:
 
 - **A copy of the agent** in `%LOCALAPPDATA%\claude-remote`.
 - **A scheduled task, "Claude Remote Agent"**, that starts it at every logon

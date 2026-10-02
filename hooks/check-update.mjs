@@ -1,14 +1,17 @@
-// SessionStart hook: the plugin installs and updates the
-// agent by itself, in the background, with no window.
+// SessionStart hook: the plugin updates the agent by itself, in the
+// background, with no window - and sets it up only when asked.
 //
-// A plugin cannot run anything while it is being installed, so the first
-// moment this code runs is the next Claude start. On that start, when
-// %LOCALAPPDATA%\claude-remote holds no agent - or one that differs from the
-// plugin's, compared by content, which needs no version number - it checks
-// the machine can run it and starts update-agent.ps1 (the same script, same
-// arguments, /claude-remote:setup runs) as a DETACHED, WINDOWLESS job, then
-// returns at once. The job records how it went; the NEXT start prints that,
-// once.
+// SET UP ON THE PERSON'S ASK, NEVER BY ITSELF (PRD R21.0, Artifact sequence
+// 35; owner at the Dell test, 2026-10-02: "it is RELENTLESS"). With no agent in
+// %LOCALAPPDATA%\claude-remote, a Claude start installs nothing and opens
+// nothing: it says NOT_SET_UP, at every start until set up. The ask is --now
+// (the one-line install, and /claude-remote:setup's first step): it checks the
+// machine can run it and starts update-agent.ps1 as a DETACHED, WINDOWLESS
+// job, then returns at once.
+//
+// An agent already here that differs from the plugin's, compared by content
+// (no version number needed), is updated at a Claude start, the same hidden
+// way. The job records how it went; the NEXT start prints that, once.
 //
 // Silent in every case the spec gives no line for, and on any error. A hook
 // that fires in every session of every project must never be the thing that
@@ -18,9 +21,8 @@
 // install, no update, no line. A git checkout started by the task
 // is a real set-up, and update-agent.ps1 would stop it and re-point the task.
 //
-// Once the install is in place and Tailscale sharing is on for the port, the
-// next start shows the phone code once, drawn in the terminal.
-// `--print-qr <url>` prints the same drawing for /claude-remote:setup.
+// No phone code at a Claude start (cut at sequence 35): the browser shows it
+// after the passcode, and /claude-remote:setup prints it (--print-qr <url>).
 //
 // WHY THE JOB IS A SECOND NODE PROCESS, NOT POWERSHELL DIRECTLY. Measured on
 // Windows 11, 2026-09-27:
@@ -53,11 +55,20 @@ import { qrMatrix } from '../agent/public/qr.js';
 
 // Verbatim.
 export const SETTING_UP = 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.';
-export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then restart Claude.';
+export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then run /claude-remote:setup.';
 // Opened alongside NEEDS_TAILSCALE: a new PC gets the page, not only a sentence.
 export const TAILSCALE_DOWNLOAD = 'https://tailscale.com/download';
 export const NOT_WINDOWS = 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.';
-export const NEEDS_NODE = 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then restart Claude.';
+export const NEEDS_NODE = 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then run /claude-remote:setup.';
+// Sequence 36: pointers, at every Claude start until the PC is set up.
+export const NOT_SET_UP = [
+  'Claude Remote is installed but not set up yet.',
+  '• Set it up: run /claude-remote:setup (a passcode, then a QR code for your phone)',
+  '• Your phone needs the Tailscale app, signed in to the same account',
+  '• Add it to your phone like an app:',
+  '  - iPhone / iPad: open the link in Safari → Share → Add to Home Screen',
+  '  - Android: open the link in Chrome → ⋮ → Add to Home screen',
+].join('\n');
 export const UPDATED = 'Claude Remote updated itself on this PC. The app on your phone picks it up the next time it opens.';
 // --now only (an agent relays these; a session start stays silent there).
 export const ALREADY_RUNNING = 'Claude Remote is already setting itself up on this PC.';
@@ -69,10 +80,6 @@ export function setupFailed(reason) {
 }
 export function updateFailed(reason) {
   return `Claude Remote couldn't update itself: ${reason}. Run /claude-remote:setup to try again and see the details.`;
-}
-
-export function phoneReady(url) {
-  return `Claude Remote is ready. Scan this with your phone's camera to open it, or go to ${url}\n${terminalQr(url)}`;
 }
 
 // The longest a job can run: update-agent.ps1 is killed at INSTALL_TIMEOUT_MS,
@@ -317,11 +324,6 @@ export function qrBlocks(text) {
   return lines;
 }
 
-/** qrBlocks in ANSI bright white, one line per QR line. */
-export function terminalQr(text) {
-  return qrBlocks(text).map((l) => `\x1b[97m${l}\x1b[0m`).join('\n');
-}
-
 /** The line for a finished job, or null (a first install that worked says it by opening the browser). */
 export function outcomeLine(last) {
   if (last.ok) return last.kind === 'update' ? UPDATED : null;
@@ -334,8 +336,9 @@ export function outcomeLine(last) {
  *
  * deps: platform, pluginRoot, localAppData, dataDir, pathValue, nodeVersion,
  * now, tailscaleStatus() -> Promise<stdout|null>, taskQuery() -> Promise<q>
- * (see taskVerdict), phoneAddress() -> Promise<url|null>, startJob(job), and
- * optionally agentRunning() -> Promise<boolean> and openBrowser(url).
+ * (see taskVerdict), startJob(job), and optionally agentRunning() ->
+ * Promise<boolean>, passcodeSet() -> Promise<boolean|null>, sacStatus() and
+ * openBrowser(url).
  */
 export async function sessionStart(deps) {
   const { pluginRoot, localAppData, dataDir } = deps;
@@ -354,8 +357,7 @@ export async function sessionStart(deps) {
   if (!localAppData) return quiet(setupFailed('this PC has no LOCALAPPDATA folder'));
 
   // The last job's outcome, once. Then stop for this start: one line per start.
-  // A first install that worked has no line (the browser said it), so that
-  // start may still show the phone code.
+  // A first install that worked has no line (the browser said it).
   if (state.last && !state.last.reported) {
     state = { ...state, last: { ...state.last, reported: true } };
     writeState(files.state, state);
@@ -369,27 +371,32 @@ export async function sessionStart(deps) {
   const target = path.join(localAppData, 'claude-remote');
   const kind = fs.existsSync(path.join(target, 'agent', 'server.js')) ? 'update' : 'install';
   const hash = installedHash(pluginRoot);
-  // --now never takes the phone code: an agent would relay it through a reply,
-  // garbling it, and use up the one showing meant for the terminal.
   // Up to date - unless Smart App Control went On after the install: then the
   // same version is installed again, which re-registers the task with the
   // launcher Windows allows. The failed-same-version guard below stops a loop.
-  // Both asked at once and the task's answer reused by phoneLine: in series,
-  // with phoneLine asking again, this reached the hook's 10s limit.
+  // Both asked at once: in series they came close to the hook's 10s limit.
+  // A copy with no passcode yet is not set up either: the browser was closed
+  // at the passcode screen. Unknown (agent not answering) stays silent.
   if (kind === 'update' && installedHash(target) === hash) {
-    const [sac, q] = await Promise.all([deps.sacStatus ? deps.sacStatus() : null, deps.taskQuery()]);
-    if (!(sacOn(sac) && launcherStale(q, target))) return deps.explain ? UP_TO_DATE : phoneLine(deps, state, files, target, q);
+    const [sac, q, set] = await Promise.all([
+      deps.sacStatus ? deps.sacStatus() : null,
+      deps.taskQuery(),
+      !deps.explain && deps.passcodeSet ? deps.passcodeSet() : null,
+    ]);
+    if (!(sacOn(sac) && launcherStale(q, target))) return set === false ? NOT_SET_UP : quiet(UP_TO_DATE);
   }
-  // A failed install is not retried by itself - only a newer plugin, or
+  // Not set up, and nobody asked: this start only says so (atStart below).
+  const atStart = kind === 'install' && !deps.explain;
+  // A failed install is not retried by an ask - only a newer plugin, or
   // /claude-remote:setup, which clears this record.
-  if (state.last && !state.last.ok && state.last.hash === hash) return quiet(outcomeLine(state.last));
+  if (!atStart && state.last && !state.last.ok && state.last.hash === hash) return quiet(outcomeLine(state.last));
   // The three questions at once: each has its own timeout, and asked one
   // after another they came close to the hook's 10s limit.
-  // Only a first install needs Tailscale; an update keeps whatever sharing is on.
+  // Only an asked-for install needs Tailscale; an update keeps whatever sharing is on.
   const [q, running, ts] = await Promise.all([
     deps.taskQuery(),
     deps.agentRunning ? deps.agentRunning() : false,
-    kind === 'install' ? deps.tailscaleStatus() : null,
+    kind === 'install' && !atStart ? deps.tailscaleStatus() : null,
   ]);
   const verdict = taskVerdict(q, target);
   // A logon task running an agent from anywhere else - a git checkout - means
@@ -399,18 +406,14 @@ export async function sessionStart(deps) {
   // Same for an agent already answering with no task at all, started by hand -
   // on an update too: update-agent.ps1 stops whatever node holds the port.
   if (verdict === 'none' && running) return quiet(RUNS_ELSEWHERE);
+  if (atStart) return NOT_SET_UP;
 
   if (kind === 'install' && !tailscaleReady(ts)) {
-    // The one-line install opens the page every time it is run; a session
-    // start only once, or a PC that never gets Tailscale is handed a tab at
-    // every start in every project (PRD R21.1a).
-    if (deps.openBrowser && (deps.explain || !state.tailscalePageOpened)) {
-      // Never at the cost of the line: a failed open or save still says it.
-      try {
-        await deps.openBrowser(TAILSCALE_DOWNLOAD);
-        writeState(files.state, { ...state, tailscalePageOpened: true });
-      } catch { /* the line below still tells them */ }
-    }
+    // Every ask opens the page (PRD R21.1a, R21.0); a Claude start never gets here.
+    // Never at the cost of the line: a failed open still says it.
+    try {
+      if (deps.openBrowser) await deps.openBrowser(TAILSCALE_DOWNLOAD);
+    } catch { /* the line below still tells them */ }
     return NEEDS_TAILSCALE;
   }
   if (!nodeVersionOk(deps.nodeVersion)) return NEEDS_NODE;
@@ -426,24 +429,6 @@ export async function sessionStart(deps) {
   if (!lockToken) return quiet(ALREADY_RUNNING);   // another start got there in the meantime
   deps.startJob({ kind, pluginRoot, target, dataDir, hash, lockToken });
   return kind === 'install' ? SETTING_UP : quiet(UPDATING);
-}
-
-/**
- * The phone code, once: only for an install this plugin made (the logon task
- * runs the copy here) and only when Tailscale shares the port and knows this
- * PC's address. Until then, silent - and asked again at the next start.
- */
-async function phoneLine(deps, state, files, target, q) {
-  if (state.phoneShown) return null;
-  // The task first, alone: on a PC set up another way (never 'ours', so never
-  // phoneShown) Tailscale would otherwise be asked at every start, forever.
-  // The caller's answer (asked in parallel with Smart App Control), so the
-  // worst case is that 2s plus phoneAddress's two parallel 4s calls.
-  if (taskVerdict(q, target) !== 'ours') return null;
-  const url = await deps.phoneAddress();
-  if (!url) return null;
-  writeState(files.state, { ...state, phoneShown: true, phoneUrl: url });
-  return phoneReady(url);
 }
 
 // --- The background job ------------------------------------------------------
@@ -504,18 +489,6 @@ export function realTailscale(args, exec = execFile) {
   return import('../agent/alerts.js').then(({ tailscaleBinary }) => new Promise((resolve) => {
     exec(tailscaleBinary(), args, { windowsHide: true, timeout: 4000, cwd: SYSTEM32 }, (err, stdout) => resolve(err ? null : stdout));
   })).catch(() => null);
-}
-
-/** This PC's tailnet address when Tailscale shares `port`, else null. */
-export async function phoneAddress(port, run = realTailscale) {
-  try {
-    const [{ serveVerdict }, { phoneUrl }] = await Promise.all([import('../agent/alerts.js'), import('../agent/phone.js')]);
-    const [serve, status] = await Promise.all([run(['serve', 'status', '--json']), run(['status', '--json'])]);
-    if (serveVerdict(serve, port) !== 'present') return null;
-    return phoneUrl(status, port);
-  } catch {
-    return null;
-  }
 }
 
 /** `schtasks /query /xml` for the agent's task -> taskVerdict's q. */
@@ -596,6 +569,16 @@ export function realOpenBrowser(url) {
   });
 }
 
+/** Is a passcode set on the agent: true/false, or null when it does not answer. */
+async function realPasscodeSet(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS) });
+    return res.ok ? (await res.json()).configured === true : null;
+  } catch {
+    return null;
+  }
+}
+
 async function realAgentAnswers(port) {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/auth/status`, { signal: AbortSignal.timeout(ANSWER_TIMEOUT_MS) });
@@ -612,7 +595,6 @@ const DATA_DIR = path.join(os.homedir(), '.claude', 'plugins', 'data', 'claude-r
 export function ownPluginRoot(fileUrl = import.meta.url) {
   return path.dirname(path.dirname(fileURLToPath(fileUrl)));
 }
-
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
   const port = Number(process.env.CLAUDE_REMOTE_AGENT_PORT) || DEFAULT_PORT;
@@ -643,9 +625,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
         tailscaleStatus: () => realTailscale(['status', '--json']),
         taskQuery: () => realTaskQuery(),
         sacStatus: () => realSacStatus(),
-        phoneAddress: () => phoneAddress(port),
         startJob: (job) => realStartJob(job),
         agentRunning: () => realAgentAnswers(port),
+        passcodeSet: () => realPasscodeSet(port),
         openBrowser: realOpenBrowser,
         explain: now,
       });

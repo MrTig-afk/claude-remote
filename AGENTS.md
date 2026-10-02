@@ -13,9 +13,9 @@ work on its code.
 whole install. Claude Remote is a Claude Code plugin. A plugin from outside
 Anthropic's plugin directory can only be added with the two `claude plugin`
 commands below, which are Claude Code's own and change nothing else. The third
-command starts the plugin's setup right away, instead of waiting for the next
-time Claude Code starts. It is the same setup the plugin runs by itself at
-startup, and it opens nothing but the person's browser.
+command starts the plugin's setup. A Claude Code start never sets it up by
+itself; it only says it is not set up yet. The setup opens nothing but the
+person's browser.
 
 **Check Tailscale first.** Run `tailscale status` in PowerShell. If the
 command is not found, or it says Tailscale is stopped or logged out, stop here
@@ -60,8 +60,9 @@ in the browser: set a six-digit passcode, read the screen about what the app
 can see, choose folders, and the last screen shows a code to scan with their
 phone.
 
-If the third command fails to run at all, that is fine: the setup starts by
-itself the next time Claude Code starts. Say that, and stop.
+If the third command fails to run at all, tell the person to run
+`/claude-remote:setup` in Claude Code: it runs the same setup. Say that, and
+stop.
 
 **If your permission mode refuses `claude plugin install`** (auto mode, the
 default since Claude Code 2.1.283, sometimes does), do not look for another
