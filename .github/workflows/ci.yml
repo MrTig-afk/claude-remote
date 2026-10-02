@@ -25,8 +25,8 @@ jobs:
   ci:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       # Part of the suite drives headless Chrome (the iOS 16px input-zoom
@@ -41,7 +41,7 @@ jobs:
     container:
       image: semgrep/semgrep
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # Pinned rulesets, never --config auto: auto re-resolves the registry on
       # every run, so a required check could go red with no code change.
       - run: semgrep scan --config p/javascript --config p/secrets --error
