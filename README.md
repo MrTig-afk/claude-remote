@@ -133,8 +133,10 @@ to the **same** Tailscale account on both:
    iPad) or [Google Play](https://play.google.com/store/apps/details?id=com.tailscale.ipn)
    (Android), and sign in with the same account.
 
-If Tailscale is missing on the PC, the install stops and says so before
-changing anything.
+If Tailscale is missing or signed out on the PC, the install adds the plugin
+to Claude Code but sets nothing up on the PC: it says so and opens
+tailscale.com/download in your browser. Sign in, restart Claude, and the setup
+carries on by itself.
 
 ### Then install
 
@@ -181,7 +183,8 @@ What happens next, and **the order matters**:
 
 1. You see "Claude Remote is setting itself up on this PC." It first
    checks Tailscale is running and signed in, and that Node and Claude Code are
-   installed; if one is missing it says which and installs nothing.
+   installed; if one is missing it says which and sets nothing up (for
+   Tailscale it also opens the download page).
 2. Your browser opens on `http://127.0.0.1:8790` by itself. **At the desk**, set
    a six-digit passcode, read the screen about what the app can see, then
    choose which folders it may see. Nothing is shared until you pick it. Each

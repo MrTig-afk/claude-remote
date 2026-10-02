@@ -20,7 +20,7 @@ import {
   SETTING_UP, NEEDS_TAILSCALE, NOT_WINDOWS, NEEDS_NODE, UPDATED, setupFailed, updateFailed,
   takeLock, releaseLock, removeLockIfStill, LONGEST_JOB_MS, INSTALL_TIMEOUT_MS, taskVerdict, realTaskQuery,
   realStartJob, realTailscale, phoneAddress, phoneReady, terminalQr, qrBlocks, TASK_NAME,
-  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING, sacOn, launcherStale,
+  ownPluginRoot, ALREADY_RUNNING, UP_TO_DATE, RUNS_ELSEWHERE, UPDATING, sacOn, launcherStale, TAILSCALE_DOWNLOAD,
 } from '../../hooks/check-update.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../../hooks/check-update.mjs', import.meta.url));
@@ -55,6 +55,42 @@ function taskXml(serverPath) {
     + `      <WorkingDirectory>${path.dirname(serverPath)}</WorkingDirectory>\r\n    </Exec>\r\n  </Actions>\r\n</Task>`;
 }
 const NO_TASK = { ok: false, missing: true };
+
+// RED WHEN: the page stops opening (owner at the Dell test, 2026-10-02: a new
+// PC got a sentence, not a page), or opens at every start in every project.
+test('Tailscale not ready: the download page opens - every time on --now, once at a session start', async () => {
+  const w = world();
+  const opened = [];
+  const deps = { ...w.deps, tailscaleStatus: async () => JSON.stringify({ BackendState: 'NeedsLogin' }), openBrowser: (u) => opened.push(u) };
+  assert.equal(await sessionStart(deps), NEEDS_TAILSCALE);
+  assert.equal(await sessionStart(deps), NEEDS_TAILSCALE);
+  assert.deepEqual(opened, [TAILSCALE_DOWNLOAD], 'a session start opens it once');
+  assert.equal(await sessionStart({ ...deps, explain: true }), NEEDS_TAILSCALE);
+  assert.equal(await sessionStart({ ...deps, explain: true }), NEEDS_TAILSCALE);
+  assert.equal(opened.length, 3, 'the one-line install opens it every time');
+  assert.equal(TAILSCALE_DOWNLOAD, 'https://tailscale.com/download');
+});
+
+// RED WHEN: a failed open or save swallows the line (code-review, discovery 2).
+test('Tailscale not ready: a browser that will not open still leaves the line', async () => {
+  const w = world();
+  const line = await sessionStart({
+    ...w.deps, explain: true,
+    tailscaleStatus: async () => null,
+    openBrowser: async () => { throw new Error('spawn EPERM'); },
+  });
+  assert.equal(line, NEEDS_TAILSCALE);
+});
+
+test('Tailscale ready, or another check failing: no page', async () => {
+  for (const change of [{}, { nodeVersion: 'v24.1.9' }]) {
+    const w = world();
+    const opened = [];
+    // eslint-disable-next-line no-await-in-loop
+    await sessionStart({ ...w.deps, ...change, explain: true, openBrowser: (u) => opened.push(u) });
+    assert.deepEqual(opened, []);
+  }
+});
 
 /** A throwaway world: plugin root, LOCALAPPDATA, data dir, a PATH holding claude.cmd. */
 function world({ installed = null, plugin = 'server v1' } = {}) {
