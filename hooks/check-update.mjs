@@ -54,6 +54,8 @@ import { qrMatrix } from '../agent/public/qr.js';
 // Verbatim.
 export const SETTING_UP = 'Claude Remote is setting itself up on this PC. Your browser will open on its passcode screen in a moment.';
 export const NEEDS_TAILSCALE = 'Claude Remote needs Tailscale on this PC, running and signed in, before it can set itself up. Get it from tailscale.com/download, sign in, then restart Claude.';
+// Opened alongside NEEDS_TAILSCALE: a new PC gets the page, not only a sentence.
+export const TAILSCALE_DOWNLOAD = 'https://tailscale.com/download';
 export const NOT_WINDOWS = 'Claude Remote runs on Windows 10 and 11 only, so it has not set itself up here.';
 export const NEEDS_NODE = 'Claude Remote needs Node.js 24.2 or newer. Install it from nodejs.org, then restart Claude.';
 export const UPDATED = 'Claude Remote updated itself on this PC. The app on your phone picks it up the next time it opens.';
@@ -333,7 +335,7 @@ export function outcomeLine(last) {
  * deps: platform, pluginRoot, localAppData, dataDir, pathValue, nodeVersion,
  * now, tailscaleStatus() -> Promise<stdout|null>, taskQuery() -> Promise<q>
  * (see taskVerdict), phoneAddress() -> Promise<url|null>, startJob(job), and
- * optionally agentRunning() -> Promise<boolean>.
+ * optionally agentRunning() -> Promise<boolean> and openBrowser(url).
  */
 export async function sessionStart(deps) {
   const { pluginRoot, localAppData, dataDir } = deps;
@@ -398,7 +400,19 @@ export async function sessionStart(deps) {
   // on an update too: update-agent.ps1 stops whatever node holds the port.
   if (verdict === 'none' && running) return quiet(RUNS_ELSEWHERE);
 
-  if (kind === 'install' && !tailscaleReady(ts)) return NEEDS_TAILSCALE;
+  if (kind === 'install' && !tailscaleReady(ts)) {
+    // The one-line install opens the page every time it is run; a session
+    // start only once, or a PC that never gets Tailscale is handed a tab at
+    // every start in every project (PRD R21.1a).
+    if (deps.openBrowser && (deps.explain || !state.tailscalePageOpened)) {
+      // Never at the cost of the line: a failed open or save still says it.
+      try {
+        await deps.openBrowser(TAILSCALE_DOWNLOAD);
+        writeState(files.state, { ...state, tailscalePageOpened: true });
+      } catch { /* the line below still tells them */ }
+    }
+    return NEEDS_TAILSCALE;
+  }
   if (!nodeVersionOk(deps.nodeVersion)) return NEEDS_NODE;
   if (!onPath('claude.cmd', deps.pathValue)) {
     // Recorded like a failed install, so it is said once per plugin version,
@@ -573,9 +587,13 @@ export function realOpenBrowser(url) {
   // a harmless target in place of the URL: no window from cmd, and a program
   // started this way outlived the job that started it (a browser that was
   // not already running must not close when the job exits).
-  spawn(path.join(SYSTEM32, 'cmd.exe'), ['/d', '/s', '/c', `"start "" "${url}""`], {
-    windowsHide: true, stdio: 'ignore', windowsVerbatimArguments: true,
-  }).on('error', () => {});
+  // Resolves once cmd has handed the URL over, so a caller about to exit (the
+  // hook at a session start or --now) does not exit before `start` ran.
+  return new Promise((resolve) => {
+    spawn(path.join(SYSTEM32, 'cmd.exe'), ['/d', '/s', '/c', `"start "" "${url}""`], {
+      windowsHide: true, stdio: 'ignore', windowsVerbatimArguments: true,
+    }).on('error', resolve).on('exit', resolve);
+  });
 }
 
 async function realAgentAnswers(port) {
@@ -628,6 +646,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
         phoneAddress: () => phoneAddress(port),
         startJob: (job) => realStartJob(job),
         agentRunning: () => realAgentAnswers(port),
+        openBrowser: realOpenBrowser,
         explain: now,
       });
       if (now) process.stdout.write(`${line}\n`);
