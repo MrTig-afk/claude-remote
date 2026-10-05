@@ -36,3 +36,9 @@ publish anything.
 The threat model is in `README.md`, under *Read this before you install it*.
 
 Only the latest commit on `main` is supported.
+
+## Thanks
+
+The hidden launcher (`agent/autostart/hidelaunch.cs`) exists because
+[@huntsman95](https://github.com/huntsman95) and [@Icolan](https://github.com/Icolan)
+pointed out what was wrong with launching through `conhost --headless`.
