@@ -4,6 +4,8 @@
 
 # Claude Remote
 
+**The cloud can have your code. It can't have your Claude.**
+
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6)
 
 Start, watch, and stop a Claude Code session on your Windows PC from your phone,
