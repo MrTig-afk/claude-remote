@@ -241,9 +241,8 @@ code is checked because a native command's failure does not throw.
 
 The agent listens on `http://127.0.0.1:8790` and nothing else. To change the
 port set `CLAUDE_REMOTE_AGENT_PORT`; if you do, the serve command in step 5 has
-to use the same number in both places. The known limit of the at-logon trigger
-- a cold boot sitting at the lock screen has no agent - is in
-`docs/agent-autostart.md`.
+to use the same number in both places. The known limit of the at-logon trigger:
+a cold boot sitting at the lock screen has no agent until someone signs in.
 
 ### Environments before Claude starts
 

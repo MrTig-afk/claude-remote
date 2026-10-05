@@ -33,7 +33,7 @@ worked before the next.** They are PowerShell, not bash: in Git Bash the third
 one breaks. Use a PowerShell tool if you have one. If you only have a shell
 like Git Bash, save the three lines below to a file ending in `.ps1` and run
 that file with `powershell -NoProfile -ExecutionPolicy Bypass -File <the file>`
-- do not paste them into `powershell -Command "..."`, whose quoting breaks
+- **DO NOT PASTE** them into `powershell -Command "..."`, whose quoting breaks
 them. It runs on Windows 10 and 11 only; on anything else, say so and stop.
 
 ```powershell
