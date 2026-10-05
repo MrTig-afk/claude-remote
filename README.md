@@ -215,8 +215,7 @@ Good to know:
 
 - No firewall rule is needed. Under serve the agent never leaves loopback, and
   loopback traffic does not traverse the firewall at all. Take it off the
-  tailnet with `tailscale serve --https=8790 off`; see
-  `docs/tailscale-https.md`.
+  tailnet with `tailscale serve --https=8790 off`.
 - The agent starts at logon, not at boot: a PC sitting at the lock screen after
   a restart has **no agent running**, and the phone cannot reach it until you
   sign in. See `docs/agent-autostart.md` for why that trade was made. Once you
