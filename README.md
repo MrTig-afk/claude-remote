@@ -218,8 +218,8 @@ Good to know:
   tailnet with `tailscale serve --https=8790 off`.
 - The agent starts at logon, not at boot: a PC sitting at the lock screen after
   a restart has **no agent running**, and the phone cannot reach it until you
-  sign in. See `docs/agent-autostart.md` for why that trade was made. Once you
-  are signed in, an agent that crashes is started again within a minute.
+  sign in. Once you are signed in, an agent that crashes is started again
+  within a minute.
 - When the app says the agent hit an error, restart it by running
   `/claude-remote:setup` in Claude Code on the PC. The agent runs with no
   window; what it printed is in

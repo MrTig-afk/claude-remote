@@ -2,7 +2,7 @@
 .SYNOPSIS
 Registers (or, with -RenderOnly, just renders and schema-validates) the
 Scheduled Task that starts the claude-remote Local Agent at logon.
-See docs/agent-autostart.md for what this does and how to undo it.
+To undo it, see "Uninstall" in README.md.
 To (re)start the agent, run update-agent.ps1 beside this file: it stops the
 old one properly, registers, starts and checks the new one.
 #>
@@ -235,4 +235,4 @@ Write-Output "Agent log file: $logFile"
 Write-Output ''
 Write-Output 'Registering does NOT start it. Start it, and check it came up, with:'
 Write-Output "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\update-agent.ps1`""
-Write-Output 'To remove it: docs/agent-autostart.md, "Removing it".'
+Write-Output 'To remove it: README.md, "Uninstall".'

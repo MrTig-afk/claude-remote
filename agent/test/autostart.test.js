@@ -8,8 +8,8 @@
 //
 // What is NOT here, on purpose: update-agent.ps1 stops and starts the owner's
 // live agent and registers a real task, so the suite never runs it. Its
-// end-to-end record (install, update, rollback, restart, crash recovery,
-// measured 2026-09-23) is in docs/agent-autostart.md under "Verification".
+// end-to-end run (install, update, rollback, restart, crash recovery) was
+// measured by hand on 2026-09-23.
 
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
