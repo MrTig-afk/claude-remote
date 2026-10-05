@@ -6,7 +6,7 @@ is a hole in your machine, so please report one privately.
 
 ## Reporting a vulnerability
 
-**Do not open a public issue.** Instead, either:
+**DO NOT OPEN** a public issue. Instead, either:
 
 - Use GitHub's private reporting: the repository's **Security** tab, then
   **Report a vulnerability**.
