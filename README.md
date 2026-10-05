@@ -538,6 +538,17 @@ zoom back out. If Chrome is not where the check looks, set `CHROME=<path>`, or
 `ALLOW_NO_CHROME=1` to skip it knowingly - it fails rather than skips by default,
 because a skipped guard is a green run.
 
+## Thanks
+
+- [@huntsman95](https://github.com/huntsman95) for the idea of a
+  small launcher built from source in place of `conhost --headless`, which
+  swallowed exit codes and looks like a known attack pattern to security tools.
+- [@Icolan](https://github.com/Icolan) for the back and forth on r/PowerShell
+  that pushed the launcher in that direction.
+- [@e-tang](https://github.com/e-tang) for reporting that the Tailscale serve
+  config can disappear after a reboot; the agent now checks for it on startup
+  and tells your phone when it is gone.
+
 ## License
 
 MIT. See `LICENSE`.
