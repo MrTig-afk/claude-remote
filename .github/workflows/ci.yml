@@ -36,6 +36,24 @@ jobs:
       - name: Test
         run: node --test "agent/test/**/*.test.js"
 
+  # macOS is not supported yet (a possible v2). This job only MEASURES how much
+  # of the suite already passes there, to size a port. It never blocks: the
+  # failures are expected, and branch protection does not require it.
+  macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    # A Windows-only test may hang here instead of failing.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Test
+        env:
+          CHROME: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+        run: node --test "agent/test/**/*.test.js"
+
   semgrep:
     runs-on: ubuntu-latest
     container:
